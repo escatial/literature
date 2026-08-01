@@ -64,6 +64,10 @@ def _parse_rest(rest: str | None) -> tuple[str | None, str | None, str | None]:
     # 形式4:仅页码(纯数字含短横)
     if re.match(r"^[-\d]+$", rest):
         return None, None, rest
+    # 形式5:只有期号+页码  (2):42-46  或  (2): 42-46
+    m = re.match(r"^\s*\((?P<i>\d+)\)\s*:\s*(?P<p>\S+)\s*$", rest)
+    if m:
+        return None, m.group("i"), m.group("p")
     return None, None, None
 
 

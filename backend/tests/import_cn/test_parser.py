@@ -145,3 +145,18 @@ def test_cnki_bracket_index_stripped():
     assert r.parsed_ok
     assert r.authors == "吴亮"
     assert r.year == 2025
+
+
+def test_only_issue_and_pages_no_volume():
+    """知网常见格式: ,2025, (2):42-46 (没有卷号)。"""
+    text = (
+        "陈丽叶,王慧婷. \"互联网+\"背景下福清沙浦镇海产品内容营销策略研究[J]. "
+        "农业装备与智能技术,2025, (2):42-46."
+    )
+    r = parse_one(text)
+    assert r.parsed_ok, r.error
+    assert r.volume is None
+    assert r.issue == "2"
+    assert r.pages == "42-46"
+    assert r.year == 2025
+    assert r.journal == "农业装备与智能技术"
