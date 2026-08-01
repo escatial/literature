@@ -87,15 +87,61 @@ def test_batch_skips_empty_lines():
         "刘泽宇,姚璐,王倩莹. 混合式学习环境下中职计算机学生的学习行为分析[J]. "
         "信息与电脑, 2025, 37(6): 227-229.",
         "",
-        "bad line",
+        "bad line",  # 非引文行:跳过
+    ]
+    results = parse_batch(lines)
+    assert len(results) == 1
+    assert results[0].parsed_ok
+
+
+def test_batch_skips_abstract_lines():
+    """摘要/关键词/作者简介等非引文行应被跳过。"""
+    lines = [
+        "[1]吴亮. 高职院校水产市场营销课程思政建设探索[J]. 黑龙江水产, 2025, 44 (5): 668-673.",
+        "摘要:全面推进课程思政建设是落实立德树人根本任务的战略举措。",
+        "关键词:高职院校;市场营销;课程思政;",
+        "[2]陈丽叶,王慧婷. \"互联网+\"背景下福清沙埔镇海产品内容营销策略研究[J]. 农业装备与智能技术, 2025, (2): 42-46.",
+        "摘要:以福建省福清市沙埔镇为研究对象。",
     ]
     results = parse_batch(lines)
     assert len(results) == 2
-    assert results[0].parsed_ok
-    assert not results[1].parsed_ok
+    assert all(r.parsed_ok for r in results)
+    assert results[0].authors == "吴亮"
+    assert results[1].authors == "陈丽叶,王慧婷"
 
 
 def test_batch_preserves_raw_text():
     text = "作者A. 题X[J]. 刊Y, 2020, 5(3): 10-20."
     r = parse_one(text)
     assert r.raw_text == text
+
+
+# ── 知网"查新(引文格式)"带摘要的鲁棒性 ────────────────────────────────
+
+def test_cnki_with_abstract_suffix():
+    """知网复制时常把摘要也带上,应只截引文部分解析。"""
+    text = (
+        "[1]吴亮. 高职院校水产市场营销课程思政建设探索[J]. 黑龙江水产, 2025, 44 (5): 668-673.\n"
+        "摘要:全面推进课程思政建设是落实立德树人根本任务的战略举措。文章分析了高职院校水产"
+        "市场营销课程思政建设的意义及存在问题,并以厦门海洋职业技术学院为例提出课程思政建设的"
+        "具体举措。"
+    )
+    r = parse_one(text)
+    assert r.parsed_ok, r.error
+    assert r.authors == "吴亮"
+    assert "高职院校水产市场营销课程思政建设探索" in r.title
+    assert r.journal == "黑龙江水产"
+    assert r.year == 2025
+    assert r.volume == "44"
+    assert r.issue == "5"
+    assert r.pages == "668-673"
+    assert "摘要" in r.raw_text  # raw_text 保留原文
+
+
+def test_cnki_bracket_index_stripped():
+    """[N] 编号不影响解析。"""
+    text = "[1]吴亮. 高职院校水产市场营销课程思政建设探索[J]. 黑龙江水产, 2025, 44 (5): 668-673."
+    r = parse_one(text)
+    assert r.parsed_ok
+    assert r.authors == "吴亮"
+    assert r.year == 2025
