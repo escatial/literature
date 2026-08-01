@@ -18,6 +18,7 @@ load_dotenv()
 
 from api.health import router as health_router  # noqa: E402
 from api.import_cn import router as import_cn_router  # noqa: E402
+from api.query_plan import router as query_plan_router  # noqa: E402
 from api.retrieval import router as retrieval_router  # noqa: E402
 from api.screening import router as screening_router  # noqa: E402
 from api.writing import router as writing_router  # noqa: E402
@@ -37,6 +38,7 @@ app.add_middleware(
 app.include_router(health_router, prefix="/api")
 app.include_router(retrieval_router, prefix="/api")
 app.include_router(import_cn_router, prefix="/api")
+app.include_router(query_plan_router, prefix="/api")
 app.include_router(screening_router, prefix="/api")
 app.include_router(writing_router, prefix="/api")
 
