@@ -53,3 +53,32 @@ export interface ImportCnResponse {
   parsed_fail: number;
   citations: ImportCitation[];
 }
+
+export interface WritingGroupOut {
+  name: string;
+  lit_ids: string[];
+}
+
+export interface WritingSectionOut {
+  key: string;
+  title: string;
+  content: string;
+  citations: string[];
+}
+
+export interface WritingRequest {
+  topic: string;
+  papers: Paper[];
+  classify_mode: 'locale' | 'theme';
+  do_screening: boolean;
+}
+
+export interface WritingResponse {
+  topic: string;
+  classify_mode: string;
+  groups: WritingGroupOut[];
+  sections: WritingSectionOut[];
+  reference_list: string;
+  screened_out_ids: string[];
+  dropped_citations: string[];
+}
