@@ -44,7 +44,7 @@ export function EnglishRetrieval() {
           disabled={loading || !topic}
           className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50"
         >
-          {loading ? '检索中...' : '开始检索'}
+          {loading ? '检索中(OpenAlex 慢时可能 1~2 分钟)...' : '开始检索'}
         </button>
         <Link to="/cn" className="px-4 py-2 bg-gray-200 rounded">
           下一步:中文导入 →

@@ -1,9 +1,4 @@
-"""OpenAlex 适配器。
-
-- 只读取 OpenAlex 返回的字段,不构造任何字段
-- 摘要还原 abstract_inverted_index(平台字段的反序列化,不是生成)
-- 礼貌带 mailto,限速 ≤ 10 req/s
-"""
+"""OpenAlex 适配器(带指数退避重试)。"""
 from __future__ import annotations
 
 import hashlib
@@ -21,11 +16,7 @@ DEFAULT_MAILTO = os.getenv("OPENALEX_MAILTO", "your-email@example.com")
 
 
 def _rebuild_abstract(inverted: dict | None) -> str | None:
-    """OpenAlex abstract_inverted_index 是反向索引,需要还原。
-
-    这是字段反序列化,不是生成 — 我们没有创造内容,只是把
-    平台存储的反向索引还原为自然文本。
-    """
+    """OpenAlex abstract_inverted_index 反向索引还原(平台字段反序列化,不是生成)。"""
     if not inverted:
         return None
     word_positions = []
@@ -38,10 +29,7 @@ def _rebuild_abstract(inverted: dict | None) -> str | None:
 
 
 def _make_lit_id(title: str | None, doi: str | None) -> str:
-    """内部唯一 ID,SHA256(title|doi)[:16]。
-
-    与外部数据库通信无关,纯粹本地引用锚点。
-    """
+    """内部唯一 ID,SHA256(title|doi)[:16]。"""
     raw = f"{title or ''}|{doi or ''}"
     return "lit_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
 
@@ -49,7 +37,7 @@ def _make_lit_id(title: str | None, doi: str | None) -> str:
 class OpenAlexAdapter:
     BASE = "https://api.openalex.org/works"
 
-    def __init__(self, mailto: str | None = None, timeout: float = 30.0):
+    def __init__(self, mailto: str | None = None, timeout: float = 90.0):
         self.mailto = mailto or DEFAULT_MAILTO
         self.timeout = timeout
 
@@ -65,14 +53,31 @@ class OpenAlexAdapter:
             "per-page": min(per_page, 200),
             "mailto": self.mailto,
         }
-        with httpx.Client(timeout=self.timeout) as client:
+        return self._get_with_retry(params)
+
+    def _get_with_retry(self, params: dict, max_retries: int = 3) -> list[Paper]:
+        """指数退避重试,应对 OpenAlex 偶尔慢握手。"""
+        import time as _time
+
+        last_err: Exception | None = None
+        for attempt in range(max_retries):
             try:
-                resp = client.get(self.BASE, params=params)
-                resp.raise_for_status()
-            except httpx.HTTPError as e:
-                log.warning("OpenAlex 请求失败: %s", e)
+                log.info("OpenAlex 请求 attempt=%d params=%s", attempt + 1, {k: v for k, v in params.items() if k != "mailto"})
+                with httpx.Client(timeout=self.timeout) as client:
+                    resp = client.get(self.BASE, params=params)
+                    resp.raise_for_status()
+                log.info("OpenAlex 成功 attempt=%d", attempt + 1)
+                return [self._parse(w) for w in resp.json().get("results", [])]
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as e:
+                last_err = e
+                wait = 2 ** attempt  # 1, 2, 4 秒
+                log.warning("OpenAlex attempt=%d 失败: %s; %d 秒后重试", attempt + 1, e, wait)
+                _time.sleep(wait)
+            except httpx.HTTPStatusError as e:
+                log.warning("OpenAlex HTTP %s: %s", e.response.status_code, e)
                 return []
-            return [self._parse(w) for w in resp.json().get("results", [])]
+        log.error("OpenAlex 全部重试失败: %s", last_err)
+        return []
 
     def _parse(self, w: dict) -> Paper:
         """读取 OpenAlex 字段。缺字段保持 None,绝不构造。"""
