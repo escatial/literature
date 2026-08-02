@@ -6,3 +6,4 @@ pydantic-settings>=2.2
 openai>=1.40
 structlog>=24.1
 python-dotenv>=1.0
+sqlalchemy>=2.0

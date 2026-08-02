@@ -1,6 +1,7 @@
 backend/.env
 backend/uvicorn.out
 backend/uvicorn.err
+backend/data/
 smoke.log
 __pycache__/
 *.pyc
