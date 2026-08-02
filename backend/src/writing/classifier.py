@@ -1,22 +1,20 @@
 """综述分类器:按国内外 / 按主题 对文献分组。
 
-用户在工作流中明确:开始写作前会告知是"按照国内外分类"还是"按照不同主题划分"。
+使用 prompts/literature-review-classify.md 模板作为 system prompt。
 """
-
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
 
+from prompts.service import render
 from src.llm.client import messages_create
 from src.retrieval.types import Paper, Source
 
 
 @dataclass
 class Group:
-    """一组文献。"""
-
     name: str
     lit_ids: list[str] = field(default_factory=list)
 
@@ -34,34 +32,43 @@ def classify_by_locale(papers: list[Paper]) -> list[Group]:
 
 
 def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
-    """主题分类:LLM 将文献归入若干主题。
-
-    兜底策略:
-    - LLM 失败/非法 JSON → 全部归入"综合研究"
-    - 未知 lit_id → 跳过
-    - 未被覆盖的 lit_id → 归入"其他"
-    """
+    """主题分类:LLM 将文献归入若干主题。"""
     if not papers:
         return []
 
     catalog = "\n".join(
-        f"- {p.lit_id} | {p.title} | {p.journal or 'N/A'} | {p.year or 'N/A'}"
+        f"- {p.lit_id} | {p.title} | {p.journal or 'N/A'} | {p.year or 'N/A'} | source={p.source.value}"
         for p in papers
     )
-    system = (
-        "你是学术文献分类助手。给定研究主题与文献清单，"
-        "将文献划分为 3~6 个主题组。只输出严格 JSON，"
-        '格式: [{"theme": "主题名", "lit_ids": ["lit_..."]}]。'
-        "lit_id 必须从输入中精确复制，禁止编造。"
+
+    system = render(
+        "literature-review-classify",
+        topic=topic,
+        classify_mode="theme",
+        papers_catalog=catalog,
     )
     user = f"研究主题:{topic}\n\n文献清单:\n{catalog}"
 
     try:
         raw = messages_create(system=system, user=user, max_tokens=2000)
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        data = json.loads(m.group(0)) if m else json.loads(raw)
+        # 1) 优先抽 ```json code block
+        m = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", raw, re.DOTALL)
+        if m:
+            data = json.loads(m.group(1))
+        else:
+            # 2) 整体尝试
+            try:
+                data = json.loads(raw.strip())
+            except json.JSONDecodeError:
+                # 3) 兜底: 取最外层 {...} 或 [...]
+                m2 = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
+                data = json.loads(m2.group(1)) if m2 else []
     except Exception:
         return [Group(name="综合研究", lit_ids=[p.lit_id for p in papers])]
+
+    # 支持 {groups: [...]} 或 直接 [...]
+    if isinstance(data, dict) and "groups" in data:
+        data = data["groups"]
 
     valid_ids = {p.lit_id for p in papers}
     covered: set[str] = set()
@@ -69,12 +76,12 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
     for item in data:
         if not isinstance(item, dict):
             continue
-        theme = item.get("theme")
+        name = item.get("name") or item.get("theme")
         ids = [i for i in item.get("lit_ids", []) if i in valid_ids]
-        if not theme or not ids:
+        if not name or not ids:
             continue
         covered.update(ids)
-        groups.append(Group(name=theme, lit_ids=ids))
+        groups.append(Group(name=name, lit_ids=ids))
 
     if not groups:
         return [Group(name="综合研究", lit_ids=[p.lit_id for p in papers])]
@@ -86,7 +93,6 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
 
 
 def classify(papers: list[Paper], topic: str, mode: str) -> list[Group]:
-    """mode ∈ {"locale", "theme"}"""
     if mode == "locale":
         return classify_by_locale(papers)
     if mode == "theme":

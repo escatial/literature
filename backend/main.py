@@ -22,6 +22,7 @@ logging.basicConfig(level=logging.INFO)
 from api.health import router as health_router  # noqa: E402
 from api.import_cn import router as import_cn_router  # noqa: E402
 from api.papers import router as papers_router  # noqa: E402
+from api.prompts import router as prompts_router  # noqa: E402
 from api.query_plan import router as query_plan_router  # noqa: E402
 from api.retrieval import router as retrieval_router  # noqa: E402
 from api.reviews import router as reviews_router  # noqa: E402
@@ -52,6 +53,7 @@ app.include_router(screening_router, prefix="/api")
 app.include_router(writing_router, prefix="/api")
 app.include_router(papers_router, prefix="/api")
 app.include_router(reviews_router, prefix="/api")
+app.include_router(prompts_router, prefix="/api")
 
 
 @app.get("/")
