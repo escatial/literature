@@ -35,7 +35,10 @@ class TestGenerateReview:
         papers = [_paper(_LIT_A), _paper(_LIT_B)]
         with patch(
             "src.writing.orchestrator.screen_batch",
-            return_value=[papers[0]],  # lit_b 被筛掉
+            return_value=[
+                {"lit_id": _LIT_A, "relevant": True, "reason": "相关"},
+                {"lit_id": _LIT_B, "relevant": False, "reason": "主题不符"},
+            ],
         ) as m_screen, patch(
             "src.writing.orchestrator.write_section",
             return_value=SectionResult(

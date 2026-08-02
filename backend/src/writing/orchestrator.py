@@ -38,8 +38,10 @@ def generate_review(
 
     # 1) 主题不符筛选
     if do_screening and papers:
-        kept = screen_batch(papers, topic)
-        screened_out = [p.lit_id for p in papers if p not in kept]
+        decisions = screen_batch(papers, topic)  # list[dict]: {"lit_id","relevant","reason"}
+        kept_ids = {d["lit_id"] for d in decisions if d.get("relevant", True)}
+        kept = [p for p in papers if p.lit_id in kept_ids]
+        screened_out = [p.lit_id for p in papers if p.lit_id not in kept_ids]
         papers = kept
     else:
         screened_out = []
