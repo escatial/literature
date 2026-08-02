@@ -42,7 +42,9 @@ export async function generateWritingStream(
 ): Promise<WritingResponse> {
   onUpdate(initialState);
 
-  const resp = await fetch(`${http.defaults.baseURL}/writing/generate-stream`, {
+  // SSE 走绝对 URL,绕开 vite proxy 缓冲
+  const baseURL = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8080';
+  const resp = await fetch(`${baseURL}/api/writing/generate-stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),

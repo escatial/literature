@@ -2,9 +2,14 @@
 import axios, { AxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 
+// 所有请求都走绝对地址,避开 vite proxy 的 SSE 缓冲问题
+const baseURL = (import.meta as any).env?.VITE_API_BASE
+  ? `${(import.meta as any).env.VITE_API_BASE}/api`
+  : 'http://127.0.0.1:8080/api';
+
 export const http = axios.create({
-  baseURL: '/api',
-  timeout: 180_000, // 写作类可能 1~3 分钟
+  baseURL,
+  timeout: 180_000,
 });
 
 http.interceptors.response.use(
