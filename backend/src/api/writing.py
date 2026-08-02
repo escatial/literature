@@ -1,17 +1,24 @@
-"""综述写作 API。"""
+"""综述写作 API(支持一次性 + SSE 流式)。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import json
+
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.retrieval.types import Paper, Source
-from src.writing.orchestrator import generate_review, render_reference_list
+from src.writing.orchestrator import (
+    generate_review,
+    generate_review_stream,
+    render_reference_list,
+)
 
 router = APIRouter(tags=["writing"])
 
 
 class PaperIn(BaseModel):
-    """前端 IndexedDB 里 Paper 的镜像。后端不持久化,只做一次性消费。"""
+    """前端 Paper 镜像。后端不持久化,只做一次性消费。"""
 
     lit_id: str
     source: str  # "openalex" | "crossref" | "user_imported"
@@ -89,22 +96,46 @@ def writing_generate(req: WritingRequest) -> WritingResponse:
         classify_mode=req.classify_mode,
         do_screening=req.do_screening,
     )
-    # 参考文献列表:只纳入正文实际引用的文献
     cited_ids = {cid for s in result.sections for cid in s.citations}
     cited_papers = [p for p in papers if p.lit_id in cited_ids]
     ref = render_reference_list(cited_papers)
-
     return WritingResponse(
         topic=result.topic,
         classify_mode=result.classify_mode,
         groups=[GroupOut(name=g.name, lit_ids=g.lit_ids) for g in result.groups],
         sections=[
-            SectionOut(
-                key=s.key, title=s.title, content=s.content, citations=s.citations
-            )
+            SectionOut(key=s.key, title=s.title, content=s.content, citations=s.citations)
             for s in result.sections
         ],
         reference_list=ref,
         screened_out_ids=result.screened_out_ids,
         dropped_citations=result.dropped_citations,
+    )
+
+
+@router.post("/writing/generate-stream")
+async def writing_generate_stream(req: WritingRequest, request: Request):
+    """SSE 流式端点:逐章推进实时推送给前端。"""
+    papers = [p.to_paper() for p in req.papers]
+
+    async def event_gen():
+        for chunk in generate_review_stream(
+            topic=req.topic,
+            papers=papers,
+            classify_mode=req.classify_mode,
+            do_screening=req.do_screening,
+        ):
+            # 客户端断开就停止
+            if await request.is_disconnected():
+                break
+            yield chunk
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # nginx 抗缓冲
+            "Connection": "keep-alive",
+        },
     )
