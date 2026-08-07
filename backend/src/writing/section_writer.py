@@ -58,7 +58,7 @@ def _build_section_role(section: SectionSpec, groups: list[Group]) -> str:
         )
     group_names = ", ".join(g.name for g in groups)
     return (
-        f"分类方式下的分组:{group_names}。本节聚焦于本节具体主题,"
+        f"分类方式下的分组:{group_names}。本节定位:{section.instruction}"
         f"遵循 literature-review skill 的批判性写作原则:"
         f"禁止简单罗列、必须包含比较与对比、识别共识与争议。"
     )

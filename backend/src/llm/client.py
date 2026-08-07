@@ -40,6 +40,7 @@ def messages_create(
     max_tokens: int = 4000,
     model: str | None = None,
     max_retries: int = 3,
+    temperature: float | None = None,
 ) -> str:
     """调 MiniMax Chat Completions,带 3 次指数退避重试。
 
@@ -53,7 +54,7 @@ def messages_create(
     last_err: Exception | None = None
     for attempt in range(max_retries):
         try:
-            resp = client.chat.completions.create(
+            kwargs = dict(
                 model=model,
                 messages=[
                     {"role": "system", "content": system},
@@ -61,6 +62,9 @@ def messages_create(
                 ],
                 max_completion_tokens=max_tokens,
             )
+            if temperature is not None:
+                kwargs["temperature"] = temperature
+            resp = client.chat.completions.create(**kwargs)
             content = resp.choices[0].message.content or ""
             return _strip_think(content)
         except APITimeoutError as e:

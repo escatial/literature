@@ -96,7 +96,15 @@ class OpenAlexAdapter:
         issue = str(biblio.get("issue")) if biblio.get("issue") else None
         first = biblio.get("first_page")
         last = biblio.get("last_page")
-        pages = f"{first}-{last}" if (first and last) else (first or last or None)
+        # 注意:数字 0 会被 if 判定为 False,因此需用 is not None 严格判定
+        if first and last:
+            pages = f"{first}-{last}"
+        elif first:
+            pages = str(first)
+        elif last:
+            pages = str(last)
+        else:
+            pages = None
 
         primary = w.get("primary_location") or {}
         source_loc = primary.get("source") or {}

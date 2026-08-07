@@ -57,6 +57,9 @@ def test_litrev_classify_renders():
     )
     assert "AI 营销" in out
     assert "theme" in out
+    assert "根据文献题名/摘要归纳 **3~5 个并列主题**" in out
+    assert "不要写检索方式" in out
+
 
 
 def test_cache_loads_once():

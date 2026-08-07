@@ -57,7 +57,11 @@ export async function searchOpenAlex(p: OASearchParams): Promise<Paper[]> {
       const issue = biblio.issue != null ? String(biblio.issue) : null;
       const first: string | null = biblio.first_page ?? null;
       const last: string | null = biblio.last_page ?? null;
-      const pages = first && last ? `${first}-${last}` : (first || last || null);
+      // 注意:字符串 '0' 或空字符串也应跳过
+      const pages =
+        first && last
+          ? `${first}-${last}`
+          : first ?? last ?? null;
       const primary = w.primary_location ?? {};
       const sourceLoc = primary.source ?? {};
       const journal: string = sourceLoc.display_name ?? '';

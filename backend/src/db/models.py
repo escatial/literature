@@ -1,12 +1,17 @@
 """ORM 模型。"""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .session import Base
+
+
+def _utcnow() -> datetime:
+    """统一的 UTC 当前时间(Python 3.12+ datetime.utcnow 已弃用)。"""
+    return datetime.now(timezone.utc)
 
 
 class PaperModel(Base):
@@ -30,7 +35,30 @@ class PaperModel(Base):
     relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw_citation: Mapped[str | None] = mapped_column(Text, nullable=True)  # 中文 GB/T 7714 原文
     selected: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class RetrievalTaskModel(Base):
+    """英文检索后台任务。"""
+    __tablename__ = "retrieval_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    topic: Mapped[str] = mapped_column(String(500), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    year_start: Mapped[int] = mapped_column(Integer, default=2020)
+    year_end: Mapped[int] = mapped_column(Integer, default=2026)
+    min_citations: Mapped[int] = mapped_column(Integer, default=0)
+    limit: Mapped[int] = mapped_column(Integer, default=50)
+    use_rerank: Mapped[bool] = mapped_column(Boolean, default=True)
+    topic_summary: Mapped[str] = mapped_column(Text, default="")
+    query_used: Mapped[str] = mapped_column(Text, default="")
+    total_before_filter: Mapped[int] = mapped_column(Integer, default=0)
+    total_after_filter: Mapped[int] = mapped_column(Integer, default=0)
+    papers: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class ReviewModel(Base):
@@ -44,4 +72,4 @@ class ReviewModel(Base):
     reference_list: Mapped[str] = mapped_column(Text, default="")
     screened_out_ids: Mapped[list] = mapped_column(JSON, default=list)
     dropped_citations: Mapped[list] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

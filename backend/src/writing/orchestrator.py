@@ -15,9 +15,59 @@ from retrieval.types import Paper, Source
 from screening.llm_filter import screen_batch
 from writing.classifier import Group, classify
 from writing.section_writer import SectionResult, write_section
-from writing.templates import SECTIONS
+from writing.templates import SECTIONS, SectionSpec
 
 log = logging.getLogger(__name__)
+
+
+_CHINESE_NUMBERS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+
+
+def _format_chinese_index(idx: int) -> str:
+    """将 1-based 索引格式化为中文序数(超出十则回退到阿拉伯数字)。
+
+    避免章节数超过 10 时出现 IndexError。
+    """
+    if 1 <= idx <= len(_CHINESE_NUMBERS):
+        return _CHINESE_NUMBERS[idx - 1]
+    return str(idx)
+
+
+def build_review_sections(classify_mode: str, groups: list[Group]) -> list[SectionSpec]:
+    """根据分类结果构造综述章节。
+
+    主题模式不写"文献检索方法",而是按文献题名/摘要归纳出的 3~5 个并列主题展开。
+    """
+    if classify_mode != "theme":
+        return [s for s in SECTIONS if s.key != "method"]
+
+    theme_groups = groups[:5]
+    sections = [
+        SectionSpec(
+            key="introduction",
+            title=f"{_format_chinese_index(1)}、引言",
+            instruction="说明研究主题的背景、综述范围和主题划分逻辑。此处不写资料获取过程。",
+        )
+    ]
+    for idx, group in enumerate(theme_groups, start=2):
+        sections.append(
+            SectionSpec(
+                key=f"theme_{idx - 1}",
+                title=f"{_format_chinese_index(idx)}、{group.name}",
+                instruction=(
+                    f"围绕『{group.name}』归纳相关文献的核心观点、共识、分歧与不足。"
+                    "本节只讨论该并列主题,不要写数据库来源或筛选流程。"
+                ),
+            )
+        )
+    sections.append(
+        SectionSpec(
+            key="comment",
+            title=f"{_format_chinese_index(len(sections) + 1)}、文献述评",
+            instruction="综合评价上述主题研究,指出研究空白和本文切入点。此处不新增文献引用。",
+        )
+    )
+    return sections
 
 
 @dataclass
@@ -84,12 +134,13 @@ def generate_review_stream(
         })
 
         # 3) 分章写作
+        section_specs = build_review_sections(classify_mode, groups)
         sections: list[SectionResult] = []
         all_dropped: list[str] = []
-        for idx, spec in enumerate(SECTIONS):
+        for idx, spec in enumerate(section_specs):
             yield _sse_event("section_started", {
                 "index": idx,
-                "total": len(SECTIONS),
+                "total": len(section_specs),
                 "key": spec.key,
                 "title": spec.title,
             })
@@ -98,7 +149,7 @@ def generate_review_stream(
             all_dropped.extend(res.dropped_citations)
             yield _sse_event("section_done", {
                 "index": idx,
-                "total": len(SECTIONS),
+                "total": len(section_specs),
                 "key": res.key,
                 "title": res.title,
                 "content": res.content,
@@ -142,9 +193,10 @@ def generate_review(
 
     groups = classify(papers, topic, classify_mode)
 
+    section_specs = build_review_sections(classify_mode, groups)
     sections: list[SectionResult] = []
     all_dropped: list[str] = []
-    for spec in SECTIONS:
+    for spec in section_specs:
         res = write_section(spec, topic, groups, papers)
         sections.append(res)
         all_dropped.extend(res.dropped_citations)

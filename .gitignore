@@ -1,10 +1,63 @@
+# Env / secrets
+.env
+.env.local
 backend/.env
+backend/.venv/
+.venv/
+
+# Logs / runtime
+*.log
+*.out
+*.err
+backend.log
+uvicorn.out
+uvicorn.err
 backend/uvicorn.out
 backend/uvicorn.err
-backend/data/
-smoke.log
+backend/backend.log
+backend/cnki.html
+backend/dump.log
+backend/probe.log
+backend/probe_out.txt
+backend/pytest.log
+backend/pytest_out.txt
+backend/test_auto.log
+
+# Build / cache
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+backend/src/lit_review_agent_backend.egg-info/
 node_modules/
 dist/
 .vite/
+
+# Data
+backend/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Test artifacts
+backend/probe_cnki.py
+backend/probe_cnki_advanced.py
+backend/probe2.py
+backend/probe_mock.py
+backend/dump_cnki.py
+backend/test_*.py
+backend/verify_*.py
+
+# User resources (don't commit)
+humanizer-zh.zip
+literature-review.zip
+*.md
+!backend/README.md
+!backend/src/**/*.md
+!docs/**/*.md
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

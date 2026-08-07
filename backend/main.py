@@ -5,6 +5,7 @@
 """
 import logging
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,28 +26,36 @@ from api.papers import router as papers_router  # noqa: E402
 from api.prompts import router as prompts_router  # noqa: E402
 from api.query_plan import router as query_plan_router  # noqa: E402
 from api.retrieval import router as retrieval_router  # noqa: E402
+from api.retrieval_tasks import router as retrieval_tasks_router  # noqa: E402
 from api.reviews import router as reviews_router  # noqa: E402
 from api.screening import router as screening_router  # noqa: E402
 from api.writing import router as writing_router  # noqa: E402
+from api.automation import router as automation_router  # noqa: E402
 from db.session import init_db  # noqa: E402
 
-app = FastAPI(title="文献综述 Agent", version="0.2.0")
 
-# 启动时建表
-@app.on_event("startup")
-def _startup():
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    """应用生命周期:启动时建表,关闭时不需清理(SQLAlchemy 自行管理连接池)。"""
     init_db()
+    yield
 
+
+app = FastAPI(title="文献综述 Agent", version="0.2.0", lifespan=_lifespan)
+
+# CORS:allow_origins=["*"] 与 allow_credentials=True 同时开启会被 Starlette 拒绝
+# 开发环境放宽,带凭证的请求必须显式列出来源
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(health_router, prefix="/api")
 app.include_router(retrieval_router, prefix="/api")
+app.include_router(retrieval_tasks_router, prefix="/api")
 app.include_router(import_cn_router, prefix="/api")
 app.include_router(query_plan_router, prefix="/api")
 app.include_router(screening_router, prefix="/api")
@@ -54,8 +63,15 @@ app.include_router(writing_router, prefix="/api")
 app.include_router(papers_router, prefix="/api")
 app.include_router(reviews_router, prefix="/api")
 app.include_router(prompts_router, prefix="/api")
+app.include_router(automation_router, prefix="/api")
 
 
 @app.get("/")
 def root():
     return {"message": "文献综述 Agent API", "docs": "/docs"}
+
+
+if __name__ == "__main__":
+    # 支持 python main.py 直接启动
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)

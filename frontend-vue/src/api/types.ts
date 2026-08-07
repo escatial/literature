@@ -53,6 +53,42 @@ export interface RerankResponse {
   papers: Paper[];
 }
 
+export type RetrievalTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface RetrievalTaskCreate {
+  topic: string;
+  year_start: number;
+  year_end: number;
+  min_citations: number;
+  limit: number;
+  use_rerank: boolean;
+}
+
+export interface RetrievalTaskCreated {
+  task_id: string;
+  status: RetrievalTaskStatus;
+}
+
+export interface RetrievalTask {
+  task_id: string;
+  topic: string;
+  status: RetrievalTaskStatus;
+  progress: number;
+  year_start: number;
+  year_end: number;
+  min_citations: number;
+  limit: number;
+  use_rerank: boolean;
+  topic_summary: string;
+  query_used: string;
+  total_before_filter: number;
+  total_after_filter: number;
+  papers: Paper[];
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface WritingSection {
   key: string;
   title: string;
