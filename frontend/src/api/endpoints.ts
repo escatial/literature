@@ -54,6 +54,39 @@ export const createRetrievalTask = (req: RetrievalTaskCreate) =>
 export const getRetrievalTask = (taskId: string) =>
   http.get<RetrievalTask>(`/retrieval/tasks/${taskId}`).then(r => r.data);
 
+export interface ChineseWorkflowEvent {
+  stage: string;
+  status: string;
+  progress: number;
+  detail?: string | null;
+}
+
+export interface ChineseWorkflowResponse {
+  task_id: string;
+  status: string;
+  progress: number;
+  events: ChineseWorkflowEvent[];
+  session_id?: string | null;
+  items: Paper[];
+  error?: string | null;
+}
+
+export interface ChineseWorkflowRequest {
+  query: string;
+  db_types: string[];
+  target_per_db: number;
+  max_pages_per_db: number;
+}
+
+export const startChineseWorkflow = (req: ChineseWorkflowRequest) =>
+  http.post<ChineseWorkflowResponse>('/automation/workflow/chinese', req).then(r => r.data);
+
+export const getActiveChineseWorkflows = () =>
+  http.get<ChineseWorkflowResponse[]>('/automation/workflow/chinese/active').then(r => r.data);
+
+export const getChineseWorkflow = (taskId: string) =>
+  http.get<ChineseWorkflowResponse>(`/automation/workflow/chinese/${taskId}`).then(r => r.data);
+
 export const listRetrievalTasks = () =>
   http.get<RetrievalTask[]>('/retrieval/tasks').then(r => r.data);
 

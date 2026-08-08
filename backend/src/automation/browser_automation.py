@@ -225,16 +225,41 @@ class ScholarBrowser:
         if not self._page:
             return VerificationResult(detected=False, type=VerificationType.NONE)
 
-        content = await self._page.content()
+        text_content = await self._page.evaluate(
+            "() => document.body ? document.body.innerText || '' : ''"
+        )
         title = await self._page.title()
         url = self._page.url
 
         patterns = self.VERIFICATION_PATTERNS.get(db_type, {})
 
+        def _url_indicates_verification(kind: str, current_url: str) -> bool:
+            if kind == "captcha":
+                return bool(re.search(r"/verify/|captchatype=|blockpuzzle|geetest|slide.*verify|verify.*code", current_url, re.I))
+            if kind == "slider":
+                return bool(re.search(r"/verify/|blockpuzzle|geetest|slide.*verify|nc\.tm", current_url, re.I))
+            if kind == "login":
+                return bool(re.search(r"/login|login", current_url, re.I))
+            if kind == "sms":
+                return bool(re.search(r"/verify/|sms|mobile.*verify", current_url, re.I))
+            if kind == "face":
+                return bool(re.search(r"/verify/|face", current_url, re.I))
+            return False
+
         # 检查各种验证类型
         for vtype, pattern_list in patterns.items():
             for pattern in pattern_list:
-                if re.search(pattern, content, re.I) or re.search(pattern, title, re.I):
+                text_has_pattern = (
+                    vtype != "login"
+                    and bool(re.search(pattern, text_content, re.I))
+                )
+                title_has_pattern = bool(re.search(pattern, title, re.I))
+                url_has_pattern = _url_indicates_verification(vtype, url)
+                if (
+                    text_has_pattern
+                    or title_has_pattern
+                    or url_has_pattern
+                ):
                     log.warning("检测到验证: %s (%s)", vtype, pattern)
                     return VerificationResult(
                         detected=True,
@@ -247,7 +272,7 @@ class ScholarBrowser:
         for name, selector in self.VERIFICATION_SELECTORS.items():
             try:
                 element = await self._page.query_selector(selector)
-                if element:
+                if element and await element.is_visible():
                     log.warning("检测到验证元素: %s", selector)
                     vtype = VerificationType.CAPTCHA if "captcha" in name else VerificationType.SLIDER
                     return VerificationResult(

@@ -31,14 +31,20 @@ from api.reviews import router as reviews_router  # noqa: E402
 from api.screening import router as screening_router  # noqa: E402
 from api.writing import router as writing_router  # noqa: E402
 from api.automation import router as automation_router  # noqa: E402
-from db.session import init_db  # noqa: E402
+from src.automation.remote_browser import manager  # noqa: E402
+from db.session import close_db, connect_db, init_db  # noqa: E402
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    """应用生命周期:启动时建表,关闭时不需清理(SQLAlchemy 自行管理连接池)。"""
+    """应用生命周期:启动数据库,关闭浏览器和数据库连接。"""
     init_db()
-    yield
+    connect_db()
+    try:
+        yield
+    finally:
+        await manager.shutdown()
+        close_db()
 
 
 app = FastAPI(title="文献综述 Agent", version="0.2.0", lifespan=_lifespan)

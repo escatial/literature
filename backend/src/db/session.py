@@ -21,6 +21,23 @@ engine = create_engine(
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_active_connection = None
+
+
+def connect_db() -> None:
+    """应用启动时验证数据库连接可用。"""
+    global _active_connection
+    if _active_connection is None:
+        _active_connection = engine.connect()
+
+
+def close_db() -> None:
+    """应用关闭时释放数据库连接和连接池。"""
+    global _active_connection
+    if _active_connection is not None:
+        _active_connection.close()
+        _active_connection = None
+    engine.dispose()
 
 
 class Base(DeclarativeBase):

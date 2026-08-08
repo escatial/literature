@@ -1,4 +1,4 @@
-/** 统一检索页状态:跨 tab 切回后能恢复检索式/概念/会话。 */
+/** 统一检索页状态:每次进入页面均从空白任务开始。 */
 import { defineStore } from 'pinia';
 import type { ConceptGroup } from '@/api/endpoints';
 
@@ -21,6 +21,8 @@ interface State {
   planning: boolean;
   // 异步任务:抽取是否在进行
   extracting: boolean;
+  chineseTaskId: string;
+  englishTaskId: string;
   // 自动抽取相关
   autoTarget: number;
   autoMaxPages: number;
@@ -41,6 +43,8 @@ const initial: State = {
   currentIndex: 0,
   planning: false,
   extracting: false,
+  chineseTaskId: '',
+  englishTaskId: '',
   autoTarget: 30,
   autoMaxPages: 10,
 };
@@ -64,7 +68,7 @@ function saveToStorage(s: State) {
 }
 
 export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
-  state: (): State => ({ ...initial, ...loadFromStorage() }),
+  state: (): State => ({ ...initial }),
 
   actions: {
     /** 任何状态变更后调用,持久化。 */

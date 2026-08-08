@@ -698,6 +698,112 @@ class RemoteBrowserManager:
             session.verification = False
             session.vtype = "none"
 
+    async def try_auto_login(self, session: BrowserSession, db_type: str = "cnki") -> dict:
+        """检测为登录页时,自动填账号密码并提交(验证码仍由人工完成)。
+
+        策略:
+          1) 从环境变量读 CHINESE_DB_USERNAME / CHINESE_DB_PASSWORD,未配置则跳过
+          2) 用通用选择器找 用户名/密码 输入框并填入
+          3) 点击"登录"按钮提交
+          4) 提交后等待页面跳转,若仍停在登录页(多半有验证码/滑块)返回 captcha_required
+        返回 {"ok": bool, "reason": str, "captcha_required": bool}
+        """
+        import os
+        # 支持按库覆盖: 优先 {DB}_USERNAME/{DB}_PASSWORD, 缺省回落到 CHINESE_DB_*
+        prefix = db_type.upper()
+        username = (
+            os.environ.get(f"{prefix}_USERNAME", "").strip()
+            or os.environ.get("CHINESE_DB_USERNAME", "").strip()
+        )
+        password = (
+            os.environ.get(f"{prefix}_PASSWORD", "").strip()
+            or os.environ.get("CHINESE_DB_PASSWORD", "").strip()
+        )
+        if not username or not password:
+            return {"ok": False, "reason": f"未配置 {prefix}_USERNAME/PASSWORD 或 CHINESE_DB_*", "captcha_required": False}
+
+        page = session.page
+        log.info("[auto_login] 尝试自动登录 db=%s url=%s", db_type, page.url)
+
+        # 通用登录输入框选择器(知网/万方/维普登录页大致同构)
+        user_selectors = [
+            "input[type='text'][name*='user']", "input[type='text'][name*='name']",
+            "input[type='text'][name*='account']", "input[type='text'][name*='login']",
+            "input[type='text'][name*='email']", "input[type='text'][name*='phone']",
+            "input[type='tel']", "input[placeholder*='账号']", "input[placeholder*='用户名']",
+            "input[placeholder*='手机']", "input[placeholder*='邮箱']",
+            "input[type='text']:visible",
+        ]
+        pwd_selectors = [
+            "input[type='password']:visible",
+        ]
+
+        async def _first_visible(selectors):
+            for sel in selectors:
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.count() > 0 and await loc.is_visible():
+                        return loc
+                except Exception:
+                    continue
+            return None
+
+        try:
+            user_box = await _first_visible(user_selectors)
+            pwd_box = await _first_visible(pwd_selectors)
+            if not user_box or not pwd_box:
+                return {"ok": False, "reason": "未找到登录输入框", "captcha_required": False}
+
+            await user_box.click()
+            await page.keyboard.press("Control+A")
+            await user_box.fill(username)
+            await pwd_box.click()
+            await page.keyboard.press("Control+A")
+            await pwd_box.fill(password)
+            log.info("[auto_login] 已填入账号密码")
+
+            # 点击"登录"按钮
+            btn_selectors = [
+                "button:has-text('登录')", "button:has-text('登 录')",
+                "input[type='submit'][value*='登录']",
+                "a:has-text('登录')", ".login-btn", "#loginBtn", ".btn-login",
+            ]
+            clicked = False
+            for sel in btn_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click()
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                await page.keyboard.press("Enter")
+            log.info("[auto_login] 已提交登录表单")
+
+            # 等待页面响应
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                pass
+            await asyncio.sleep(1.5)
+
+            # 再检测一次:仍要求验证 → 多半是验证码/滑块,交给人工
+            probe = ScholarBrowser(headless=True)
+            probe._page = page
+            result = await probe.detect_verification(db_type)
+            if result.detected:
+                vtype = result.type.value if isinstance(result.type, VerificationType) else "unknown"
+                if vtype == "login":
+                    # 提交后仍被识别为登录页:可能登录失败或要二次验证
+                    return {"ok": False, "reason": "提交后仍停在登录页", "captcha_required": True}
+                return {"ok": True, "reason": f"登录提交,需人工完成 {vtype}", "captcha_required": True}
+            return {"ok": True, "reason": "登录成功", "captcha_required": False}
+        except Exception as e:
+            log.warning("[auto_login] 自动登录异常: %s", e)
+            return {"ok": False, "reason": str(e), "captcha_required": False}
+
     def get(self, session_id: str) -> BrowserSession | None:
         return self._sessions.get(session_id)
 

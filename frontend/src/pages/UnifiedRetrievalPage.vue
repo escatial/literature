@@ -22,7 +22,16 @@ import {
   ElTag,
 } from 'element-plus';
 import { http } from '@/api/http';
-import { queryPlan } from '@/api/endpoints';
+import {
+  createRetrievalTask,
+  getActiveChineseWorkflows,
+  getChineseWorkflow,
+  getRetrievalTask,
+  queryPlan,
+  startChineseWorkflow,
+} from '@/api/endpoints';
+import type { ChineseWorkflowResponse } from '@/api/endpoints';
+import type { RetrievalTask } from '@/api/types';
 import { useTopicStore } from '@/stores/topic';
 import { usePapersStore } from '@/stores/papers';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
@@ -31,6 +40,8 @@ const router = useRouter();
 const topicStore = useTopicStore();
 const papersStore = usePapersStore();
 const ustore = useUnifiedRetrievalStore();
+
+
 
 // 视图态:不持久化的(实时变化、来自 WS)
 const pageUrl = ref('');
@@ -48,6 +59,14 @@ const autoProgress = ref({ pages: 0, count: 0 });
 const multiRunning = ref(false);
 const multiSummary = ref<{ count: number; perDb: any[] }>({ count: 0, perDb: [] });
 const planningSummary = ref('');
+const chineseTask = ref<ChineseWorkflowResponse | null>(null);
+const englishTask = ref<RetrievalTask | null>(null);
+const progressTimer = ref<number | null>(null);
+const progressLogs = computed(() => chineseTask.value?.events || []);
+const chineseDbs = computed(() => ustore.selectedDbs.filter((db) => ['cnki', 'cqvip', 'wanfang'].includes(db)));
+const englishDbs = computed(() => ustore.selectedDbs.filter((db) => ['openalex', 'pubmed'].includes(db)));
+const isRunning = computed(() => ['pending', 'running', 'waiting_verification'].includes(chineseTask.value?.status || '') || ['pending', 'running'].includes(englishTask.value?.status || ''));
+const isVerification = computed(() => verification.value || chineseTask.value?.status === 'waiting_verification');
 
 // 派生
 const sessionId = computed(() => ustore.sessionId);
@@ -65,6 +84,16 @@ const VIEW_H = 800;
 
 let ws: WebSocket | null = null;
 let img: HTMLImageElement | null = null;
+let lastVerificationReconnectKey: string | null = null;
+
+const hasUnifiedRetrievalMountedInWindow = () => {
+  const flag = (window as typeof window & { __unifiedRetrievalMounted?: boolean }).__unifiedRetrievalMounted;
+  return flag === true;
+};
+
+const markUnifiedRetrievalMountedInWindow = () => {
+  (window as typeof window & { __unifiedRetrievalMounted?: boolean }).__unifiedRetrievalMounted = true;
+};
 
 const wsBase = (): string => {
   const base = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8080';
@@ -224,7 +253,163 @@ const sendQueryToBrowser = async (submit = true) => {
   }
 };
 
-/** 启动浏览器会话 */
+const stopProgressPolling = () => {
+  if (progressTimer.value != null) window.clearInterval(progressTimer.value);
+  progressTimer.value = null;
+};
+
+const refreshProgress = async () => {
+  if (ustore.chineseTaskId) {
+    try {
+      chineseTask.value = await getChineseWorkflow(ustore.chineseTaskId);
+    } catch (e: any) {
+      if (e?.response?.status === 404) {
+        chineseTask.value = null;
+        ustore.chineseTaskId = '';
+        ustore.clearSession();
+      } else {
+        throw e;
+      }
+    }
+  }
+  if (ustore.englishTaskId) {
+    try {
+      englishTask.value = await getRetrievalTask(ustore.englishTaskId);
+    } catch (e: any) {
+      if (e?.response?.status === 404) {
+        englishTask.value = null;
+        ustore.englishTaskId = '';
+      } else {
+        throw e;
+      }
+    }
+  }
+  if (chineseTask.value?.session_id) {
+    ustore.setSession(chineseTask.value.session_id, chineseDbs.value, 0);
+    const verificationReconnectKey = isVerification.value
+      ? `${chineseTask.value.session_id}:${chineseTask.value.status}:${vtype.value}`
+      : null;
+    if (verificationReconnectKey && verificationReconnectKey !== lastVerificationReconnectKey) {
+      lastVerificationReconnectKey = verificationReconnectKey;
+      tryReconnectSession();
+    } else if (!verificationReconnectKey) {
+      lastVerificationReconnectKey = null;
+    }
+  }
+  if (chineseTask.value?.items?.length) {
+    candidates.value = chineseTask.value.items;
+    candidateSelected.value = new Set(candidates.value.map((item) => item.lit_id).filter(Boolean));
+  }
+  const chineseDone = !ustore.chineseTaskId || ['succeeded', 'failed'].includes(chineseTask.value?.status || '');
+  const englishDone = !ustore.englishTaskId || ['succeeded', 'failed'].includes(englishTask.value?.status || '');
+  if (chineseDone && englishDone) {
+    stopProgressPolling();
+    await papersStore.refresh();
+  }
+};
+
+const startProgressPolling = () => {
+  stopProgressPolling();
+  refreshProgress().catch((e: any) => ElMessage.error(`刷新任务状态失败:${e.message ?? e}`));
+  progressTimer.value = window.setInterval(() => {
+    refreshProgress().catch((e: any) => ElMessage.error(`轮询任务状态失败:${e.message ?? e}`));
+  }, 2000);
+};
+
+const restoreActiveTasks = async () => {
+  let hasActiveTask = false;
+  try {
+    const activeChineseTasks = await getActiveChineseWorkflows();
+    chineseTask.value = activeChineseTasks.at(-1) ?? null;
+    ustore.chineseTaskId = chineseTask.value?.task_id ?? '';
+    hasActiveTask = chineseTask.value !== null;
+  } catch {
+    chineseTask.value = null;
+    ustore.chineseTaskId = '';
+  }
+  if (ustore.englishTaskId) {
+    try {
+      englishTask.value = await getRetrievalTask(ustore.englishTaskId);
+      const active = !['succeeded', 'failed'].includes(englishTask.value.status);
+      hasActiveTask = hasActiveTask || active;
+      if (!active) {
+        englishTask.value = null;
+        ustore.englishTaskId = '';
+      }
+    } catch {
+      englishTask.value = null;
+      ustore.englishTaskId = '';
+    }
+  }
+  if (!hasActiveTask) {
+    chineseTask.value = null;
+    englishTask.value = null;
+    ustore.chineseTaskId = '';
+    ustore.englishTaskId = '';
+    stopProgressPolling();
+    ustore.persist();
+    return;
+  }
+  ustore.persist();
+  startProgressPolling();
+};
+
+const startUnifiedRetrieval = async () => {
+  if (!ustore.queryZh.trim() && chineseDbs.value.length) {
+    ElMessage.warning('请先生成或填写中文检索式');
+    return;
+  }
+  if (!ustore.queryEn.trim() && englishDbs.value.length) {
+    ElMessage.warning('请先生成或填写英文检索式');
+    return;
+  }
+  if (!chineseDbs.value.length && !englishDbs.value.length) {
+    ElMessage.warning('请至少选择一个数据库');
+    return;
+  }
+  try {
+    if (!chineseDbs.value.length) {
+      chineseTask.value = null;
+      ustore.chineseTaskId = '';
+    }
+    if (!englishDbs.value.length) {
+      englishTask.value = null;
+      ustore.englishTaskId = '';
+    }
+    ustore.persist();
+
+    if (chineseDbs.value.length) {
+      const task = await startChineseWorkflow({
+        query: ustore.queryZh,
+        db_types: chineseDbs.value,
+        target_per_db: ustore.autoTarget,
+        max_pages_per_db: ustore.autoMaxPages,
+      });
+      chineseTask.value = task;
+      ustore.chineseTaskId = task.task_id;
+      ustore.persist();
+    }
+    if (englishDbs.value.length) {
+      const task = await createRetrievalTask({
+        topic: ustore.topic || topicStore.topic,
+        year_start: new Date().getFullYear() - 3,
+        year_end: new Date().getFullYear(),
+        min_citations: 0,
+        limit: ustore.autoTarget,
+        use_rerank: true,
+      });
+      englishTask.value = await getRetrievalTask(task.task_id);
+      ustore.englishTaskId = task.task_id;
+      ustore.persist();
+    }
+    startProgressPolling();
+    ElMessage.success('已启动中文工作流和英文后台任务');
+  } catch (e: any) {
+    ElMessage.error(`启动检索失败:${e.message ?? e}`);
+  }
+};
+
+/** 兼容旧浏览器会话,仅用于验证场景 */
 const startSession = async () => {
   if (!ustore.queryZh.trim()) {
     ElMessage.warning('请先生成或填写检索式');
@@ -237,7 +422,7 @@ const startSession = async () => {
   const body = {
     keyword: ustore.queryZh,
     keyword_en: ustore.queryEn || ustore.queryZh,
-    db_types: ustore.selectedDbs,
+    db_types: chineseDbs.value,
   };
   try {
     const { data } = await http.post('/automation/session', body);
@@ -430,14 +615,24 @@ watch(() => ustore.topic, (t) => {
 });
 
 onMounted(async () => {
-  // 进页面先尝试 reconnect(如果有持久化的 session)
-  if (ustore.sessionId) {
-    tryReconnectSession();
+  stopProgressPolling();
+  const firstMountInCurrentDocument = !hasUnifiedRetrievalMountedInWindow();
+  markUnifiedRetrievalMountedInWindow();
+  if (firstMountInCurrentDocument) {
+    chineseTask.value = null;
+    englishTask.value = null;
+    candidates.value = [];
+    candidateSelected.value = new Set();
+    planningSummary.value = '';
+    ustore.reset();
+  } else {
+    await restoreActiveTasks();
   }
   window.addEventListener('keydown', onKeyDown);
 });
 
 onBeforeUnmount(() => {
+  stopProgressPolling();
   window.removeEventListener('keydown', onKeyDown);
   // 不关 WS,跨页面共享会话;但关掉当前页面的 listeners
   if (ws) {
@@ -601,17 +796,35 @@ const DB_LABELS: Record<string, string> = {
       </div>
 
       <div style="margin-top: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
-        <el-button
-          type="primary"
-          :disabled="!ustore.sessionId && (!ustore.queryZh || ustore.selectedDbs.length === 0)"
-          @click="startSession"
-        >
-          {{ ustore.sessionId ? '重启会话' : '启动远程浏览器' }}
+        <el-button type="primary" :loading="isRunning" @click="startUnifiedRetrieval">
+          {{ isRunning ? '检索任务进行中…' : '启动统一检索' }}
         </el-button>
-        <el-button type="danger" plain :disabled="!ustore.sessionId" @click="closeSession">
-          关闭会话
+        <el-button v-if="isVerification" type="warning" plain @click="startSession">
+          启动验证浏览器会话
+        </el-button>
+        <el-button v-if="isVerification" type="danger" plain :disabled="!ustore.sessionId" @click="closeSession">
+          关闭验证会话
         </el-button>
       </div>
+
+      <el-card v-if="ustore.chineseTaskId || ustore.englishTaskId" shadow="never" style="margin-top: 16px; background: #f8fafc">
+        <template #header><span>实时检索进度</span></template>
+        <div v-if="chineseTask" style="margin-bottom: 12px">
+          <div style="display: flex; justify-content: space-between"><span>中文工作流：{{ chineseTask.status }}</span><strong>{{ chineseTask.progress }}%</strong></div>
+          <el-progress :percentage="chineseTask.progress" :status="chineseTask.status === 'failed' ? 'exception' : chineseTask.status === 'succeeded' ? 'success' : undefined" />
+        </div>
+        <div v-if="englishTask">
+          <div style="display: flex; justify-content: space-between"><span>英文后端任务：{{ englishTask.status }}</span><strong>{{ englishTask.progress }}%</strong></div>
+          <el-progress :percentage="englishTask.progress" :status="englishTask.status === 'failed' ? 'exception' : englishTask.status === 'succeeded' ? 'success' : undefined" />
+        </div>
+        <el-alert v-if="isVerification" type="warning" :closable="false" title="等待验证：请在下方可视化浏览器中完成验证" style="margin: 8px 0" />
+        <el-alert v-if="chineseTask?.status === 'failed' || englishTask?.status === 'failed'" type="error" :closable="false" title="检索失败，请查看操作日志" style="margin: 8px 0" />
+        <div v-if="progressLogs.length" style="max-height: 180px; overflow: auto; font-size: 12px">
+          <div v-for="(event, index) in progressLogs" :key="index" style="padding: 4px 0; border-bottom: 1px solid #ebeef5">
+            [{{ event.stage }}] {{ event.status }} {{ event.detail || '' }} ({{ event.progress }}%)
+          </div>
+        </div>
+      </el-card>
 
       <el-alert
         v-if="verification"
@@ -628,7 +841,7 @@ const DB_LABELS: Record<string, string> = {
     </el-card>
 
     <!-- 远程浏览器画布 -->
-    <el-card v-if="ustore.sessionId" style="margin-top: 16px">
+    <el-card v-if="ustore.sessionId && isVerification" style="margin-top: 16px">
       <template #header>
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
           <span style="font-size: 13px; color: #606266">{{ pageTitle || '(加载中...)' }}</span>
@@ -666,10 +879,10 @@ const DB_LABELS: Record<string, string> = {
     </el-card>
 
     <!-- 抽取候选 + 入库 -->
-    <el-card v-if="ustore.sessionId" style="margin-top: 16px">
+    <el-card v-if="ustore.sessionId && isVerification" style="margin-top: 16px">
       <template #header>
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px">
-          <span>📥 抽取候选 → 入库(当前库:{{ DB_LABELS[currentDb] ?? currentDb }})</span>
+          <span>验证辅助抽取(当前库:{{ DB_LABELS[currentDb] ?? currentDb }})</span>
           <div style="display: flex; gap: 8px">
             <el-button :loading="extracting" @click="extractFromBrowser">仅当前页抽取</el-button>
             <el-button @click="router.push('/pool')">查看文献池 →</el-button>

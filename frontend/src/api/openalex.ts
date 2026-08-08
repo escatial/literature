@@ -1,14 +1,8 @@
-/** 前端直连 OpenAlex(绕过 vite proxy,避免后端网络环境限制)。
-
-- 浏览器原生 fetch,走用户浏览器网络
-- 实现反向索引摘要还原(与后端 openalex_adapter._rebuild_abstract 一致)
-- lit_id 计算与后端一致(SHA256(title|doi)[:16],前缀 lit_)
- */
-import type { Paper } from '../api/types';
+/** 前端直连 OpenAlex。 */
+import type { Paper } from '@/api/types';
 
 const OA_BASE = 'https://api.openalex.org/works';
 
-/** 反向索引还原摘要(平台字段反序列化,不是生成)。 */
 function rebuildAbstract(inverted: Record<string, number[]> | null | undefined): string | null {
   if (!inverted) return null;
   const positions: Array<[number, string]> = [];
@@ -20,7 +14,6 @@ function rebuildAbstract(inverted: Record<string, number[]> | null | undefined):
   return text || null;
 }
 
-/** 与后端保持一致的 lit_id 计算。 */
 export async function makeLitId(title: string | null, doi: string | null): Promise<string> {
   const raw = `${title || ''}|${doi || ''}`;
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
@@ -38,7 +31,6 @@ interface OASearchParams {
   mailto?: string;
 }
 
-/** 从浏览器直接调 OpenAlex。 */
 export async function searchOpenAlex(p: OASearchParams): Promise<Paper[]> {
   const params = new URLSearchParams({
     search: p.query,
@@ -47,7 +39,7 @@ export async function searchOpenAlex(p: OASearchParams): Promise<Paper[]> {
     mailto: p.mailto ?? 'lit-review-agent@example.com',
   });
   const url = `${OA_BASE}?${params.toString()}`;
-  const resp = await fetch(url, { method: 'GET' });
+  const resp = await fetch(url);
   if (!resp.ok) {
     const text = await resp.text();
     throw new Error(`OpenAlex 失败 ${resp.status}: ${text.slice(0, 200)}`);
@@ -65,7 +57,11 @@ export async function searchOpenAlex(p: OASearchParams): Promise<Paper[]> {
       const issue = biblio.issue != null ? String(biblio.issue) : null;
       const first: string | null = biblio.first_page ?? null;
       const last: string | null = biblio.last_page ?? null;
-      const pages = first && last ? `${first}-${last}` : (first || last || null);
+      // 注意:字符串 '0' 或空字符串也应跳过
+      const pages =
+        first && last
+          ? `${first}-${last}`
+          : first ?? last ?? null;
       const primary = w.primary_location ?? {};
       const sourceLoc = primary.source ?? {};
       const journal: string = sourceLoc.display_name ?? '';
@@ -75,7 +71,7 @@ export async function searchOpenAlex(p: OASearchParams): Promise<Paper[]> {
 
       return {
         lit_id: await makeLitId(title, doi),
-        source: 'openalex',
+        source: 'openalex' as const,
         title,
         authors,
         journal,
@@ -87,6 +83,7 @@ export async function searchOpenAlex(p: OASearchParams): Promise<Paper[]> {
         doi,
         source_url: primary.landing_page_url ?? w.id ?? '',
         cited_by_count: w.cited_by_count ?? 0,
+        selected: true,
       } satisfies Paper;
     })
   );

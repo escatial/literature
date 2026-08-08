@@ -61,6 +61,22 @@ class RetrievalTaskModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class ChineseWorkflowTaskModel(Base):
+    """中文统一检索工作流任务(持久化,后端重启后可恢复进度)。"""
+    __tablename__ = "chinese_workflow_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    query: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    session_id: Mapped[str] = mapped_column(String(36), default="")
+    events: Mapped[list] = mapped_column(JSON, default=list)
+    items: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class ReviewModel(Base):
     """综述生成记录(每次生成一条)。"""
     __tablename__ = "reviews"
