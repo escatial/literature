@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** 文献池:中英文解耦,通过 Tab 独立管理。检索/导入完成后自动入库,本页面只展示与管理。*/
-import { computed, onMounted, ref } from 'vue';
+/** 文献池:中英文 Tab + 服务端分页(需求5)。检索完成后自动入库,本页面只展示与管理。*/
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   ElButton,
@@ -9,6 +9,7 @@ import {
   ElEmpty,
   ElMessage,
   ElMessageBox,
+  ElPagination,
   ElPopconfirm,
   ElTable,
   ElTableColumn,
@@ -16,36 +17,60 @@ import {
   ElTabs,
   ElTag,
 } from 'element-plus';
-import { usePapersStore } from '@/stores/papers';
+import {
+  ALLOWED_PAGE_SIZES,
+  DEFAULT_PAGE_SIZE,
+  isCnSource,
+  usePapersStore,
+} from '@/stores/papers';
 import type { Paper } from '@/api/types';
 
 const router = useRouter();
 const store = usePapersStore();
-const activeTab = ref<'all' | 'cn' | 'en'>('all');
 
-onMounted(() => store.refresh());
+const activeTab = ref<'all' | 'cn' | 'en'>('all');
+const pageSize = ref<number>(DEFAULT_PAGE_SIZE);
+const currentPage = ref<number>(1);
+/** 文献池总篇数(全部 tab 的 total,不受当前 tab 过滤影响),供「去写作」按钮展示 */
+const poolTotal = ref(0);
+
+watch(activeTab, async (v) => {
+  currentPage.value = 1;
+  await store.refresh({ page: 1, source: v });
+});
+
+watch(pageSize, async (size) => {
+  currentPage.value = 1;
+  store.setPageSize(size);
+  await store.refresh({ page: 1, page_size: size });
+});
+
+watch(currentPage, async (page) => {
+  await store.refresh({ page });
+});
+
+onMounted(async () => {
+  // 每次进入文献池:重置回第 1 页 + 当前 tab,避免切走再回来时带着旧的 stale 分页状态
+  currentPage.value = 1;
+  await store.refresh({ page: 1 });
+  poolTotal.value = store.pageMeta.total;
+});
 
 const renderCitation = (p: Paper): string => {
-  if (p.source === 'user_imported' && p.raw_citation) return p.raw_citation;
-  const authors = p.authors.join(', ') || 'Anon';
+  if (!p) return '—';
+  if (isCnSource(p.source) && p.raw_citation) return p.raw_citation;
+  const authors = (p.authors || []).join(', ') || 'Anon';
   const vol = p.volume ? (p.issue ? `${p.volume}(${p.issue})` : p.volume) : '';
   const tail = [p.journal, p.year ? String(p.year) : '', vol].filter(Boolean).join(', ');
   const pages = p.pages ? `: ${p.pages}` : '';
-  return `${authors}. ${p.title}[J]. ${tail}${pages}.`;
+  return `${authors}. ${p.title || ''}[J]. ${tail}${pages}.`;
 };
 
-const visiblePapers = computed<Paper[]>(() => {
-  if (activeTab.value === 'cn') return store.cnPapers;
-  if (activeTab.value === 'en') return store.enPapers;
-  return store.papers;
-});
-
-// 1. 检索完成后,现在已自动入库,这里只保留手动单条导入作为冗余通道
-// 2. 单独删除某一条,符合用户日常管理需求
 const removeOne = async (p: Paper) => {
   try {
     await ElMessageBox.confirm(`确定删除:${p.title}?`, '确认', { type: 'warning' });
     await store.remove(p.lit_id);
+    poolTotal.value = Math.max(0, poolTotal.value - 1);
     ElMessage.success('已删除');
   } catch {
     /* cancelled */
@@ -54,7 +79,6 @@ const removeOne = async (p: Paper) => {
 
 const clearVisible = async () => {
   const tab = activeTab.value;
-  // 区分范围:全部 / 仅中文 / 仅英文
   const isAll = tab === 'all';
   const label = isAll ? '整个文献池' : tab === 'cn' ? '中文库' : '英文库';
   try {
@@ -63,12 +87,39 @@ const clearVisible = async () => {
       '警告',
       { type: 'warning' },
     );
-    if (isAll) await store.clearAll();
-    else await store.clearBySource(tab === 'cn' ? 'user_imported' : 'openalex');
+    if (isAll) {
+      await store.clearAll();
+      poolTotal.value = 0;
+    }
+    else if (tab === 'cn') {
+      await store.clearBySource('user_imported');
+      await store.clearBySource('cnki');
+    } else {
+      await store.clearBySource('openalex');
+      await store.clearBySource('pubmed');
+    }
+    if (!isAll) {
+      await store.refresh({ page: 1, source: 'all' });
+      poolTotal.value = store.pageMeta.total;
+      await store.refresh({ page: 1, source: tab });
+    }
     ElMessage.success('清空完成');
   } catch {
     /* cancelled */
   }
+};
+
+const onJumpPage = (target: number | string) => {
+  const n = Number(target);
+  if (!Number.isFinite(n) || n < 1) {
+    ElMessage.warning('请输入合法页码');
+    return;
+  }
+  if (n > store.pageMeta.total_pages) {
+    ElMessage.warning(`超过最大页码 ${store.pageMeta.total_pages}`);
+    return;
+  }
+  currentPage.value = Math.floor(n);
 };
 </script>
 
@@ -79,59 +130,52 @@ const clearVisible = async () => {
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
           <span>文献池</span>
           <div style="color: #909399; font-size: 13px">
-            中文 {{ store.cnPapers.length }} · 英文 {{ store.enPapers.length }} · 已选
-            {{ store.selected.length }} / 共 {{ store.papers.length }}
+            共 {{ store.pageMeta.total }} 条 · 当前第 {{ store.pageMeta.page }} /
+            {{ store.pageMeta.total_pages }} 页
           </div>
         </div>
       </template>
 
-      <!-- 顶部快捷跳转:从文献池快速回到检索/导入/写作页 -->
       <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px">
-        <el-button size="small" @click="router.push('/english')">
-          📥 打开英文检索
-        </el-button>
-        <el-button size="small" @click="router.push('/cn')">
-          📥 打开中文导入
+        <el-button size="small" @click="router.push('/unified')">
+          🚀 打开统一检索
         </el-button>
         <el-button
           size="small"
           type="primary"
-          :disabled="store.papers.length === 0"
+          :disabled="poolTotal === 0"
           @click="router.push('/writing')"
         >
-          ✍️ 去写作({{ store.selected.length }} 篇)
+          ✍️ 去写作(共 {{ poolTotal }} 篇)
         </el-button>
       </div>
 
-      <div style="font-size: 12px; color: #909399; line-height: 1.6">
-        • 英文文献：检索任务成功后<b>自动</b>写入文献池<br />
-        • 中文文献：在「中文导入」页粘贴知网文本后<b>自动</b>写入<br />
-        • 切换中英文 Tab 可独立删除/清空,互不影响
-      </div>
+
     </el-card>
 
     <el-card style="margin-top: 16px">
       <el-tabs v-model="activeTab">
         <el-tab-pane label="全部" name="all" />
-        <el-tab-pane :label="`中文 (${store.cnPapers.length})`" name="cn" />
-        <el-tab-pane :label="`英文 (${store.enPapers.length})`" name="en" />
+        <el-tab-pane label="中文" name="cn" />
+        <el-tab-pane label="英文" name="en" />
 
-        <div style="display: flex; justify-content: flex-end; gap: 8px; margin: 8px 0">
-          <!-- 当前 Tab 对应的快捷入口 -->
-          <el-button
-            v-if="activeTab === 'cn'"
-            size="small"
-            @click="router.push('/cn')"
-          >
-            去导入更多中文 →
-          </el-button>
-          <el-button
-            v-if="activeTab === 'en'"
-            size="small"
-            @click="router.push('/english')"
-          >
-            去检索更多英文 →
-          </el-button>
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap">
+          <div style="color: #909399; font-size: 12px">
+            每页显示
+            <el-select
+              v-model="pageSize"
+              size="small"
+              style="width: 96px; margin: 0 6px"
+            >
+              <el-option
+                v-for="s in ALLOWED_PAGE_SIZES"
+                :key="s"
+                :label="`${s} 条`"
+                :value="s"
+              />
+            </el-select>
+            <span style="margin-left: 6px">共 {{ store.pageMeta.total }} 条</span>
+          </div>
           <el-popconfirm
             :title="`确定清空${activeTab === 'cn' ? '中文' : activeTab === 'en' ? '英文' : '所有'}文献?`"
             @confirm="clearVisible"
@@ -143,8 +187,8 @@ const clearVisible = async () => {
         </div>
 
         <el-table
-          v-if="visiblePapers.length"
-          :data="visiblePapers"
+          v-if="store.papers.length"
+          :data="store.papers"
           v-loading="store.loading"
           stripe
         >
@@ -159,10 +203,10 @@ const clearVisible = async () => {
           <el-table-column label="来源" width="80">
             <template #default="{ row }">
               <el-tag
-                :type="(row as Paper).source === 'user_imported' ? 'warning' : 'primary'"
+                :type="isCnSource((row as Paper).source) ? 'warning' : 'primary'"
                 size="small"
               >
-                {{ (row as Paper).source === 'user_imported' ? '中文' : '英文' }}
+                {{ isCnSource((row as Paper).source) ? '中文' : '英文' }}
               </el-tag>
             </template>
           </el-table-column>
@@ -190,11 +234,24 @@ const clearVisible = async () => {
           v-else
           :description="
             activeTab === 'cn'
-              ? '暂无中文文献,请到「中文导入」页粘贴知网文献'
+              ? '暂无中文文献,请到「统一检索」页检索知网'
               : activeTab === 'en'
-              ? '暂无英文文献,请到「英文检索」页发起检索(成功后将自动入池)'
+              ? '暂无英文文献,请到「统一检索」页检索 PubMed / OpenAlex'
               : '文献池为空'
           "
+        />
+
+        <el-pagination
+          v-if="store.pageMeta.total > 0"
+          style="margin-top: 16px; justify-content: flex-end"
+          background
+          layout="prev, pager, next, jumper, total"
+          :total="store.pageMeta.total"
+          :page-size="store.pageMeta.page_size"
+          :current-page="store.pageMeta.page"
+          @current-change="(p: number) => (currentPage = p)"
+          @prev-click="(p: number) => (currentPage = p)"
+          @next-click="(p: number) => (currentPage = p)"
         />
       </el-tabs>
     </el-card>

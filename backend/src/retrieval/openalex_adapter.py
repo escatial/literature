@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+# 导包
 
 import httpx
 
@@ -110,8 +111,11 @@ class OpenAlexAdapter:
         source_loc = primary.get("source") or {}
         journal = source_loc.get("display_name") or ""
 
+        openalex_id = str(w.get("id") or "").rstrip("/").rsplit("/", 1)[-1]
+        lit_id = f"lit_openalex_{openalex_id.lower()}" if openalex_id else _make_lit_id(title, doi)
+        source_url = f"https://openalex.org/{openalex_id}" if openalex_id else ""
         return Paper(
-            lit_id=_make_lit_id(title, doi),
+            lit_id=lit_id,
             source=Source.OPENALEX,
             title=title,
             authors=authors,
@@ -122,6 +126,6 @@ class OpenAlexAdapter:
             pages=pages,
             abstract=_rebuild_abstract(w.get("abstract_inverted_index")),
             doi=doi,
-            source_url=primary.get("landing_page_url") or w.get("id") or "",
+            source_url=source_url,
             cited_by_count=w.get("cited_by_count") or 0,
         )

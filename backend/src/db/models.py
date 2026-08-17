@@ -33,7 +33,10 @@ class PaperModel(Base):
     cited_by_count: Mapped[int] = mapped_column(Integer, default=0)
     journal_level: Mapped[str | None] = mapped_column(String(50), nullable=True)
     relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    provenance: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     raw_citation: Mapped[str | None] = mapped_column(Text, nullable=True)  # 中文 GB/T 7714 原文
+    quote_text: Mapped[str | None] = mapped_column(Text, nullable=True)   # v4.0 知网导出页引文
+    abstract_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # v4.0 摘要原文
     selected: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
@@ -46,8 +49,8 @@ class RetrievalTaskModel(Base):
     topic: Mapped[str] = mapped_column(String(500), index=True)
     status: Mapped[str] = mapped_column(String(20), index=True, default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
-    year_start: Mapped[int] = mapped_column(Integer, default=2020)
-    year_end: Mapped[int] = mapped_column(Integer, default=2026)
+    year_start: Mapped[int] = mapped_column(Integer, default=0)
+    year_end: Mapped[int] = mapped_column(Integer, default=0)
     min_citations: Mapped[int] = mapped_column(Integer, default=0)
     limit: Mapped[int] = mapped_column(Integer, default=50)
     use_rerank: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -57,6 +60,9 @@ class RetrievalTaskModel(Base):
     total_after_filter: Mapped[int] = mapped_column(Integer, default=0)
     papers: Mapped[list] = mapped_column(JSON, default=list)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # v4.1 英文检索过程日志(供前端按 db 拆分展示)
+    # 每条: {"stage": ..., "source": ..., "page": ..., "added": ..., "total": ..., "message": ...}
+    events: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
@@ -88,4 +94,42 @@ class ReviewModel(Base):
     reference_list: Mapped[str] = mapped_column(Text, default="")
     screened_out_ids: Mapped[list] = mapped_column(JSON, default=list)
     dropped_citations: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class RetrievalHistoryModel(Base):
+    """统一检索历史(最近 5 条,超过按 created_at 自动淘汰)。
+
+    v5.0 需求4:统一检索模块保留最近 5 条历史记录,字段包含
+    检索时间、检索关键词、检索总数量、文献元数据(快照)。
+    """
+    __tablename__ = "retrieval_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    topic: Mapped[str] = mapped_column(String(500), index=True)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    total_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_sources: Mapped[dict] = mapped_column(JSON, default=dict)
+    papers_snapshot: Mapped[list] = mapped_column(JSON, default=list)
+    task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
+class NotifyContactModel(Base):
+    """通知联系人配置。
+
+    邮箱即联系人;usage 区分用途:
+      - api:   OpenAlex 礼貌池识别(OPENALEX_MAILTO)
+      - report: 关键报告接收
+      - alert:  告警信息接收
+      - all:    全部
+    未配置 SMTP 授权码时仅作登记,不发信。
+    """
+    __tablename__ = "notify_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    usage: Mapped[str] = mapped_column(String(50), default="api")  # api/report/alert/all
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

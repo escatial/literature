@@ -1,5 +1,5 @@
 /** SSE 流式写作客户端:逐章实时回填。*/
-import { http } from './http';
+import { getWritingStreamURL } from '@/config/api';
 import type { WritingRequest, WritingResponse } from './types';
 
 export type StreamPhase =
@@ -14,13 +14,14 @@ export type StreamPhase =
 
 export interface StreamState {
   phase: StreamPhase;
-  /** 已完成的章节 */
   sections: { key: string; title: string; content: string; citations: string[] }[];
   groups: { name: string; lit_ids: string[] }[];
   referenceList: string;
   screenedOutIds: string[];
   droppedCitations: string[];
   progress: { index: number; total: number } | null;
+  currentSection: { key: string; title: string; content: string } | null;
+  detail: string | null;
   error: string | null;
 }
 
@@ -32,19 +33,19 @@ const initialState: StreamState = {
   screenedOutIds: [],
   droppedCitations: [],
   progress: null,
+  currentSection: null,
+  detail: null,
   error: null,
 };
 
-/** 走 fetch + getReader 解析 SSE(不走 EventSource,因 EventSource 不支持 POST body)。*/
 export async function generateWritingStream(
   req: WritingRequest,
   onUpdate: (s: StreamState) => void,
 ): Promise<WritingResponse> {
   onUpdate(initialState);
 
-  // SSE 走绝对 URL,绕开 vite proxy 缓冲
-  const baseURL = (import.meta as any).env?.VITE_API_BASE || 'http://127.0.0.1:8080';
-  const resp = await fetch(`${baseURL}/api/writing/generate-stream`, {
+  const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefined;
+  const resp = await fetch(getWritingStreamURL(backendOrigin), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
@@ -64,7 +65,6 @@ export async function generateWritingStream(
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // SSE event 边界是 \n\n
     const parts = buffer.split('\n\n');
     buffer = parts.pop() ?? '';
 
@@ -84,21 +84,62 @@ export async function generateWritingStream(
         switch (evt.event) {
           case 'start':
             state.phase = 'start';
+            state.detail = `已接收 ${evt.data.total_papers ?? 0} 篇文献，准备启动综述写作...`;
             break;
           case 'screening_started':
             state.phase = 'screening';
+            state.detail = `正在进行 LLM 主题筛选，共 ${evt.data.total ?? 0} 篇文献...`;
             break;
           case 'screening_done':
             state.screenedOutIds = evt.data.screened_out ?? [];
+            state.detail = `主题筛选完成，保留 ${evt.data.kept ?? 0} 篇，剔除 ${state.screenedOutIds.length} 篇。`;
+            break;
+          case 'classify_started':
+            state.phase = 'classify';
+            state.detail = `正在按${evt.data.classify_mode === 'theme' ? '主题' : '国内外'}方式进行文献分组...`;
             break;
           case 'classify_done':
             state.phase = 'classify';
             state.groups = evt.data.groups ?? [];
+            state.detail = `文献分组完成，共得到 ${state.groups.length} 个分组。`;
+            break;
+          case 'section_preparing':
+            state.phase = 'writing';
+            state.progress = { index: evt.data.index, total: evt.data.total };
+            state.currentSection = {
+              key: evt.data.key,
+              title: evt.data.title,
+              content: '',
+            };
+            state.detail = evt.data.message ?? `正在准备《${evt.data.title}》...`;
             break;
           case 'section_started':
             state.phase = 'writing';
             state.progress = { index: evt.data.index, total: evt.data.total };
+            state.currentSection = {
+              key: evt.data.key,
+              title: evt.data.title,
+              content: state.currentSection?.key === evt.data.key ? state.currentSection.content : '',
+            };
+            state.detail = `正在流式生成《${evt.data.title}》...`;
             break;
+          case 'section_token': {
+            state.phase = 'writing';
+            const currentSection = (!state.currentSection || state.currentSection.key !== evt.data.key)
+              ? {
+                  key: evt.data.key,
+                  title: evt.data.title,
+                  content: '',
+                }
+              : state.currentSection;
+            state.currentSection = {
+              ...currentSection,
+              content: `${currentSection.content}${evt.data.delta ?? ''}`,
+            };
+            const charCount = state.currentSection.content.length;
+            state.detail = `正在流式生成《${state.currentSection.title}》，已输出 ${charCount} 字...`;
+            break;
+          }
           case 'section_done':
             state.sections.push({
               key: evt.data.key,
@@ -107,18 +148,31 @@ export async function generateWritingStream(
               citations: evt.data.citations ?? [],
             });
             state.droppedCitations.push(...(evt.data.dropped_citations ?? []));
-            state.progress = { index: evt.data.index + 1, total: evt.data.total };
+            state.progress = { index: evt.data.index, total: evt.data.total };
+            state.currentSection = {
+              key: evt.data.key,
+              title: evt.data.title,
+              content: evt.data.content,
+            };
+            state.detail = `《${evt.data.title}》已完成，包含 ${(evt.data.citations ?? []).length} 处引用。`;
+            break;
+          case 'reference_started':
+            state.phase = 'reference';
+            state.detail = `正在整理参考文献，共 ${evt.data.count ?? 0} 篇...`;
             break;
           case 'reference_list':
             state.phase = 'reference';
             state.referenceList = evt.data.reference_list ?? '';
+            state.detail = '参考文献列表已生成，正在收尾...';
             break;
           case 'complete':
             state.phase = 'complete';
+            state.detail = '综述生成完成。';
             break;
           case 'error':
             state.phase = 'error';
             state.error = evt.data.message;
+            state.detail = evt.data.message;
             break;
         }
         onUpdate({ ...state });

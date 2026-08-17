@@ -5,6 +5,10 @@ from enum import Enum
 
 
 class Source(str, Enum):
+    CNKI = "cnki"
+    WANFANG = "wanfang"
+    CQVIP = "cqvip"
+    PUBMED = "pubmed"
     OPENALEX = "openalex"
     CROSSREF = "crossref"
     USER_IMPORTED = "user_imported"  # 中文手动导入
@@ -38,6 +42,10 @@ class Paper:
 
     # LLM 计算字段(由平台返回/或同源计算,非构造)
     relevance_score: float | None = None
+
+    # 真实性保障:数据来源溯源链(官方 API 地址 + 记录 id + 抓取时间),
+    # 由 OpenAlexValidator 双重校验通过后填充,证明该记录来自官方合规数据源。
+    provenance: dict | None = None
 
     # 中文专用:用户粘贴的原始 GB/T 7714 引文字符串(原样保留)
     raw_citation: str | None = None

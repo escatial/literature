@@ -1,0 +1,87 @@
+# ============================================================================
+# 中国知网爬虫配置文件（嵌入项目内：backend/src/automation/cnki/config.yaml）
+# ============================================================================
+# 优先级：命令行参数 > 环境变量 > 本文件 > 代码内置默认
+# 修改后重启后端生效（或调用 automation.cnki.crawler.init() 热重载）
+# ============================================================================
+
+# ---------- 超级鹰（验证码识别平台）----------
+# 安全建议：账号/密码/soft_id 优先用环境变量注入（CJY_USER / CJY_PASS / CJY_SOFT_ID），
+#           避免明文落盘。此处留空则必须配置环境变量，否则启动会报错。
+chaojiying:
+  user: ""
+  pass: ""
+  soft_id: ""
+  # 验证码类型：1902=英数混合 9902=滑块 9901=单图形块 1005=1~5位英文数字
+  # 注意：运行时由 CaptchaDispatcher 按场景自动选型并降级，此值仅作兜底
+  #   slider → 9902(两图形块) → 9900(缺口定位) → 9602(水平拼图)
+  #   alnum  → 1005(1~5位英数) → 1902(4~6位英数) → 1004(1~4位英数)
+  #   point  → 9004(1~4坐标) → 9006(1~6坐标) → 9101(固定1坐标)
+  codetype: 9902
+
+# ---------- 知网签名（如果哪天改了，改这里）----------
+# 也可用环境变量覆盖：CNKI_SIGN_APP_ID / CNKI_SIGN_SECRET
+sign:
+  app_id: "LoginWap"
+  secret: ""
+
+# ---------- 知网接口地址 ----------
+endpoints:
+  base: "https://kns.cnki.net"
+  search: "https://kns.cnki.net/kns8s/brief/grid"
+  adv_search: "https://kns.cnki.net/kns8s/AdvSearch"
+  verify_api: "https://kns.cnki.net/verify-api/web"
+  verify_home: "https://kns.cnki.net/verify/home"
+
+# ---------- HTTP 客户端伪装 ----------
+http:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+  sec_ch_ua: '"Not=A?Brand";v="99", "Google Chrome";v="151", "Chromium";v="151"'
+  sec_ch_ua_platform: '"Windows"'
+  sec_ch_ua_mobile: "?0"
+  accept_language: "zh-CN,zh;q=0.9"
+  uniplatform: "NZKPT"
+  timeout: 20
+  # 是否信任系统代理(Windows Internet 设置,常见 Clash 127.0.0.1:7890)。
+  # 知网为国内站应直连;若经代理节点的出口证书与 kns.cnki.net 不匹配,
+  # 会出现 TLS "Hostname mismatch" 间歇性失败(如第 42 篇起连续失败)。
+  # 如需强制走代理,置为 true 并在系统设置里开启代理即可。
+  trust_env: false
+  # 翻页 token：会话绑定，可能随 cookie 失效而变化（运行时优先从高级检索页自动提取）
+  turnpage: "8Kf6r96aVUubfe4hUZXU-w%21%21"
+
+# ---------- 检索默认值 ----------
+search:
+  default_field: "SU"             # SU=主题 TI=题名 KY=关键词 AU=作者 AB=摘要
+  default_operator: "TOPRANK"     # TOPRANK=模糊 EQ=精确
+  default_resource: "CAPJ"        # CAPJ=期刊 CAPM=博硕 CAJD=会议 CCND=报纸 CROSSDB=总库
+  page_size: 20
+  max_per_keyword: 20
+
+# ---------- 资源代码 → (KuaKuCode, 默认 Classid) ----------
+resource_map:
+  CAPJ:    ["YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R", "WD0FTY92"]
+  CAPM:    ["CDMD,CDMDL", "WD0FTY92"]
+  CAJD:    ["CPFD", "WD0FTY92"]
+  CCND:    ["CCND", "WD0FTY92"]
+  CIBD:    ["CIPD", "WD0FTY92"]
+  CROSSDB: ["YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R", "WD0FTY92"]
+
+# ---------- 检索字段说明（仅注释） ----------
+# SU = 主题   TI = 题名   KY = 关键词   AB = 摘要   AU = 作者
+# FI = 第一作者   RF = 参考文献
+
+# ---------- 运行控制 ----------
+runtime:
+  delay_seconds: 1.0
+  retry_times: 3
+  progress_bar_width: 30
+
+# ---------- 文件路径（嵌入后运行时文件统一落到本包 data/ 目录）----------
+paths:
+  cookies_file: "cookies.json"
+  config_file: "config.yaml"
+  captcha_back_image: "captcha_back.jpg"
+  debug_abstract_html: "debug_abstract.html"
+  failed_file: "failed.json"
+  default_output_prefix: "result"

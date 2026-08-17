@@ -1,14 +1,15 @@
-"""文献池 CRUD API。"""
+"""文献池 CRUD API(需求5:服务端分页)。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db.models import PaperModel
 from db.schemas import (
     PaperBulkCreate,
     PaperBulkCreateResponse,
+    PaperListResponse,
     PaperOut,
     PaperUpdate,
 )
@@ -17,21 +18,52 @@ from db.session import get_db
 router = APIRouter(prefix="/papers", tags=["papers"])
 
 
-@router.get("", response_model=list[PaperOut])
+# 需求5:服务端分页白名单(防止 -1/99999 之类越界)
+_ALLOWED_PAGE_SIZES = (10, 20, 50, 100)
+_DEFAULT_PAGE_SIZE = 20
+_MAX_PAGE = 10_000  # 防止过深的 page 拖垮 SQLite
+
+
+@router.get("", response_model=PaperListResponse)
 def list_papers(
     source: str | None = None,
     selected_only: bool = False,
-    limit: int = 500,
+    page: int = Query(1, ge=1, le=_MAX_PAGE),
+    page_size: int = Query(_DEFAULT_PAGE_SIZE),
     db: Session = Depends(get_db),
 ):
-    """获取文献池列表。"""
-    stmt = select(PaperModel).order_by(PaperModel.created_at.desc())
+    """服务端分页获取文献池。
+
+    - page 从 1 起,page_size 必须在白名单 {10,20,50,100},默认 20。
+    - 返回包含 items + total + page + page_size + total_pages,前端可直接渲染分页组件。
+    """
+    if page_size not in _ALLOWED_PAGE_SIZES:
+        page_size = _DEFAULT_PAGE_SIZE
+    base = select(PaperModel)
+    count_base = select(func.count()).select_from(PaperModel)
     if source:
-        stmt = stmt.where(PaperModel.source == source)
+        # 前端传逗号分隔多值(如 user_imported,cnki / openalex,pubmed)
+        sources = [s.strip() for s in source.split(",") if s.strip()]
+        if sources:
+            base = base.where(PaperModel.source.in_(sources))
+            count_base = count_base.where(PaperModel.source.in_(sources))
     if selected_only:
-        stmt = stmt.where(PaperModel.selected.is_(True))
-    stmt = stmt.limit(limit)
-    return db.execute(stmt).scalars().all()
+        base = base.where(PaperModel.selected.is_(True))
+        count_base = count_base.where(PaperModel.selected.is_(True))
+    total = db.execute(count_base).scalar_one()
+    items = db.execute(
+        base.order_by(PaperModel.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).scalars().all()
+    total_pages = (total + page_size - 1) // page_size if page_size else 1
+    return PaperListResponse(
+        items=list(items),
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages or 1,
+    )
 
 
 @router.get("/{lit_id}", response_model=PaperOut)

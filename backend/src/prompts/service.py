@@ -1,10 +1,4 @@
-"""提示词模板服务:加载、渲染、调用 LLM。
-
-两个外部 skill 已通过模板在本项目落地:
-- humanizer-zh -> prompts/humanizer-zh.md
-- literature-review -> prompts/literature-review-section.md
-                       + prompts/literature-review-classify.md
-"""
+"""提示词模板服务:加载、渲染、调用 LLM。"""
 from __future__ import annotations
 
 import logging
@@ -17,10 +11,8 @@ log = logging.getLogger(__name__)
 
 
 def list_available() -> list[dict[str, str]]:
-    return [
-        {"id": tid, "description": PromptTemplate.load(tid).params.get("description", "")}
-        for tid in list_templates()
-    ]
+    """列出所有可用模板(只返回 id,name/description 等 skill 字段已移除)。"""
+    return [{"id": tid} for tid in list_templates()]
 
 
 def render(template_id: str, **vars) -> str:

@@ -14,8 +14,14 @@ from typing import Any, Generator
 from retrieval.types import Paper, Source
 from screening.llm_filter import screen_batch
 from writing.classifier import Group, classify
-from writing.section_writer import SectionResult, write_section
-from writing.templates import SECTIONS, SectionSpec
+from writing.section_writer import SectionResult, write_section, write_section_stream
+from writing.settings import (
+    SECTION_COMMENT_INSTRUCTION,
+    SECTION_COMMENT_TITLE,
+    SECTION_LOCALE_INSTRUCTION_TEMPLATE,
+    SECTION_THEME_INSTRUCTION_TEMPLATE,
+)
+from writing.templates import SectionSpec
 
 log = logging.getLogger(__name__)
 
@@ -24,50 +30,51 @@ _CHINESE_NUMBERS = ["一", "二", "三", "四", "五", "六", "七", "八", "九
 
 
 def _format_chinese_index(idx: int) -> str:
-    """将 1-based 索引格式化为中文序数(超出十则回退到阿拉伯数字)。
-
-    避免章节数超过 10 时出现 IndexError。
-    """
+    """将 1-based 索引格式化为中文序数(超出十则回退到阿拉伯数字)。"""
     if 1 <= idx <= len(_CHINESE_NUMBERS):
         return _CHINESE_NUMBERS[idx - 1]
     return str(idx)
 
 
 def build_review_sections(classify_mode: str, groups: list[Group]) -> list[SectionSpec]:
-    """根据分类结果构造综述章节。
-
-    主题模式不写"文献检索方法",而是按文献题名/摘要归纳出的 3~5 个并列主题展开。
-    """
-    if classify_mode != "theme":
-        return [s for s in SECTIONS if s.key != "method"]
-
-    theme_groups = groups[:5]
-    sections = [
-        SectionSpec(
-            key="introduction",
-            title=f"{_format_chinese_index(1)}、引言",
-            instruction="说明研究主题的背景、综述范围和主题划分逻辑。此处不写资料获取过程。",
-        )
-    ]
-    for idx, group in enumerate(theme_groups, start=2):
+    """根据分类结果构造综述章节。"""
+    instruction_template = (
+        SECTION_THEME_INSTRUCTION_TEMPLATE
+        if classify_mode == "theme"
+        else SECTION_LOCALE_INSTRUCTION_TEMPLATE
+    )
+    sections: list[SectionSpec] = []
+    for idx, group in enumerate(groups, start=1):
         sections.append(
             SectionSpec(
-                key=f"theme_{idx - 1}",
+                key=f"theme_{idx}",
                 title=f"{_format_chinese_index(idx)}、{group.name}",
-                instruction=(
-                    f"围绕『{group.name}』归纳相关文献的核心观点、共识、分歧与不足。"
-                    "本节只讨论该并列主题,不要写数据库来源或筛选流程。"
-                ),
+                instruction=instruction_template.format(name=group.name),
             )
         )
     sections.append(
         SectionSpec(
             key="comment",
-            title=f"{_format_chinese_index(len(sections) + 1)}、文献述评",
-            instruction="综合评价上述主题研究,指出研究空白和本文切入点。此处不新增文献引用。",
+            title=(
+                f"{_format_chinese_index(len(sections) + 1)}、"
+                f"{SECTION_COMMENT_TITLE}"
+            ),
+            instruction=SECTION_COMMENT_INSTRUCTION,
         )
     )
     return sections
+
+
+def _papers_for_section(
+    spec: SectionSpec,
+    groups: list[Group],
+    papers: list[Paper],
+) -> list[Paper]:
+    if spec.key == "comment":
+        return papers
+    group_index = int(spec.key.removeprefix("theme_")) - 1
+    allowed_ids = set(groups[group_index].lit_ids)
+    return [paper for paper in papers if paper.lit_id in allowed_ids]
 
 
 @dataclass
@@ -94,19 +101,7 @@ def generate_review_stream(
     classify_mode: str,
     do_screening: bool = True,
 ) -> Generator[str, None, None]:
-    """流式生成综述,按事件 yield SSE 字符串。
-
-    事件序列:
-    - start                开始,带文献数/分类方式
-    - screening_started    LLM 筛选开始
-    - screening_done       筛选完成,带剔除数
-    - classify_done        分类完成,带分组
-    - section_started      第 N 章开始
-    - section_done         第 N 章完成,带正文+引用
-    - reference_list       参考文献列表
-    - complete             全部完成,带 dropped_citations
-    - error                任何一步失败
-    """
+    """流式生成综述,按事件 yield SSE 字符串。"""
     try:
         yield _sse_event("start", {
             "topic": topic,
@@ -114,7 +109,6 @@ def generate_review_stream(
             "classify_mode": classify_mode,
         })
 
-        # 1) 筛选
         screened_out: list[str] = []
         if do_screening and papers:
             yield _sse_event("screening_started", {"total": len(papers)})
@@ -127,43 +121,66 @@ def generate_review_stream(
                 "screened_out": screened_out,
             })
 
-        # 2) 分类
+        yield _sse_event("classify_started", {
+            "classify_mode": classify_mode,
+            "total": len(papers),
+        })
         groups = classify(papers, topic, classify_mode)
         yield _sse_event("classify_done", {
             "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
         })
 
-        # 3) 分章写作
         section_specs = build_review_sections(classify_mode, groups)
         sections: list[SectionResult] = []
         all_dropped: list[str] = []
         for idx, spec in enumerate(section_specs):
+            section_papers = _papers_for_section(spec, groups, papers)
+            yield _sse_event("section_preparing", {
+                "index": idx,
+                "total": len(section_specs),
+                "key": spec.key,
+                "title": spec.title,
+                "message": f"正在准备《{spec.title}》的上下文与引用约束...",
+            })
             yield _sse_event("section_started", {
                 "index": idx,
                 "total": len(section_specs),
                 "key": spec.key,
                 "title": spec.title,
             })
-            res = write_section(spec, topic, groups, papers)
-            sections.append(res)
-            all_dropped.extend(res.dropped_citations)
-            yield _sse_event("section_done", {
-                "index": idx,
-                "total": len(section_specs),
-                "key": res.key,
-                "title": res.title,
-                "content": res.content,
-                "citations": res.citations,
-                "dropped_citations": res.dropped_citations,
-            })
+            total_chars = 0
+            for piece, done, res in write_section_stream(
+                spec, topic, groups, section_papers,
+            ):
+                if piece:
+                    total_chars += len(piece)
+                    yield _sse_event("section_token", {
+                        "index": idx,
+                        "total": len(section_specs),
+                        "key": spec.key,
+                        "title": spec.title,
+                        "delta": piece,
+                        "chars": total_chars,
+                    })
+                if done and res is not None:
+                    sections.append(res)
+                    all_dropped.extend(res.dropped_citations)
+                    yield _sse_event("section_done", {
+                        "index": idx,
+                        "total": len(section_specs),
+                        "key": res.key,
+                        "title": res.title,
+                        "content": res.content,
+                        "citations": res.citations,
+                        "dropped_citations": res.dropped_citations,
+                    })
 
-        # 4) 参考文献列表(只纳入正文实际引用的)
         cited_ids = {cid for s in sections for cid in s.citations}
         cited_papers = [p for p in papers if p.lit_id in cited_ids]
+        yield _sse_event("reference_started", {"count": len(cited_papers)})
         ref = render_reference_list(cited_papers)
         yield _sse_event("reference_list", {"reference_list": ref})
 
-        # 5) 完成
         yield _sse_event("complete", {
             "screened_out_ids": screened_out,
             "dropped_citations": all_dropped,
@@ -197,7 +214,12 @@ def generate_review(
     sections: list[SectionResult] = []
     all_dropped: list[str] = []
     for spec in section_specs:
-        res = write_section(spec, topic, groups, papers)
+        res = write_section(
+            spec,
+            topic,
+            groups,
+            _papers_for_section(spec, groups, papers),
+        )
         sections.append(res)
         all_dropped.extend(res.dropped_citations)
 
@@ -212,11 +234,7 @@ def generate_review(
 
 
 def render_reference_list(papers: list[Paper]) -> str:
-    """生成参考文献列表(中文用原文,英文用平台元数据)。
-
-    中文文献:用户导入时提供的 raw_citation 原文(GB/T 7714,来自知网)。
-    英文文献:OpenAlex / CrossRef 的元数据按 GB/T 7714 期刊格式渲染。
-    """
+    """生成参考文献列表(中文用原文,英文用平台元数据)。"""
     lines = []
     for p in papers:
         if p.source == Source.USER_IMPORTED and p.raw_citation:

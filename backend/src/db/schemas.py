@@ -24,6 +24,8 @@ class PaperBase(BaseModel):
     journal_level: str | None = None
     relevance_score: float | None = None
     raw_citation: str | None = None
+    quote_text: str | None = None
+    abstract_text: str | None = None
     selected: bool = True
 
 
@@ -53,6 +55,30 @@ class PaperBulkCreateResponse(BaseModel):
     skipped: int
 
 
+class PaperListResponse(BaseModel):
+    """需求5:服务端分页响应。"""
+    items: list[PaperOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+# ─── 检索历史(需求4) ──────────────────────────────────────
+
+class RetrievalHistoryOut(BaseModel):
+    id: int
+    topic: str
+    sources: list[str] = Field(default_factory=list)
+    total_count: int
+    failed_sources: dict[str, int] = Field(default_factory=dict)
+    papers_snapshot: list[dict] = Field(default_factory=list)
+    task_id: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # ─── Review ───────────────────────────────────────────────
 
 class SectionIn(BaseModel):
@@ -72,6 +98,29 @@ class ReviewCreate(BaseModel):
 
 
 class ReviewOut(ReviewCreate):
+    id: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ─── NotifyContact ────────────────────────────────────────
+
+class NotifyContactCreate(BaseModel):
+    """新增通知联系人(按 email 幂等 upsert)。"""
+    email: str = Field(..., description="联系人邮箱")
+    usage: str = Field("api", description="api/report/alert/all")
+    enabled: bool = True
+    name: str | None = None
+
+
+class NotifyContactUpdate(BaseModel):
+    usage: str | None = None
+    enabled: bool | None = None
+    name: str | None = None
+
+
+class NotifyContactOut(NotifyContactCreate):
     id: int
     created_at: datetime
 

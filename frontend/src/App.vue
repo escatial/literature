@@ -6,15 +6,11 @@ import { ElContainer, ElHeader, ElMain, ElMenu, ElMenuItem } from 'element-plus'
 const route = useRoute();
 const active = computed(() => route.path);
 
+// 需求2:全站移除粘贴引文,顶部菜单不再有「/cn」入口
 const menus = [
-  { path: '/', label: '主题' },
   { path: '/retrieval', label: '统一检索' },
-  { path: '/retrieval-tasks', label: '检索任务' },
   { path: '/pool', label: '文献池' },
   { path: '/writing', label: '写作' },
-  { path: '/english', label: '英文检索(旧)' },
-  { path: '/cn', label: '中文导入(旧)' },
-  { path: '/browser', label: '远程浏览器' },
 ];
 </script>
 

@@ -1,30 +1,3 @@
-```meta
-id: literature-review-classify
-description: 对文献池做"国内外分类"或"主题分类",返回分组名与每组 lit_ids。
-version: 1.0
-source: 抽取自 literature-review skill (Step 3 筛选与分组)
-required: topic, classify_mode, papers_catalog
-inputs:
-  topic: 研究主题
-  classify_mode: locale | theme
-  papers_catalog: 文献条目(每个条目包含 lit_id / source=openalex|user_imported / title / authors / journal / year)
-output:
-  format: json
-  schema: |
-    {
-      "groups": [
-        {"name": "国外研究", "lit_ids": ["lit_xxx", ...]},
-        {"name": "国内研究", "lit_ids": ["lit_xxx", ...]}
-      ]
-    }
-    或主题分类:
-    {
-      "groups": [
-        {"name": "主题 A", "lit_ids": [...]},
-        ...
-      ]
-    }
-```
 
 # 文献综述分类助手
 

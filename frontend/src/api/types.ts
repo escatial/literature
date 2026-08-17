@@ -2,7 +2,7 @@
 
 export interface Paper {
   lit_id: string;
-  source: 'openalex' | 'crossref' | 'user_imported';
+  source: 'openalex' | 'crossref' | 'user_imported' | 'cnki';
   title: string;
   authors: string[];
   journal: string;
@@ -17,56 +17,50 @@ export interface Paper {
   journal_level?: string | null;
   relevance_score?: number | null;
   raw_citation?: string | null;
+  quote_text?: string | null;
+  abstract_text?: string | null;
   selected: boolean;
   created_at?: string;
 }
 
 export interface PaperCreatePayload extends Omit<Paper, 'created_at'> {}
 
-export interface ImportCitation {
-  raw_text: string;
-  authors: string;
-  title: string;
-  journal: string;
-  year: number;
-  volume: string | null;
-  issue: string | null;
-  pages: string | null;
-  parsed_ok: boolean;
-  error: string | null;
-}
-
-export interface ImportCnResponse {
+// 需求5:文献池服务端分页响应
+export interface PaperListResponse {
+  items: Paper[];
   total: number;
-  parsed_ok: number;
-  parsed_fail: number;
-  citations: ImportCitation[];
-}
-
-export interface QueryPlanResponse {
-  topic_summary: string;
-  keywords_en: string[];
-  query_str: string;
-}
-
-export interface RerankResponse {
-  papers: Paper[];
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
 
 export type RetrievalTaskStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
 export interface RetrievalTaskCreate {
   topic: string;
-  year_start: number;
-  year_end: number;
+  year_start?: number;
+  year_end?: number;
   min_citations: number;
   limit: number;
   use_rerank: boolean;
+  /** 雪球扩展(引文回溯)独立开关;默认关闭 */
+  use_snowball?: boolean;
+  sources?: string[];
 }
 
 export interface RetrievalTaskCreated {
   task_id: string;
   status: RetrievalTaskStatus;
+}
+
+export interface RetrievalProgressEvent {
+  stage: string;          // starting / source_ready / fetching_source / fetching_done / snowballing / filling / done ...
+  source: string;         // openalex / pubmed / ''
+  page: number;
+  added: number;
+  total: number;
+  message: string;
+  ts: string;             // ISO8601
 }
 
 export interface RetrievalTask {
@@ -85,6 +79,7 @@ export interface RetrievalTask {
   total_after_filter: number;
   papers: Paper[];
   error: string | null;
+  events: RetrievalProgressEvent[];
   created_at: string;
   updated_at: string;
 }

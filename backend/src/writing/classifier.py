@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from prompts.service import render
 from src.llm.client import messages_create
 from src.retrieval.types import Paper, Source
+from src.writing.settings import LOCALE_GROUP_DOMESTIC, LOCALE_GROUP_FOREIGN
 
 
 @dataclass
@@ -25,9 +26,9 @@ def classify_by_locale(papers: list[Paper]) -> list[Group]:
     foreign = [p.lit_id for p in papers if p.source != Source.USER_IMPORTED]
     groups: list[Group] = []
     if domestic:
-        groups.append(Group(name="国内研究", lit_ids=domestic))
+        groups.append(Group(name=LOCALE_GROUP_DOMESTIC, lit_ids=domestic))
     if foreign:
-        groups.append(Group(name="国外研究", lit_ids=foreign))
+        groups.append(Group(name=LOCALE_GROUP_FOREIGN, lit_ids=foreign))
     return groups
 
 
@@ -64,7 +65,7 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
                 m2 = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
                 data = json.loads(m2.group(1)) if m2 else []
     except Exception:
-        return [Group(name="综合研究", lit_ids=[p.lit_id for p in papers])]
+        return [Group(name=topic, lit_ids=[p.lit_id for p in papers])]
 
     # 支持 {groups: [...]} 或 直接 [...]
     if isinstance(data, dict) and "groups" in data:
@@ -84,11 +85,11 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
         groups.append(Group(name=name, lit_ids=ids))
 
     if not groups:
-        return [Group(name="综合研究", lit_ids=[p.lit_id for p in papers])]
+        return [Group(name=topic, lit_ids=[p.lit_id for p in papers])]
 
     rest = [p.lit_id for p in papers if p.lit_id not in covered]
     if rest:
-        groups.append(Group(name="其他", lit_ids=rest))
+        groups[-1].lit_ids.extend(rest)
     return groups
 
 

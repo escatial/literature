@@ -9,20 +9,21 @@ import {
   ElEmpty,
   ElMessage,
   ElProgress,
-  ElRadioButton,
-  ElRadioGroup,
   ElTag,
 } from 'element-plus';
 import { useTopicStore } from '@/stores/topic';
+import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { usePapersStore } from '@/stores/papers';
 import { saveReview } from '@/api/endpoints';
 import { generateWritingStream, type StreamState } from '@/api/streaming';
+import type { Paper } from '@/api/types';
 
 const topicStore = useTopicStore();
+const ustore = useUnifiedRetrievalStore();
 const papersStore = usePapersStore();
 
 const form = reactive({
-  mode: 'locale' as 'locale' | 'theme',
+  mode: 'theme' as const,
   doScreening: true,
 });
 
@@ -35,32 +36,67 @@ const stream = ref<StreamState>({
   screenedOutIds: [],
   droppedCitations: [],
   progress: null,
+  currentSection: null,
+  detail: null,
   error: null,
 });
 
-onMounted(() => papersStore.refresh());
+const allPapers = ref<Paper[]>([]);
+const loadingPapers = ref(false);
 
-const selectedCount = computed(() => papersStore.selected.length);
-
-const phaseLabel = computed(() => {
-  switch (stream.value.phase) {
-    case 'start': return '初始化...';
-    case 'screening': return 'LLM 主题筛选中...';
-    case 'classify': return '文献分类完成';
-    case 'writing': {
-      const p = stream.value.progress;
-      return p ? `写作中 ${p.index + 1}/${p.total}` : '写作中...';
-    }
-    case 'reference': return '生成参考文献...';
-    case 'complete': return '完成';
-    case 'error': return '出错了';
-    default: return '';
+onMounted(async () => {
+  loadingPapers.value = true;
+  try {
+    allPapers.value = await papersStore.fetchAll();
+  } catch (e) {
+    ElMessage.error(`文献池加载失败:${String((e as Error)?.message ?? e)}`);
+  } finally {
+    loadingPapers.value = false;
   }
 });
 
+const selectedCount = computed(() => allPapers.value.length);
+
+const topicInput = computed({
+  get: () => ustore.topic || topicStore.topic,
+  set: (v: string) => {
+    ustore.setTopic(v.trim());
+    topicStore.setTopic(v.trim());
+  },
+});
+
+const phaseLabel = computed(() => {
+  switch (stream.value.phase) {
+    case 'start':
+      return '初始化中';
+    case 'screening':
+      return '主题筛选中';
+    case 'classify':
+      return '文献分组中';
+    case 'writing': {
+      const p = stream.value.progress;
+      const title = stream.value.currentSection?.title;
+      if (title && p) return `正在写《${title}》 (${p.index + 1}/${p.total})`;
+      if (title) return `正在写《${title}》`;
+      return '章节写作中';
+    }
+    case 'reference':
+      return '整理参考文献中';
+    case 'complete':
+      return '已完成';
+    case 'error':
+      return '出错了';
+    default:
+      return '';
+  }
+});
+
+const liveChars = computed(() => stream.value.currentSection?.content.length ?? 0);
+const livePreview = computed(() => stream.value.currentSection?.content ?? '');
+
 const start = async () => {
-  if (!topicStore.topic) {
-    ElMessage.error('请先回"主题"页填写研究主题');
+  if (!topicInput.value.trim()) {
+    ElMessage.error('请先填写研究主题(可在本页直接编辑)');
     return;
   }
   if (selectedCount.value === 0) {
@@ -69,14 +105,22 @@ const start = async () => {
   }
   running.value = true;
   stream.value = {
-    phase: 'idle', sections: [], groups: [], referenceList: '',
-    screenedOutIds: [], droppedCitations: [], progress: null, error: null,
+    phase: 'idle',
+    sections: [],
+    groups: [],
+    referenceList: '',
+    screenedOutIds: [],
+    droppedCitations: [],
+    progress: null,
+    currentSection: null,
+    detail: null,
+    error: null,
   };
   try {
     const finalResp = await generateWritingStream(
       {
-        topic: topicStore.topic,
-        papers: papersStore.selected,
+        topic: topicInput.value.trim(),
+        papers: allPapers.value,
         classify_mode: form.mode,
         do_screening: form.doScreening,
       },
@@ -84,7 +128,12 @@ const start = async () => {
     );
     await saveReview(finalResp);
   } catch (e: any) {
-    stream.value = { ...stream.value, phase: 'error', error: e.message ?? String(e) };
+    stream.value = {
+      ...stream.value,
+      phase: 'error',
+      detail: e.message ?? String(e),
+      error: e.message ?? String(e),
+    };
   } finally {
     running.value = false;
   }
@@ -92,7 +141,7 @@ const start = async () => {
 
 const downloadMd = () => {
   const lines: string[] = [];
-  lines.push(`# ${topicStore.topic} 文献综述`, '');
+  lines.push(`# ${topicInput.value.trim()} 文献综述`, '');
   for (const s of stream.value.sections) {
     lines.push(`## ${s.title}`, '', s.content, '');
   }
@@ -101,7 +150,7 @@ const downloadMd = () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `文献综述-${topicStore.topic}.md`;
+  a.download = `文献综述-${topicInput.value.trim()}.md`;
   a.click();
   URL.revokeObjectURL(url);
 };
@@ -110,19 +159,22 @@ const downloadMd = () => {
 <template>
   <div>
     <el-card>
-      <template #header>综述写作(流式输出)</template>
-      <div style="margin-bottom: 12px">
-        <span style="margin-right: 8px; color: #606266">研究主题</span>
-        <el-tag type="info" size="large">{{ topicStore.topic || '未设置' }}</el-tag>
-        <span style="margin: 0 12px; color: #606266">已选</span>
+      <template #header>综述写作</template>
+      <div style="margin-bottom: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px">
+        <span style="color: #606266">研究主题</span>
+        <el-input
+          v-model="topicInput"
+          placeholder="研究主题,如:无人机协同配送应急物资"
+          size="large"
+          clearable
+          :disabled="running"
+          style="width: 420px; max-width: 100%"
+        />
+        <span style="color: #606266">文献池</span>
         <el-tag type="success" size="large">{{ selectedCount }} 篇</el-tag>
       </div>
       <div style="margin-bottom: 12px">
-        <span style="margin-right: 12px; color: #606266">分类方式</span>
-        <el-radio-group v-model="form.mode" :disabled="running">
-          <el-radio-button value="locale">国内外分类</el-radio-button>
-          <el-radio-button value="theme">主题分类</el-radio-button>
-        </el-radio-group>
+        <span style="margin-right: 12px; color: #606266">按研究主题动态生成章节</span>
         <el-checkbox v-model="form.doScreening" :disabled="running" style="margin-left: 16px">
           LLM 主题筛选
         </el-checkbox>
@@ -131,20 +183,47 @@ const downloadMd = () => {
         type="primary"
         size="large"
         :loading="running"
-        :disabled="!topicStore.topic || selectedCount === 0"
+        :disabled="!topicInput.trim() || selectedCount === 0 || loadingPapers"
         @click="start"
       >
         {{ running ? '生成中...' : '开始生成' }}
       </el-button>
 
       <div v-if="running || stream.phase !== 'idle'" style="margin-top: 16px">
-        <el-tag :type="stream.phase === 'error' ? 'danger' : 'primary'">{{ phaseLabel }}</el-tag>
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+          <el-tag :type="stream.phase === 'error' ? 'danger' : 'primary'">{{ phaseLabel }}</el-tag>
+          <el-tag v-if="stream.currentSection?.title && stream.phase === 'writing'" type="warning" effect="plain">
+            当前章节: {{ stream.currentSection.title }}
+          </el-tag>
+          <el-tag v-if="stream.phase === 'writing' && liveChars > 0" type="success" effect="plain">
+            已流式输出 {{ liveChars }} 字
+          </el-tag>
+        </div>
         <el-progress
           v-if="stream.progress"
-          :percentage="Math.round(((stream.progress.index + 1) / stream.progress.total) * 100)"
-          :format="() => `${stream.progress!.index + 1}/${stream.progress!.total} 章`"
+          :percentage="stream.phase === 'complete' ? 100 : Math.round((stream.progress.index / stream.progress.total) * 100)"
+          :indeterminate="stream.phase === 'writing'"
+          :duration="2"
+          :format="() => `${Math.min(stream.progress!.index + 1, stream.progress!.total)}/${stream.progress!.total} 章`"
           style="margin-top: 8px"
         />
+        <div
+          v-if="stream.detail"
+          style="margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: #f5f7fa; color: #606266; line-height: 1.7"
+        >
+          {{ stream.detail }}
+        </div>
+        <div
+          v-if="stream.phase === 'writing' && livePreview"
+          style="margin-top: 10px; border: 1px solid #ebeef5; border-radius: 8px; overflow: hidden"
+        >
+          <div style="padding: 10px 12px; background: #fafafa; border-bottom: 1px solid #ebeef5; color: #606266; font-size: 13px">
+            当前章节流式预览
+          </div>
+          <div style="padding: 12px; white-space: pre-wrap; line-height: 1.8; color: #303133; max-height: 320px; overflow: auto">
+            {{ livePreview }}
+          </div>
+        </div>
       </div>
     </el-card>
 
@@ -178,7 +257,7 @@ const downloadMd = () => {
     <el-card v-if="stream.sections.length" style="margin-top: 16px">
       <template #header>
         <div style="display: flex; justify-content: space-between; align-items: center">
-          <span style="font-size: 18px; font-weight: 600">{{ topicStore.topic }} 文献综述</span>
+          <span style="font-size: 18px; font-weight: 600">{{ topicInput.trim() || '文献综述' }} 文献综述</span>
           <el-button
             type="primary"
             plain

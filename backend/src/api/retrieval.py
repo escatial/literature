@@ -1,6 +1,8 @@
 """英文文献检索 API。/api/retrieval/search"""
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -14,10 +16,10 @@ router = APIRouter()
 
 class SearchRequest(BaseModel):
     topic: str = Field(..., min_length=1)
-    year_start: int = 2020
-    year_end: int = 2026
-    min_citations: int = 0
-    limit: int = 50
+    year_start: int = Field(default=2020, ge=1900)
+    year_end: int = Field(default_factory=lambda: date.today().year, ge=1900)
+    min_citations: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=1000)
     use_rerank: bool = True
 
 

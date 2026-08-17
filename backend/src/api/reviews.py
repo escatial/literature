@@ -1,7 +1,7 @@
 """综述历史 CRUD API。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,10 @@ router = APIRouter(prefix="/reviews", tags=["reviews"])
 
 
 @router.get("", response_model=list[ReviewOut])
-def list_reviews(limit: int = 50, db: Session = Depends(get_db)):
+def list_reviews(
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
     """最近的综述列表。"""
     stmt = select(ReviewModel).order_by(ReviewModel.created_at.desc()).limit(limit)
     return db.execute(stmt).scalars().all()

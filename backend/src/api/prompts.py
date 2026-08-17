@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from prompts.service import call_template, list_available, render
 
@@ -49,7 +49,7 @@ def render_prompt(req: RenderRequest):
 class CallRequest(BaseModel):
     template_id: str
     vars: dict
-    max_tokens: int = 4000
+    max_tokens: int = Field(default=4000, ge=1, le=32000)
 
 
 @router.post("/call")
