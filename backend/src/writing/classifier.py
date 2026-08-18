@@ -1,14 +1,12 @@
 """综述分类器:按国内外 / 按主题 对文献分组。
 
-使用 prompts/literature-review-classify.md 模板作为 system prompt。
+使用 prompts/literature-review.md 模板中的 `classify` 段作为 system prompt。
 """
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
 
-from prompts.service import render
+from prompts.service import parse_llm_json, render
 from src.llm.client import messages_create
 from src.retrieval.types import Paper, Source
 from src.writing.settings import LOCALE_GROUP_DOMESTIC, LOCALE_GROUP_FOREIGN
@@ -43,7 +41,7 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
     )
 
     system = render(
-        "literature-review-classify",
+        "literature-review:classify",
         topic=topic,
         classify_mode="theme",
         papers_catalog=catalog,
@@ -51,19 +49,11 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
     user = f"研究主题:{topic}\n\n文献清单:\n{catalog}"
 
     try:
-        raw = messages_create(system=system, user=user, max_tokens=2000)
-        # 1) 优先抽 ```json code block
-        m = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", raw, re.DOTALL)
-        if m:
-            data = json.loads(m.group(1))
-        else:
-            # 2) 整体尝试
-            try:
-                data = json.loads(raw.strip())
-            except json.JSONDecodeError:
-                # 3) 兜底: 取最外层 {...} 或 [...]
-                m2 = re.search(r"(\{.*\}|\[.*\])", raw, re.DOTALL)
-                data = json.loads(m2.group(1)) if m2 else []
+        raw = messages_create(
+            system=system, user=user, max_tokens=2000,
+            response_format={"type": "json_object"},
+        )
+        data = parse_llm_json(raw)
     except Exception:
         return [Group(name=topic, lit_ids=[p.lit_id for p in papers])]
 

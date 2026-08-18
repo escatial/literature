@@ -13,31 +13,12 @@ import type {
 
 // ─── 查询规划 / 重排 / 筛选 / 写作 ──────────────────────────
 
-export interface ConceptGroup {
-  id: string;
-  label: string;
-  label_en: string;
-  synonyms_zh: string[];
-  synonyms_en: string[];
-}
-
 export interface QueryPlanResponse {
   topic_summary: string;
-  keywords_en: string[];
-  keywords_zh: string[];
-  query_str: string;
-  concepts: ConceptGroup[];
-  query_zh: string;
-  queries_zh: string[];
-  query_en: string;
-  // 英文长检索式按语义单元拆分的子检索式列表(依次执行、合并去重)
-  queries_en: string[];
-  field_zh: string;
-  field_en: string;
-  // 三库方言检索式对比预览
-  query_cnki: string;
-  query_openalex: string;
-  query_pubmed: string;
+  // 3 库各自的 3 条检索式,后端按源透传,前端展示第 1 条作预览
+  queries_cnki: string[];
+  queries_openalex: string[];
+  queries_pubmed: string[];
 }
 
 export const queryPlan = (topic: string, yearStart?: number) =>

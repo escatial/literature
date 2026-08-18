@@ -42,7 +42,7 @@ def screen_batch(papers: list[Paper], topic: str, max_chars: int = 400) -> list[
         "请输出严格 JSON 数组。"
     )
     try:
-        raw = messages_create(SYSTEM, user, max_tokens=4000)
+        raw = messages_create(SYSTEM, user, max_tokens=4000, response_format={"type": "json_object"})
         raw = re.sub(r"```(?:json)?|```", "", raw).strip()
         decisions = json.loads(raw)
     except Exception as e:

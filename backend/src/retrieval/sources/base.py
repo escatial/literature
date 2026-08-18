@@ -8,8 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from retrieval.intent import SearchIntent
-
 
 @dataclass
 class SourcePage:
@@ -27,7 +25,7 @@ class AcademicSource(Protocol):
     """学术数据源协议。所有数据源必须实现以下方法。
 
     设计原则:
-    - build_query 是纯函数(零网络调用),便于测试和复用;
+    - build_sub_query 是纯函数(零网络调用),便于测试和复用;
     - execute 必须支持按页翻页,且返回 has_next 用于循环停止;
     - fetch_abstract_if_missing 是可选的异步回填钩子;
     - fetch_references 用于雪球(后向引用);
@@ -36,8 +34,8 @@ class AcademicSource(Protocol):
 
     name: str
 
-    def build_query(self, intent: SearchIntent) -> dict:
-        """把 SearchIntent 翻译成本源查询参数(纯函数,无副作用)。"""
+    def build_sub_query(self, query_string: str) -> dict:
+        """把 LLM 输出的检索式字符串翻译成本源查询参数(纯函数,无副作用)。"""
         ...
 
     def execute(self, query: dict, page: int, per_page: int) -> SourcePage:

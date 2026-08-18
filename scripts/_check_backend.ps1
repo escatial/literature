@@ -2,8 +2,8 @@ chcp 65001 | Out-Null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 杀旧 8090 监听者
-$conns = Get-NetTCPConnection -LocalPort 8090 -State Listen -ErrorAction SilentlyContinue
+# 杀旧 8000 监听者
+$conns = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
 foreach ($c in $conns) {
     $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue
     if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
@@ -19,11 +19,11 @@ $job = Start-Job -ScriptBlock {
     $env:PYTHONPATH = $backendSrc
     $env:CONDA_NO_PLUGINS = "true"
     Set-Location -LiteralPath ($repo + "\backend")
-    & "D:\Anaconda\Anaconda\python.exe" -m uvicorn main:app --host 127.0.0.1 --port 8090 --log-level info
+    & "D:\Anaconda\Anaconda\python.exe" -m uvicorn main:app --host 127.0.0.1 --port 8000 --log-level info
 } -ArgumentList $repo, $backendSrc
 
 Start-Sleep -Seconds 6
-$listen = Get-NetTCPConnection -LocalPort 8090 -State Listen -ErrorAction SilentlyContinue
+$listen = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
 if ($listen) {
     foreach ($c in $listen) {
         $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue

@@ -19,13 +19,11 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from db.models import PaperModel, RetrievalTaskModel
-from retrieval.intent import SearchIntent
 import db.session as _db_session
 from retrieval.loop import RetrievalController, TaskCancelledError
 from retrieval.pool import PaperPool
 from retrieval.provenance import validate_paper_provenance
-from retrieval.query_planner import plan_intent
-from retrieval.query_planner import plan_query  # noqa: F401  向后兼容 re-export
+from retrieval.query_planner import plan_query_strings
 from retrieval.sources import OpenAlexSource, PubMedSource, CNKISource
 from retrieval.types import Paper
 import retrieval.history_service as history_service
@@ -208,56 +206,8 @@ def delete_task(task_id: str) -> dict:
 
 
 def run_task(task_id: str, sources: list[str] | None = None) -> None:
-    """旧版执行逻辑:保留 OpenAlexAdapter/PubMedAdapter 调用路径,以免破坏老测试。"""
-    from retrieval.filters import by_min_citations, by_year, deduplicate
-    from retrieval.openalex_adapter import OpenAlexAdapter
-    from retrieval.pubmed_adapter import PubMedAdapter
-    from retrieval.query_planner import plan_query
-    from retrieval.reranker import rerank
-
-    task = get_task(task_id)
-    if not task or task.status in TERMINAL_STATUSES:
-        return
-
-    try:
-        _update(task_id, status="running", progress=10)
-        planned = plan_query(task.topic, default_year_start=task.year_start)
-        keywords = planned.get("keywords_en") or [task.topic]
-        llm_query_en = (planned.get("query_en") or "").strip()
-        query_used = llm_query_en if llm_query_en else " ".join(keywords)
-        _update(task_id, progress=30, topic_summary=planned["topic_summary"], query_used=query_used)
-
-        adapters = {"pubmed": PubMedAdapter, "openalex": OpenAlexAdapter}
-        selected = sources or ["pubmed", "openalex"]
-        unknown = sorted(set(selected) - set(adapters))
-        if unknown:
-            raise ValueError(f"不支持的英文献数据库: {', '.join(unknown)}")
-        raw = []
-        for s in selected:
-            try:
-                raw.extend(adapters[s]().search(
-                    query=query_used,
-                    year_range=(task.year_start, task.year_end),
-                    per_page=task.limit,
-                ))
-            except Exception as exc:
-                log.warning("%s 检索异常: %s", s, exc)
-        _update(task_id, progress=60, total_before_filter=len(raw))
-        papers = by_year(raw, (task.year_start, task.year_end))
-        papers = by_min_citations(papers, task.min_citations)
-        papers = deduplicate(papers)
-        _update(task_id, progress=75, total_after_filter=len(papers))
-        if task.use_rerank and papers:
-            papers = rerank(papers, planned["topic_summary"], top_n=min(task.limit, 50))
-        if not papers:
-            _update(task_id, status="failed", progress=100,
-                    total_after_filter=0, papers=[], error="未检索到任何文献")
-            return
-        _upsert(papers)
-        _update(task_id, status="succeeded", progress=100,
-                total_after_filter=len(papers), papers=[p.to_dict() for p in papers], error=None)
-    except Exception as exc:
-        _update(task_id, status="failed", progress=100, error=str(exc))
+    """兼容旧接口:转调 run_task_v2。"""
+    run_task_v2(task_id, sources=sources, use_snowball=False)
 
 
 def _upsert(papers: list[Paper]) -> None:
@@ -321,7 +271,7 @@ def create_task_v2(
 
 def run_task_v2(task_id: str, sources: list[str] | None = None,
                 use_snowball: bool = False) -> None:
-    """新版执行逻辑:走 SearchIntent + Controller。"""
+    """新版执行逻辑:走 plan_query_strings + Controller。"""
     task = get_task(task_id)
     if not task or task.status in TERMINAL_STATUSES:
         return
@@ -331,9 +281,9 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
     try:
         _update(task_id, status="running", progress=5)
 
-        # 1. 规划
+        # 1. 规划:LLM 直接输出 3 库各自的 3 条检索式字符串
         try:
-            intent = plan_intent(task.topic, year=task.year_end or None)
+            planned = plan_query_strings(task.topic, year=task.year_end or None)
         except Exception as exc:
             _update(task_id, status="failed", progress=100,
                     error=f"LLM 规划失败: {exc}")
@@ -341,20 +291,15 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                                 f"任务 {task_id[:8]} LLM 规划失败:\n{exc}")
             return
 
-        # 用户覆写年份
-        if task.year_start:
-            intent.filters.min_year = task.year_start
-        if task.year_end:
-            intent.filters.max_year = task.year_end
-        if not task.year_start and not task.year_end:
-            intent.filters.min_year = None
-            intent.filters.max_year = None
-        # 雪球开关以用户显式参数为准(use_snowball),不受 LLM 规划的 snowball.enabled 影响。
-        # 否则 LLM 偶发返回 enabled=true 会让前端 use_snowball=false 失效,混入大量引文文献。
-        intent.snowball.enabled = use_snowball
+        topic_summary = planned["topic_summary"]
+        queries_by_source: dict[str, list[str]] = {
+            "cnki": planned["queries_cnki"],
+            "openalex": planned["queries_openalex"],
+            "pubmed": planned["queries_pubmed"],
+        }
 
-        _update(task_id, progress=10, topic_summary=intent.topic_summary,
-                query_used=intent.boolean_template)
+        _update(task_id, progress=10, topic_summary=topic_summary,
+                query_used=" | ".join(planned["queries_openalex"]))
 
         # 2. 装配源
         selected = sources or ["pubmed", "openalex"]
@@ -414,9 +359,14 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                 _update(task_id, progress=pct)
 
         async def _run_all():
-            ctrl = RetrievalController(intent=intent, sources=src_objs,
-                                       snow=intent.snowball, on_progress=_on,
-                                       stop_event=stop)
+            ctrl = RetrievalController(
+                queries_per_source=queries_by_source,
+                sources=src_objs,
+                snow={"enabled": use_snowball, "forward_depth": 0,
+                      "backward_depth": 1, "max_seeds": 100, "max_results": 500},
+                on_progress=_on,
+                stop_event=stop,
+            )
             return await ctrl.run_async()
 
         pool = asyncio.run(_run_all())

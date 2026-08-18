@@ -7,11 +7,11 @@
  * - 不再使用远程浏览器画布,验证码由超级鹰后台自动接管
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { usePapersStore } from '@/stores/papers';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
-import { applyHistoryTopic } from '@/stores/sharedTopic';
 import {
   queryPlan,
   createRetrievalTask,
@@ -52,9 +52,7 @@ const viewHistory = async (row: RetrievalHistory) => {
       { type: 'warning' },
     );
     const resp = await restoreRetrievalHistory(row.id);
-    applyHistoryTopic(row.topic, (topic) => {
-      ustore.setTopic(topic);
-    });
+    ustore.setTopic(row.topic);
     ElMessage.success(`已加载历史文献 ${resp.total} 篇`);
     router.push('/pool');
   } catch (e: any) {
@@ -403,9 +401,9 @@ const refreshProgress = async () => {
 
 // ─────────────── 检索式展示区(第一栏) ───────────────
 const planPreview = computed(() => [
-  { key: 'cnki', name: '中国知网', tag: 'danger' as const, query: ustore.queriesZh[0] || ustore.queryCnki, queries: ustore.queriesZh },
-  { key: 'openalex', name: 'OpenAlex', tag: 'success' as const, query: ustore.queriesEn[0] || ustore.queryOpenalex, queries: ustore.queriesEn },
-  { key: 'pubmed', name: 'PubMed', tag: 'primary' as const, query: ustore.queryPubmed, queries: [] as string[] },
+  { key: 'cnki', name: '中国知网', tag: 'danger' as const, query: ustore.queriesCnki[0] || '', queries: ustore.queriesCnki },
+  { key: 'openalex', name: 'OpenAlex', tag: 'success' as const, query: ustore.queriesOpenalex[0] || '', queries: ustore.queriesOpenalex },
+  { key: 'pubmed', name: 'PubMed', tag: 'primary' as const, query: ustore.queriesPubmed[0] || '', queries: ustore.queriesPubmed },
 ]);
 
 // ─────────────── 检索式生成 ───────────────
@@ -419,18 +417,12 @@ const generatePlan = async () => {
     ustore.setPlanning(true);
     const resp = await queryPlan(topic);
     ustore.applyPlan({
-      concepts: resp.concepts || [],
-      field_zh: resp.field_zh || 'SU',
-      field_en: resp.field_en || 'default',
-      query_zh: resp.query_zh || topic,
-      queries_zh: resp.queries_zh || [],
-      query_en: resp.query_en || topic,
-      queries_en: resp.queries_en || [],
-      query_cnki: resp.query_cnki || '',
-      query_openalex: resp.query_openalex || '',
-      query_pubmed: resp.query_pubmed || '',
+      topic_summary: resp.topic_summary || '',
+      queries_cnki: resp.queries_cnki || [],
+      queries_openalex: resp.queries_openalex || [],
+      queries_pubmed: resp.queries_pubmed || [],
     });
-    ElMessage.success(`已生成 ${resp.concepts.length} 个概念,中英检索式已就绪`);
+    ElMessage.success('已生成 3 库 × 3 条检索式');
     return true;
   } catch (e) {
     ElMessage.error('生成检索式失败: ' + String(e));
@@ -463,9 +455,9 @@ const startUnifiedRetrieval = async () => {
   const englishSelected = ustore.selectedDbs.includes('pubmed') || ustore.selectedDbs.includes('openalex');
 
   const planReady = await generatePlan();
-  if (!planReady || !ustore.queryZh.trim() || !ustore.queriesZh.length) {
+  if (!planReady || !ustore.queriesCnki.length || !ustore.queriesOpenalex.length || !ustore.queriesPubmed.length) {
     if (cnkiSelected) {
-      ustore.appendCnkiLog('cnki', '[错误] 知网专业检索式生成失败，已停止检索');
+      ustore.appendCnkiLog('cnki', '[错误] 检索式生成失败，已停止检索');
       ustore.upsertCnkiTask('cnki', {
         task_id: '', db_type: 'cnki' as const, stage: 'error',
       });
@@ -473,8 +465,8 @@ const startUnifiedRetrieval = async () => {
     return;
   }
   if (cnkiSelected) {
-    ustore.appendCnkiLog('cnki', `[检索式] 已生成 ${ustore.queriesZh.length} 条候选式，将按顺序预检`);
-    ustore.queriesZh.forEach((query, index) => {
+    ustore.appendCnkiLog('cnki', `[检索式] 已生成 ${ustore.queriesCnki.length} 条候选式，将按顺序预检`);
+    ustore.queriesCnki.forEach((query, index) => {
       ustore.appendCnkiLog('cnki', `[检索式 ${index + 1}] ${query}`);
     });
     ustore.appendCnkiLog('cnki', '[本地] 正在将专业检索式提交到 /api/cnki/start …');
@@ -492,8 +484,8 @@ const startUnifiedRetrieval = async () => {
       try {
         const resp = await startCnkiFullAuto({
           topic: ustore.topic,
-          expert_query: ustore.queryZh,
-          expert_queries: ustore.queriesZh,
+          expert_query: ustore.queriesCnki[0] || '',
+          expert_queries: ustore.queriesCnki,
           target_count: ustore.autoTarget,
           max_pages: ustore.autoMaxPages,
           db_type: 'cnki',
@@ -654,7 +646,7 @@ onBeforeUnmount(() => {
         <!-- 英文长检索式按语义单元拆分的子检索式(依次执行、合并去重) -->
         <el-collapse v-if="item.queries.length > 1" style="margin-top: 8px">
           <el-collapse-item
-            :title="`查看 ${item.queries.length} 条实际执行式(逐条遍历,合并去重)`"
+            :title="`查看 ${item.queries.length} 条实际执行式`"
             name="sub-queries"
           >
             <pre
@@ -676,6 +668,13 @@ onBeforeUnmount(() => {
           <div class="progress-title">
             <el-tag :type="bar.tag" effect="light" size="small">{{ bar.name }}</el-tag>
             <span class="progress-count">{{ bar.saved }} 篇</span>
+            <el-tooltip
+              v-if="bar.key !== 'cnki'"
+              content="该数字为该源单源累加入池数;三库累加 ≠ 「检索总数量」是预期的跨源去重效应(同 lit_id 跨多源 / 跨子检索式只算一次)"
+              placement="top"
+            >
+              <el-icon class="progress-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
           </div>
           <el-tag :type="bar.status === 'exception' ? 'danger' : bar.status === 'success' ? 'success' : 'warning'" size="small">
             {{ bar.status === 'exception' ? '失败' : bar.status === 'success' ? '已完成' : bar.running ? '进行中' : '待开始' }}
@@ -905,6 +904,16 @@ onBeforeUnmount(() => {
 .progress-count {
   font-size: 12px;
   color: #909399;
+}
+
+.progress-help {
+  font-size: 14px;
+  color: #c0c4cc;
+  cursor: help;
+}
+
+.progress-help:hover {
+  color: #409eff;
 }
 
 .last-log {

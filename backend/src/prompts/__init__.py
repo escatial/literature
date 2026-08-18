@@ -123,7 +123,7 @@ class PromptTemplate:
 
         # 提取所有 ```section <id> ... ``` 块
         sec_re = re.compile(
-            r"^```section\s+(\S+)\s*\n(.*?)^```\s*$",
+            r"^```section[ \t]+([\w-]+)[ \t]*\n(.*?)^```[ \t]*$",
             re.DOTALL | re.MULTILINE,
         )
         sections: dict[str, str] = {}

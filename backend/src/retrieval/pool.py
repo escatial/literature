@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 import unicodedata
 from typing import Iterable
 
@@ -69,29 +70,32 @@ class PaperPool:
     def __init__(self):
         self._seen: set[str] = set()
         self.papers: list[Paper] = []
+        self._lock = threading.Lock()
         # 抽象回填队列:Paper 对象
         self._fill_queue: asyncio.Queue | None = None
 
     def __len__(self) -> int:
-        return len(self.papers)
+        with self._lock:
+            return len(self.papers)
 
     def add(self, papers: Iterable[Paper], source: str | None = None) -> list[Paper]:
-        """加入新 paper,自动去重。返回真正加入的(非重复)子集。"""
+        """加入新 paper,自动去重。线程安全,返回真正加入的(非重复)子集。"""
         added: list[Paper] = []
-        for p in papers:
-            key = _paper_id(p)
-            if key in self._seen:
-                continue
-            self._seen.add(key)
-            if source:
-                # 覆盖 source 字段,保证入库时记录真正来源
-                try:
-                    from retrieval.types import Source as _S
-                    p.source = _S(source) if isinstance(_S, type) else source
-                except Exception:
-                    p.source = source  # type: ignore[assignment]
-            self.papers.append(p)
-            added.append(p)
+        with self._lock:
+            for p in papers:
+                key = _paper_id(p)
+                if key in self._seen:
+                    continue
+                self._seen.add(key)
+                if source:
+                    # 覆盖 source 字段,保证入库时记录真正来源
+                    try:
+                        from retrieval.types import Source as _S
+                        p.source = _S(source) if isinstance(_S, type) else source
+                    except Exception:
+                        p.source = source  # type: ignore[assignment]
+                self.papers.append(p)
+                added.append(p)
         return added
 
     def dedupe(self) -> int:

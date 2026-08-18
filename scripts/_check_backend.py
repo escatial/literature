@@ -9,7 +9,7 @@ from pathlib import Path
 REPO = Path(r"d:\code\个人开发项目\202608\文献综述agent")
 BACKEND = REPO / "backend"
 SRC = BACKEND / "src"
-PORT = 8090
+PORT = 8000
 PY = r"D:\Anaconda\Anaconda\python.exe"
 LOG = REPO / "_check.out"
 

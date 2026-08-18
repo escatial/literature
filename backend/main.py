@@ -20,12 +20,33 @@ load_dotenv(BASE_DIR / ".env")
 
 logging.basicConfig(level=logging.INFO)
 
+
+def _configure_uvicorn_logging() -> None:
+    """给 uvicorn 控制台日志统一加上本地时间前缀。"""
+    default_formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    access_formatter = logging.Formatter(
+        '%(asctime)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        logger = logging.getLogger(logger_name)
+        for handler in logger.handlers:
+            if logger_name == "uvicorn.access":
+                handler.setFormatter(access_formatter)
+            else:
+                handler.setFormatter(default_formatter)
+
+
+_configure_uvicorn_logging()
+
 from api.health import router as health_router  # noqa: E402
 # 需求2:全站移除粘贴引文手动导入,不再注册 /api/import/cn
 from api.papers import router as papers_router  # noqa: E402
 from api.prompts import router as prompts_router  # noqa: E402
 from api.query_plan import router as query_plan_router  # noqa: E402
-from api.retrieval import router as retrieval_router  # noqa: E402
 from api.retrieval_history import router as retrieval_history_router  # noqa: E402
 from api.retrieval_tasks import router as retrieval_tasks_router  # noqa: E402
 from api.retrieval_v2 import router as retrieval_v2_router  # noqa: E402
@@ -33,7 +54,8 @@ from api.reviews import router as reviews_router  # noqa: E402
 from api.screening import router as screening_router  # noqa: E402
 from api.stop import router as stop_router  # noqa: E402
 from api.writing import router as writing_router  # noqa: E402
-from api.cnki import router as cnki_router  # noqa: E402
+from api.cnki import router as cnki_router
+from api.review import router as review_router  # noqa: E402
 from api.contacts import router as contacts_router  # noqa: E402
 from db.session import close_db, connect_db, init_db  # noqa: E402
 
@@ -76,7 +98,6 @@ app.add_middleware(
 )
 
 app.include_router(health_router, prefix="/api")
-app.include_router(retrieval_router, prefix="/api")
 app.include_router(retrieval_tasks_router, prefix="/api")
 app.include_router(retrieval_v2_router, prefix="/api")
 app.include_router(retrieval_history_router, prefix="/api")
@@ -89,6 +110,7 @@ app.include_router(reviews_router, prefix="/api")
 app.include_router(prompts_router, prefix="/api")
 app.include_router(cnki_router, prefix="/api")
 app.include_router(contacts_router, prefix="/api")
+app.include_router(review_router, prefix="/api")
 
 
 @app.get("/")
@@ -99,4 +121,4 @@ def root():
 if __name__ == "__main__":
     # 支持 python main.py 直接启动
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8090, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

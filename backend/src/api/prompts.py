@@ -1,10 +1,12 @@
 """提示词模板管理 API。"""
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from prompts.service import call_template, list_available, render
+from prompts.service import call_template, list_available, parse_llm_json, render
 
 router = APIRouter(prefix="/prompts", tags=["prompts"])
 
@@ -78,41 +80,18 @@ class HumanizeResponse(BaseModel):
 
 @router.post("/humanize", response_model=HumanizeResponse)
 def humanize_text(req: HumanizeRequest):
-    """便捷入口:直接调 humanizer-zh 模板。"""
-    import json
-
+    """便捷入口:直接调 humanize 模板, 强制 JSON 输出 (response_format=json_object)。"""
     try:
         out = call_template(
-            "humanizer-zh",
+            "literature-review:humanize",
             {"text": req.text, "score_mode": req.score_mode},
             max_tokens=2000,
+            response_format={"type": "json_object"},
         )
     except FileNotFoundError:
-        raise HTTPException(500, "humanizer-zh template missing")
+        raise HTTPException(500, "humanize template missing")
 
-    parsed: dict = {}
-    # 尝试从 markdown code block 里抽 JSON
-    if "```json" in out:
-        start = out.find("```json") + len("```json")
-        end = out.find("```", start)
-        body = out[start:end].strip()
-        try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
-            parsed = {"rewritten": body}
-    elif "```" in out:
-        start = out.find("```") + 3
-        end = out.find("```", start)
-        body = out[start:end].strip()
-        try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError:
-            parsed = {"rewritten": body}
-    else:
-        try:
-            parsed = json.loads(out)
-        except json.JSONDecodeError:
-            parsed = {"rewritten": out}
+    parsed = parse_llm_json(out)
 
     return HumanizeResponse(
         rewritten=parsed.get("rewritten", ""),
@@ -120,3 +99,47 @@ def humanize_text(req: HumanizeRequest):
         score=parsed.get("score", {}) or {},
         raw=out,
     )
+
+
+def _parse_llm_json(out: str) -> dict:
+    """从 LLM 输出里抽 JSON, 兼容 dict / list[dict] / list[str] / 纯文本。
+
+    LLM 偶发返回:
+      - 标准 ````json { ... }```` (期望)
+      - ````[{...}, ...]```` (LLM 把 dict 套了 list)
+      - 裸 JSON `{...}` 或 `[...]` 无代码围栏
+      - 完全不是 JSON(那就把整段当 rewritten)
+    """
+    candidates = []
+    if "```json" in out:
+        start = out.find("```json") + len("```json")
+        end = out.find("```", start)
+        if end > start:
+            candidates.append(out[start:end].strip())
+    if "```" in out:
+        start = out.find("```") + 3
+        end = out.find("```", start)
+        if end > start:
+            candidates.append(out[start:end].strip())
+    candidates.append(out.strip())
+
+    for body in candidates:
+        try:
+            obj = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        # 套娃 list: 取第一个 dict 元素
+        if isinstance(obj, list):
+            for item in obj:
+                if isinstance(item, dict):
+                    return item
+            # list 全是 str: 把第一个当 rewritten
+            if obj and isinstance(obj[0], str):
+                return {"rewritten": obj[0]}
+            return {"rewritten": ""}
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, str):
+            return {"rewritten": obj}
+    # 都失败了
+    return {"rewritten": out}

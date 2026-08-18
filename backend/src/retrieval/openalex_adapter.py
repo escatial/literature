@@ -64,7 +64,7 @@ class OpenAlexAdapter:
         for attempt in range(max_retries):
             try:
                 log.info("OpenAlex 请求 attempt=%d params=%s", attempt + 1, {k: v for k, v in params.items() if k != "mailto"})
-                with httpx.Client(timeout=self.timeout) as client:
+                with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
                     resp = client.get(self.BASE, params=params)
                     resp.raise_for_status()
                 log.info("OpenAlex 成功 attempt=%d", attempt + 1)

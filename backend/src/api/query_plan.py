@@ -1,13 +1,11 @@
-"""LLM 查询规划 API:把中文主题拆成英文检索关键词。"""
+"""LLM 查询规划 API:把中文主题直接拆成 3 库 × 3 条检索式。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
-from retrieval.query_planner import plan_query, render_cnki_expert, render_en_candidates
+from retrieval.query_planner import plan_query_strings
 from retrieval.reranker import rerank
-from retrieval.sources.openalex import OpenAlexSource
-from retrieval.sources.pubmed import PubMedSource
 from retrieval.types import Paper, Source
 
 router = APIRouter()
@@ -18,103 +16,34 @@ class QueryPlanRequest(BaseModel):
     year_start: int | None = None
 
 
-class ConceptGroup(BaseModel):
-    """一个核心概念 + 中英文同义词。"""
-    id: str
-    label: str
-    label_en: str = ""
-    synonyms_zh: list[str] = Field(default_factory=list)
-    synonyms_en: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fill_legacy_label(cls, data):
-        """兼容 retrieval.intent.Concept 仅返回 label_en 的旧结构。"""
-        if isinstance(data, dict):
-            label = (data.get("label") or "").strip()
-            label_zh = (data.get("label_zh") or "").strip()
-            label_en = (data.get("label_en") or "").strip()
-            if not label and (label_zh or label_en):
-                data["label"] = label_zh or label_en
-            if not label_en and label:
-                data["label_en"] = label
-        return data
-
-
 class QueryPlanResponse(BaseModel):
     topic_summary: str
-    keywords_en: list[str]
-    keywords_zh: list[str] = Field(default_factory=list)
-    query_str: str
-    # 新增:结构化概念组 + 中英检索式
-    concepts: list[ConceptGroup] = Field(default_factory=list)
-    query_zh: str = ""
-    queries_zh: list[str] = Field(default_factory=list)
-    query_en: str = ""
-    # 英文长检索式按语义单元拆分后的子检索式列表(OpenAlex 方言,依次执行后合并去重)
-    queries_en: list[str] = Field(default_factory=list)
-    field_zh: str = "SU"
-    field_en: str = "default"
-    # 三库方言对比预览:同一份检索意图分别翻译成的本库检索式
-    query_cnki: str = ""
-    query_openalex: str = ""
-    query_pubmed: str = ""
+    # 3 库各自的 3 条检索式,后端按源透传给对应数据源
+    queries_cnki: list[str]
+    queries_openalex: list[str]
+    queries_pubmed: list[str]
 
 
 @router.post("/query-plan", response_model=QueryPlanResponse)
 def query_plan(req: QueryPlanRequest):
-    """用 MiniMax 把中文主题拆成结构化检索式(概念 + 同义词 + 中英布尔式)。"""
+    """用 LLM 把中文主题直接拆成 3 库各自的 3 条检索式字符串。
+
+    失败(LLM 抽风 / 不合法 JSON / 某库不是 3 条) → 抛 500 让用户重提,
+    不静默兜底。
+    """
     if not req.topic.strip():
         raise HTTPException(400, "topic 不能为空")
-    planned = plan_query(req.topic, default_year_start=req.year_start)
-    keywords = planned.get("keywords_en") or [req.topic]
-    intent = planned.get("intent")
-    # 同一份 SearchIntent 分别翻译成三个库的本地检索式,便于前端对比预览
-    query_cnki = render_cnki_expert(intent) if intent else ""
-    query_openalex = _render_openalex_query(intent) if intent else ""
-    query_pubmed = _render_pubmed_query(intent) if intent else ""
-    # 英文子检索式列表(按语义单元拆分,OpenAlex 方言渲染)
-    queries_en = _render_en_sub_queries(intent) if intent else []
+    try:
+        planned = plan_query_strings(req.topic, year=req.year_start)
+    except RuntimeError as exc:
+        # LLM 失败重试都失败:返回 502 让前端明确告知用户
+        raise HTTPException(502, f"LLM 规划失败: {exc}") from exc
     return QueryPlanResponse(
-        topic_summary=planned.get("topic_summary", req.topic),
-        keywords_en=keywords,
-        keywords_zh=planned.get("keywords_zh", [req.topic]),
-        query_str=" ".join(keywords),
-        concepts=[ConceptGroup(**c) for c in planned.get("concepts", [])],
-        query_zh=planned.get("query_zh", req.topic),
-        queries_zh=planned.get("queries_zh", []),
-        query_en=planned.get("query_en", req.topic),
-        queries_en=queries_en,
-        field_zh=planned.get("field_zh", "SU"),
-        field_en=planned.get("field_en", "default"),
-        query_cnki=query_cnki,
-        query_openalex=query_openalex,
-        query_pubmed=query_pubmed,
+        topic_summary=planned["topic_summary"],
+        queries_cnki=planned["queries_cnki"],
+        queries_openalex=planned["queries_openalex"],
+        queries_pubmed=planned["queries_pubmed"],
     )
-
-
-def _render_en_sub_queries(intent) -> list[str]:
-    """把 render_en_candidates 的概念模板渲染成 OpenAlex 可读子检索式列表。"""
-    src = OpenAlexSource()
-    out: list[str] = []
-    for template in render_en_candidates(intent):
-        try:
-            q = src.build_sub_query(intent, list(template))
-            out.append("search=" + q.get("search", ""))
-        except Exception:
-            continue
-    return out
-
-
-def _render_openalex_query(intent) -> str:
-    """OpenAlex build_query 返回 dict,拼成可读的查询串方便对比。"""
-    q = OpenAlexSource().build_query(intent)
-    return "search=" + q.get("search", "") + "\nfilter=" + q.get("filter", "")
-
-
-def _render_pubmed_query(intent) -> str:
-    """PubMed build_query 返回 {"term": ...},直接取 term。"""
-    return PubMedSource().build_query(intent).get("term", "")
 
 
 class RerankPaperIn(BaseModel):

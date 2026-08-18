@@ -8,7 +8,6 @@ import {
 } from '../src/config/api.ts';
 import { bootstrapApp } from '../src/app/bootstrap.ts';
 import {
-    applyHistoryTopic,
     readSharedTopic,
     writeSharedTopic,
 } from '../src/stores/sharedTopic.ts';
@@ -53,8 +52,8 @@ test('api config defaults align with uvicorn default port', () => {
 });
 
 test('api config respects explicit backend origin', () => {
-    assert.equal(getApiBaseURL('http://127.0.0.1:8090'), 'http://127.0.0.1:8090/api');
-    assert.equal(getBackendHint('http://127.0.0.1:8090'), 'http://127.0.0.1:8090');
+    assert.equal(getApiBaseURL('http://127.0.0.1:8000'), 'http://127.0.0.1:8000/api');
+    assert.equal(getBackendHint('http://127.0.0.1:8000'), 'http://127.0.0.1:8000');
 });
 
 test('writing stream URL uses the shared API base config', () => {
@@ -94,12 +93,3 @@ test('shared topic persists retrieval topic for writing page defaults', () => {
     );
 });
 
-test('applyHistoryTopic syncs restored history topic into shared state', () => {
-    const updates: string[] = [];
-
-    applyHistoryTopic(' 历史检索主题 ', (topic) => {
-        updates.push(topic);
-    });
-
-    assert.deepEqual(updates, ['历史检索主题']);
-});

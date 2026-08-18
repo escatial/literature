@@ -1,6 +1,6 @@
-﻿"""章节 LLM 写作:带引用强校验,拒绝幻觉。
+"""章节 LLM 写作:带引用强校验,拒绝幻觉。
 
-使用 prompts/literature-review-section.md 模板作为 system prompt。
+使用 prompts/literature-review.md 模板中的 `section` 段作为 system prompt。
 核心约束:
 - LLM 只能用 [lit_xxx] 形式引用输入清单里存在的 lit_id
 - 生成的文本中出现的任何 [lit_xxx] 都必须在允许集合内
@@ -113,6 +113,7 @@ def _invoke_section_chain(
             user=user_text,
             max_tokens=8000,
             model=payload.get("model"),
+            response_format={"type": "json_object"},
         )
 
     chain = (
@@ -183,8 +184,6 @@ def _prepare_section_context(
                 "openalex": "oa",
                 "pubmed": "pm",
                 "cnki": "cn",
-                "wanfang": "wf",
-                "cqvip": "cq",
                 "crossref": "cr",
                 "user_imported": "ui",
             }.get(p.source.value, "x")
@@ -207,7 +206,7 @@ def _prepare_section_context(
             catalog = _build_papers_catalog_alias(short_list, alias_map)
 
     system = render(
-        "literature-review-section",
+        "literature-review:section",
         topic=topic,
         section_key=section.key,
         section_title=section.title,

@@ -22,14 +22,3 @@ export function writeSharedTopic(topic: string): void {
         // 浏览器存储异常时静默降级,不影响页面主流程
     }
 }
-
-export function applyHistoryTopic(
-    topic: string,
-    setTopic: (topic: string) => void,
-): void {
-    const normalized = topic.trim();
-    if (!normalized) return;
-    setTopic(normalized);
-}
-
-export { SHARED_TOPIC_STORAGE_KEY };

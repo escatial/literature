@@ -14,13 +14,17 @@ import time
 
 import httpx
 
-from retrieval.intent import SearchIntent, core_concepts
 from retrieval.sources.base import AcademicSource, SourcePage
 from retrieval.types import Paper, Source
 
 log = logging.getLogger(__name__)
 
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+# 硬编码的硬筛选条件(替代原 SearchIntent.filters)
+DEFAULT_PUBMED_YEAR_BACK = 5
+DEFAULT_PUBMED_LANGS = ["eng"]
+DEFAULT_PUBMED_TYPES = ["journal article", "review"]
 
 
 class PubMedSource:
@@ -32,58 +36,34 @@ class PubMedSource:
 
     # === AcademicSource 协议 ===
 
-    def build_query(self, intent: SearchIntent) -> dict:
-        """PubMed 语法:
-        - 布尔用 AND / OR / NOT
-        - 短语要双引号
-        - 字段后缀:[tiab]=title+abstract, [ti]=title, [dp]=date, [la]=language, [pt]=publication type
-        - 语言代码是 NCBI 三位码(eng/chi/...),不是 ISO 两位码(en/zh)
-        - MeSH 词自动扩展(无需手动加 [mesh])
+    def build_query(self, intent) -> dict:
+        """兼容旧 AcademicSource 协议(传 SearchIntent 时取主检索式)。
 
-        PubMed 无布尔操作符上限,但"多概念全 AND"交集可能过窄直接零结果
-        (实测 4 组精确短语全交 = 0)。这里与 OpenAlex 一致只保留核心 2 概念
-        (同义词保留全量),保证首轮即有结果、展示与执行一致。
+        新链路直接走 build_sub_query(query_string)。
         """
-        return self._build_query_from_boolean(
-            intent, self._render_boolean_core(intent)
-        )
+        boolean = (getattr(intent, "boolean_template", "") or "").strip() or ""
+        return self._build_query_from_string(boolean)
 
-    def build_sub_query(self, intent: SearchIntent, concept_ids: list[str]) -> dict:
-        """按概念子集渲染子检索式(英文拆分链路)。
+    def build_sub_query(self, query_string: str) -> dict:
+        """把 LLM 直接输出的 PubMed 检索式字符串组装成 E-utilities 请求。
 
-        PubMed 无操作符上限,同义词全量保留,保证子式语义完整。
+        query_string: LLM 直接输出的完整 PubMed 检索式,如
+          ("Understanding by Design"[tiab] OR UbD[tiab]) AND "math teaching"[tiab]
         """
-        return self._build_query_from_boolean(
-            intent, self._render_boolean_core(intent, concept_ids)
-        )
+        return self._build_query_from_string(query_string)
 
-    def _build_query_from_boolean(self, intent: SearchIntent, boolean: str) -> dict:
-        """布尔主体 + 年份/语言/类型/排除词组装。"""
-        f = intent.filters
+    def _build_query_from_string(self, boolean: str) -> dict:
+        """把布尔主体 + 默认年份/语言/类型组装成 PubMed E-utilities term。"""
+        import datetime as _dt
+
+        year = _dt.datetime.now().year
         clauses = [f"({boolean})"]
-        if f.min_year is not None and f.max_year is not None:
-            clauses.append(f"{f.min_year}:{f.max_year}[dp]")
-        langs = [self._lang_code(lang) for lang in f.language if lang]
-        if langs:
-            # 一篇文章只属于一种语言:多语言必须 OR 分组,AND 连接必然零结果
-            clauses.append("(" + " OR ".join(f"{lang}[la]" for lang in langs) + ")")
-        if f.allowed_types:
-            # 同理,一篇文章不可能同时是 journal article 和 review
-            mapping = {"article": "journal article", "review": "review"}
-            pts = [mapping.get(t, t) for t in f.allowed_types]
-            clauses.append("(" + " OR ".join(f"{pt}[pt]" for pt in pts) + ")")
-        for ex in intent.exclude_terms:
-            ex_q = f'"{ex}"' if " " in ex else ex
-            clauses.append(f"NOT {ex_q}[tiab]")
+        clauses.append(f"{year - DEFAULT_PUBMED_YEAR_BACK}:{year}[dp]")
+        # 一篇文章只属于一种语言:多语言必须 OR 分组
+        clauses.append("(" + " OR ".join(f"{lang}[la]" for lang in DEFAULT_PUBMED_LANGS) + ")")
+        # 同理,一篇文章不可能同时是 journal article 和 review
+        clauses.append("(" + " OR ".join(f"{t}[pt]" for t in DEFAULT_PUBMED_TYPES) + ")")
         return {"term": " AND ".join(clauses), "tool": self.mailto or "lit-review-agent"}
-
-    def _lang_code(self, code: str) -> str:
-        """ISO 639-1 两位码 -> NCBI 三位码;不认识的保留原样。"""
-        mapping = {
-            "en": "eng", "zh": "chi", "de": "ger", "fr": "fre", "es": "spa",
-            "ja": "jpn", "ru": "rus", "ko": "kor", "it": "ita", "pt": "por",
-        }
-        return mapping.get(code, code)
 
     def execute(self, query: dict, page: int, per_page: int) -> SourcePage:
         retmax = min(per_page, 200)
@@ -167,36 +147,6 @@ class PubMedSource:
             return False
 
     # === 内部 ===
-
-    def _render_boolean_core(self, intent: SearchIntent,
-                             concept_ids: list[str] | None = None) -> str:
-        """布尔主体:保留核心 2 概念或指定概念子集(同义词保留全量,PubMed 无 ops 限制)。"""
-        if concept_ids is None:
-            selected = core_concepts(intent)
-        else:
-            selected = [c for c in intent.concepts if c.id in concept_ids]
-        groups: list[str] = []
-        for c in selected:
-            syns = list(dict.fromkeys([c.label_en, *c.synonyms_en]))
-            field_tag = {"title": "[ti]", "title_abstract": "[tiab]", "abstract": "[ab]"}.get(c.field, "[tiab]")
-            quoted = [f'"{s}"{field_tag}' if " " in s else f"{s}{field_tag}" for s in syns]
-            groups.append("(" + " OR ".join(quoted) + ")")
-        return " AND ".join(groups)
-
-    def _render_boolean(self, intent: SearchIntent) -> str:
-        import re as _re
-        groups: dict[str, str] = {}
-        for c in intent.concepts:
-            syns = list(dict.fromkeys([c.label_en, *c.synonyms_en]))
-            field_tag = {"title": "[ti]", "title_abstract": "[tiab]", "abstract": "[ab]"}.get(c.field, "[tiab]")
-            quoted = [f'"{s}"{field_tag}' if " " in s else f"{s}{field_tag}" for s in syns]
-            groups[c.id] = "(" + " OR ".join(quoted) + ")"
-        pattern = _re.compile(r"\b([A-Z])\b")
-
-        def _sub(m):
-            return groups.get(m.group(1), m.group(0))
-
-        return pattern.sub(_sub, intent.boolean_template)
 
     def _parse(self, uid: str, record: dict) -> Paper:
         date_text = str(record.get("pubdate") or record.get("sortpubdate") or "")

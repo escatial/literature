@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from retrieval.intent import SearchIntent, core_concepts
 from retrieval.sources.base import AcademicSource, SourcePage
 from retrieval.sources.openalex_validator import (
     ENTITY_ENDPOINTS,
@@ -30,6 +29,13 @@ from retrieval.sources.openalex_validator import (
     build_provenance,
 )
 from retrieval.types import Paper, Source
+
+# OpenAlex 硬限:布尔操作符 >5 触发 429
+MAX_BOOLEAN_OPS = 5
+# 硬编码的硬筛选条件(替代原 SearchIntent.filters,默认近 5 年,英文 article/review)
+DEFAULT_YEAR_BACK = 5
+DEFAULT_LANGUAGE = ["en"]
+DEFAULT_TYPES = ["article", "review"]
 
 log = logging.getLogger(__name__)
 
@@ -104,51 +110,33 @@ class OpenAlexSource:
 
     # === AcademicSource 协议 ===
 
-    def build_query(self, intent: SearchIntent) -> dict:
-        """把 SearchIntent 翻译成 OpenAlex filter + search 参数。
+    def build_query(self, intent) -> dict:
+        """兼容旧 AcademicSource 协议(传 SearchIntent 时取主检索式)。
 
-        OpenAlex 语法要点:
-        - search 参数是整段文本全文检索(支持布尔,短语加引号)
-        - filter 支持 publication_year:YYYY-YYYY, type:article|review, language:en|zh;
-          多值必须用 | 连接(逗号是 filter 之间的分隔符,不能作值内分隔)
-        - 硬限制:布尔操作符(OR/AND/NOT)数量 >5 会被 API 限流(HTTP 429,
-          含 title_and_abstract.search filter 里的布尔)。因此这里必须压缩:
-          只保留核心 2 概念(与 relax_intent 口径一致)、每概念最多 2 个同义词、
-          排除词最多 2 个,保证总操作符 <=5,稳定放行。
+        新链路直接走 build_sub_query(query_string) ,不走 intent。
         """
-        return self._build_query_from_boolean(
-            intent, self._render_boolean_compact(intent)
-        )
+        # 旧链路接收 SearchIntent, 这里用它的 boolean_template+同义词做兜底
+        boolean = (getattr(intent, "boolean_template", "") or "").strip() or ""
+        return self._build_query_from_string(boolean)
 
-    def build_sub_query(self, intent: SearchIntent, concept_ids: list[str]) -> dict:
-        """按概念子集渲染子检索式(英文拆分链路)。
+    def build_sub_query(self, query_string: str) -> dict:
+        """把 LLM 直接输出的检索式字符串透传给 OpenAlex。
 
-        在 OpenAlex 5 操作符硬限下按预算自动裁剪同义词/概念,
-        保证每个子检索式独立可执行,不触发 429。
+        query_string: LLM 直接输出的完整 OpenAlex 检索式,如
+          ("Understanding by Design" OR UbD) AND "math teaching"
         """
-        boolean = self._render_boolean_budget(intent, concept_ids)
-        return self._build_query_from_boolean(intent, boolean)
+        return self._build_query_from_string(query_string)
 
-    def _build_query_from_boolean(self, intent: SearchIntent, boolean: str) -> dict:
-        """布尔主体 + filter 组装(排除词另计操作符,计入预算)。"""
-        filter_parts = []
-        if intent.filters.min_year is not None and intent.filters.max_year is not None:
-            filter_parts.append(
-                f"publication_year:{intent.filters.min_year}-{intent.filters.max_year}"
-            )
-        if intent.filters.allowed_types:
-            filter_parts.append(f"type:{'|'.join(intent.filters.allowed_types)}")
-        if intent.filters.language:
-            filter_parts.append(f"language:{'|'.join(intent.filters.language)}")
-        if intent.exclude_terms:
-            # OpenAlex 没有 exclude 字段,用 - 关键字在 search 里表达;
-            # 多词短语必须加引号,否则会被拆成多个词 AND,造成过度排除。
-            # 每个 -term 也计 1 个操作符,最多保留前 2 个避免触发 429。
-            exclusions = [
-                f'-"{t}"' if " " in t else f"-{t}"
-                for t in intent.exclude_terms[:2]
-            ]
-            boolean = " ".join(boolean.split() + exclusions)
+    def _build_query_from_string(self, boolean: str) -> dict:
+        """把布尔主体 + 默认 filter 组装成 OpenAlex 请求参数。"""
+        import datetime as _dt
+
+        year = _dt.datetime.now().year
+        filter_parts = [
+            f"publication_year:{year - DEFAULT_YEAR_BACK}-{year}",
+            f"type:{'|'.join(DEFAULT_TYPES)}",
+            f"language:{'|'.join(DEFAULT_LANGUAGE)}",
+        ]
         return {
             "search": boolean,
             "filter": ",".join(filter_parts),
@@ -164,7 +152,7 @@ class OpenAlexSource:
         last_err: Exception | None = None
         for attempt in range(3):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
+                with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
                     resp = client.get(BASE_URL, params=params)
                     resp.raise_for_status()
                 j = resp.json()
@@ -230,7 +218,7 @@ class OpenAlexSource:
         openalex_id = paper.lit_id.replace("lit_openalex_", "")
         url = f"{BASE_URL}/{openalex_id}"
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
                 resp = client.get(url, params={"api_key": self.api_key})
                 resp.raise_for_status()
                 j = resp.json()
@@ -243,7 +231,7 @@ class OpenAlexSource:
         # 批量查询 references
         ids_filter = "|".join(rid.rsplit("/", 1)[-1] for rid in ref_ids[:50])
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
                 resp = client.get(
                     BASE_URL,
                     params={"filter": f"ids.openalex:{ids_filter}", "per-page": 50, "api_key": self.api_key},
@@ -256,7 +244,7 @@ class OpenAlexSource:
 
     def health_check(self) -> bool:
         try:
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=10.0, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
                 resp = client.get(BASE_URL, params={"per-page": 1, "api_key": self.api_key})
                 return resp.status_code == 200
         except Exception:
@@ -285,7 +273,7 @@ class OpenAlexSource:
         params = {k: v for k, v in dict(query).items() if v not in (None, "")}
         params.update({"cursor": cursor, "per-page": min(per_page, 100)})
 
-        with httpx.Client(timeout=self.timeout) as client:
+        with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
             resp = client.get(url, params=params)
             resp.raise_for_status()
         j = resp.json()
@@ -424,63 +412,6 @@ class OpenAlexSource:
         )
 
     # === 内部 ===
-
-    def _render_boolean_compact(self, intent: SearchIntent) -> str:
-        """压缩版布尔检索式:只保留核心 2 概念,每概念取前 2 个同义词。
-
-        组间 AND 连接 = 恰好 3 个操作符,排除词另加(最多 2 个,5 ops 内),
-        确保 OpenAlex 稳定放行,不再触发"布尔操作符 >5"的 429 限流。
-        """
-        groups: list[str] = []
-        for c in core_concepts(intent):
-            syns = list(dict.fromkeys([c.label_en, *c.synonyms_en]))[:2]
-            quoted = [f'"{s}"' if " " in s else s for s in syns]
-            groups.append("(" + " OR ".join(quoted) + ")")
-        return " AND ".join(groups)
-
-    def _render_boolean_budget(self, intent: SearchIntent, concept_ids: list[str],
-                               budget: int = 5) -> str:
-        """按布尔操作符预算渲染概念子集。
-
-        预算 = 5(OpenAlex 硬限)- 排除词数(每个 -term 计 1 op):
-        1. 组间 AND 固定 k-1 个;
-        2. 剩余预算按概念顺序分给组内同义词(每概念最多 2 个,词数=OR 数+1);
-        3. 预算不足(排除词多、概念多)时优先裁掉尾部低优先级概念,
-           保证每个子检索式独立可执行、不触发 429。
-        """
-        budget = budget - len(intent.exclude_terms[:2])
-        selected = [c for c in intent.concepts if c.id in concept_ids]
-        # 尾部概念(维度)优先裁剪,锚点(研究对象/主体)始终保留
-        while selected and (len(selected) - 1) > budget:
-            selected = selected[:-1]
-        if not selected:
-            return ""
-        extra = max(0, budget - (len(selected) - 1))
-        groups: list[str] = []
-        for c in selected:
-            syns = list(dict.fromkeys([c.label_en, *c.synonyms_en]))
-            cap = min(len(syns), 2)
-            take = max(0, min(cap - 1, extra))
-            chosen = syns[: 1 + take]
-            extra -= take
-            quoted = [f'"{s}"' if " " in s else s for s in chosen]
-            groups.append("(" + " OR ".join(quoted) + ")")
-        return " AND ".join(groups)
-
-    def _render_boolean(self, intent: SearchIntent) -> str:
-        """把 boolean_template 里的 A/B/C 渲染成 (synonym OR synonym) 形式。"""
-        import re
-        groups: dict[str, str] = {}
-        for c in intent.concepts:
-            syns = list(dict.fromkeys([c.label_en, *c.synonyms_en]))
-            quoted = [f'"{s}"' if " " in s else s for s in syns]
-            groups[c.id] = "(" + " OR ".join(quoted) + ")"
-        pattern = re.compile(r"\b([A-Z])\b")
-
-        def _sub(m):
-            return groups.get(m.group(1), m.group(0))
-
-        return pattern.sub(_sub, intent.boolean_template)
 
     def _parse(self, w: dict, api_url: str | None = None) -> Paper:
         doi_raw = w.get("doi") or ""

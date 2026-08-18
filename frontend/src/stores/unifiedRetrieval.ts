@@ -1,6 +1,5 @@
 /** 统一检索页状态:每次进入页面均从空白任务开始。 */
 import { defineStore } from 'pinia';
-import type { ConceptGroup } from '@/api/endpoints';
 import type { RetrievalProgressEvent } from '@/api/types';
 import { readSharedTopic, writeSharedTopic } from './sharedTopic';
 
@@ -36,19 +35,12 @@ interface EnTaskRow {
 interface State {
   // 主题
   topic: string;
-  // LLM 拆解 + 用户编辑
-  concepts: ConceptGroup[];
-  fieldZh: string;
-  fieldEn: string;
-  queryZh: string;
-  queriesZh: string[];
-  queryEn: string;
-  // 英文长检索式按语义单元拆分后的子检索式列表(依次执行、合并去重)
-  queriesEn: string[];
-  // 三库方言检索式对比预览
-  queryCnki: string;
-  queryOpenalex: string;
-  queryPubmed: string;
+  // LLM 拆解:3 库各自的 3 条检索式字符串(后端按源透传)
+  queriesCnki: string[];
+  queriesOpenalex: string[];
+  queriesPubmed: string[];
+  // topic_summary(LLM 给出的一句话英文研究问题,展示用)
+  topicSummary: string;
   // 选中的库
   selectedDbs: string[];
   // 会话
@@ -77,16 +69,10 @@ const STORAGE_KEY = 'lit-review-unified-retrieval-v1';
 
 const initial: State = {
   topic: readSharedTopic(),
-  concepts: [],
-  fieldZh: 'SU',
-  fieldEn: 'default',
-  queryZh: '',
-  queriesZh: [],
-  queryEn: '',
-  queriesEn: [],
-  queryCnki: '',
-  queryOpenalex: '',
-  queryPubmed: '',
+  queriesCnki: [],
+  queriesOpenalex: [],
+  queriesPubmed: [],
+  topicSummary: '',
   selectedDbs: ['cnki'],
   sessionId: '',
   dbTypes: [],
@@ -156,36 +142,17 @@ export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
       this.persist();
     },
 
-    /** LLM 拆解结果写入,同时更新 queries。 */
+    /** LLM 拆解结果写入(3 库各 3 条检索式 + topic_summary)。 */
     applyPlan(payload: {
-      concepts: ConceptGroup[];
-      field_zh: string;
-      field_en: string;
-      query_zh: string;
-      queries_zh: string[];
-      query_en: string;
-      queries_en?: string[];
-      query_cnki?: string;
-      query_openalex?: string;
-      query_pubmed?: string;
+      topic_summary: string;
+      queries_cnki: string[];
+      queries_openalex: string[];
+      queries_pubmed: string[];
     }) {
-      this.concepts = payload.concepts;
-      this.fieldZh = payload.field_zh || 'SU';
-      this.fieldEn = payload.field_en || 'default';
-      this.queryZh = payload.query_zh;
-      this.queriesZh = payload.queries_zh;
-      this.queryEn = payload.query_en;
-      this.queriesEn = payload.queries_en || [];
-      this.queryCnki = payload.query_cnki || '';
-      this.queryOpenalex = payload.query_openalex || '';
-      this.queryPubmed = payload.query_pubmed || '';
-      this.persist();
-    },
-
-    /** 用户改同义词后,重新计算 queries(并持久化)。 */
-    setQueries(zh: string, en: string) {
-      this.queryZh = zh;
-      this.queryEn = en;
+      this.topicSummary = payload.topic_summary || '';
+      this.queriesCnki = payload.queries_cnki || [];
+      this.queriesOpenalex = payload.queries_openalex || [];
+      this.queriesPubmed = payload.queries_pubmed || [];
       this.persist();
     },
 

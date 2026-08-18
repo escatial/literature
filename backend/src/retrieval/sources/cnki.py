@@ -2,7 +2,7 @@
 
 设计:
 - 包一层,不重写:adapter 直接驱动嵌入爬虫的列表/摘要/验证码链路;
-- build_query 构造高级检索 QueryJson(SU=主题 模糊);
+- build_sub_query 透传字符串(LLM 给的 3 条之一);
 - execute_async 通过 asyncio.Queue 桥接 adapter 的事件流,完成后从 DB 读回本次入库结果。
 """
 from __future__ import annotations
@@ -12,7 +12,6 @@ import logging
 import os
 
 from automation.cnki_adapter import run_cnki_full_auto
-from retrieval.intent import SearchIntent
 from retrieval.sources.base import AcademicSource, SourcePage
 from retrieval.types import Paper, Source
 
@@ -32,8 +31,8 @@ class CNKISource:
 
     # === AcademicSource 协议 ===
 
-    def build_query(self, intent: SearchIntent) -> dict:
-        return {"query": intent.topic_summary}
+    def build_sub_query(self, query_string: str) -> dict:
+        return {"query": query_string}
 
     def execute(self, query: dict, page: int, per_page: int) -> SourcePage:
         """CNKI 不分 API 页,走 execute_async 流。"""
@@ -41,7 +40,8 @@ class CNKISource:
             "CNKISource.execute 走 execute_async 流,请用 RetrievalController.run_async"
         )
 
-    async def execute_async(self, intent: SearchIntent, on_event=None) -> list[Paper]:
+    async def execute_async(self, query_string: str, topic: str,
+                            on_event=None) -> list[Paper]:
         """异步跑 CNKI 爬虫,返回本次入库的 Paper 列表。"""
         queue: asyncio.Queue = asyncio.Queue()
 
@@ -57,7 +57,6 @@ class CNKISource:
                         log.warning("CNKI 事件回调失败: %s", e)
 
         bridge = asyncio.create_task(_emit_bridge())
-        topic = intent.topic_summary
         try:
             result = await run_cnki_full_auto(
                 topic=topic,

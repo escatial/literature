@@ -6,8 +6,6 @@ from enum import Enum
 
 class Source(str, Enum):
     CNKI = "cnki"
-    WANFANG = "wanfang"
-    CQVIP = "cqvip"
     PUBMED = "pubmed"
     OPENALEX = "openalex"
     CROSSREF = "crossref"

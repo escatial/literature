@@ -3,12 +3,10 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 
-ALLOWED_SOURCES = frozenset({"cnki", "wanfang", "cqvip", "pubmed", "openalex"})
+ALLOWED_SOURCES = frozenset({"cnki", "pubmed", "openalex"})
 
 SOURCE_HOSTS = {
     "cnki": ("cnki.net", "42.192.101.93"),
-    "wanfang": ("wanfangdata.com.cn",),
-    "cqvip": ("cqvip.com",),
     "pubmed": ("pubmed.ncbi.nlm.nih.gov",),
     "openalex": ("openalex.org",),
 }
