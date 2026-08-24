@@ -41,6 +41,7 @@ const initialState: StreamState = {
 export async function generateWritingStream(
   req: WritingRequest,
   onUpdate: (s: StreamState) => void,
+  signal?: AbortSignal,
 ): Promise<WritingResponse> {
   onUpdate(initialState);
 
@@ -49,6 +50,7 @@ export async function generateWritingStream(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
+    signal,
   });
 
   if (!resp.ok || !resp.body) {
@@ -88,7 +90,7 @@ export async function generateWritingStream(
             break;
           case 'screening_started':
             state.phase = 'screening';
-            state.detail = `正在进行 LLM 主题筛选，共 ${evt.data.total ?? 0} 篇文献...`;
+            state.detail = `正在进行主题相关性与摘要质量筛选，共 ${evt.data.total ?? 0} 篇文献...`;
             break;
           case 'screening_done':
             state.screenedOutIds = evt.data.screened_out ?? [];
@@ -119,7 +121,9 @@ export async function generateWritingStream(
             state.currentSection = {
               key: evt.data.key,
               title: evt.data.title,
-              content: state.currentSection?.key === evt.data.key ? state.currentSection.content : '',
+              content: state.currentSection && state.currentSection.key === evt.data.key
+                ? state.currentSection.content
+                : '',
             };
             state.detail = `正在流式生成《${evt.data.title}》...`;
             break;
@@ -160,6 +164,10 @@ export async function generateWritingStream(
             state.phase = 'reference';
             state.detail = `正在整理参考文献，共 ${evt.data.count ?? 0} 篇...`;
             break;
+          case 'sections_finalized':
+            // 正文锚点 [lit_xxx] 已替换为数字编号 [N],覆盖显示内容
+            state.sections = evt.data.sections ?? state.sections;
+            break;
           case 'reference_list':
             state.phase = 'reference';
             state.referenceList = evt.data.reference_list ?? '';
@@ -193,3 +201,4 @@ export async function generateWritingStream(
     dropped_citations: state.droppedCitations,
   } satisfies WritingResponse;
 }
+

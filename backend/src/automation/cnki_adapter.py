@@ -21,6 +21,7 @@ import threading
 from urllib.parse import parse_qs, urlparse
 
 from .cnki import crawler
+from retrieval.query_planner import normalize_cnki_query
 
 log = logging.getLogger(__name__)
 
@@ -157,12 +158,28 @@ def _persist_record(record: dict) -> bool:
 
 
 def _detail_to_record(d: dict, db_type: str) -> dict:
-    """把爬虫 fetch_abstract 的结果映射为 PaperModel 字段。"""
+    """把爬虫 fetch_abstract 的结果映射为 PaperModel 字段。
+
+    v6.1:把列表页抓到的 GB/T 7714-2025 引文(quote_text)直接写到 raw_citation。
+    渲染时 render_reference_list 走「raw_citation 已有」分支,不再 fallback 拼装。
+    quote_text 同时保留(给将来「GB/T vs MLA vs APA 多格式」用)。
+    """
+    import re as _re_gbt
     url = d.get("url") or ""
     year = 0
     pub = (d.get("publish_time") or "").strip()
     if pub[:4].isdigit():
         year = int(pub[:4])
+    # 优先用列表页抓到的 GB/T 7714 引文;缺失时再考虑详情页摘要区里的备用
+    # v6.1:优先用 server-side GB/T 7714 导出 API 拿到的引文(d.get("gbt_citation"));
+    # 兜底:列表页 quote_text 字段(老逻辑,保留向后兼容)。
+    gbt = (d.get("gbt_citation") or "").strip()
+    quote_text = (d.get("quote_text") or "").strip()
+    citation = gbt or quote_text
+    # 清洗:知网的 GB/T 7714 引文末尾会带「查看该刊数据库收录来源」之类的脏尾巴
+    if citation:
+        citation = _re_gbt.sub(r"\s*查看该刊数据库收录来源[\s\S]*$", "", citation)
+        citation = _re_gbt.sub(r"\s{2,}", " ", citation).strip()
     return {
         "lit_id": _build_lit_id(url),
         "source": db_type,
@@ -174,8 +191,9 @@ def _detail_to_record(d: dict, db_type: str) -> dict:
         "abstract_text": d.get("abstract") or "",
         "doi": d.get("doi") or "",
         "source_url": url,
-        "raw_citation": "",
-        "quote_text": "",
+        # raw_citation 与 quote_text 都存,渲染时优先 raw_citation
+        "raw_citation": citation,
+        "quote_text": citation,
         "selected": True,
     }
 
@@ -215,10 +233,16 @@ async def run_cnki_full_auto(
         if stop_event is not None and stop_event.is_set():
             raise _CnkiStopped("用户已手动停止")
 
-    queries = [query.strip() for query in (expert_queries or []) if query.strip()]
-    if not queries and expert_query and expert_query.strip():
-        queries = [expert_query.strip()]
-    if not queries:
+    raw_queries = [query.strip() for query in (expert_queries or []) if query.strip()]
+    if not raw_queries and expert_query and expert_query.strip():
+        raw_queries = [expert_query.strip()]
+    if raw_queries:
+        try:
+            queries = [normalize_cnki_query(query) for query in raw_queries]
+        except ValueError as exc:
+            emit(stage="error", msg=f"知网检索式语法无效,任务未提交: {exc}", db=db_type)
+            return {"status": "failed", "saved": 0, "skipped": 0, "error": str(exc)}
+    else:
         queries = [topic]
 
     # max_pages<=0 视为"翻到知网无结果为止";否则按页数计算 max_count
@@ -291,7 +315,26 @@ async def run_cnki_full_auto(
                 continue
             try:
                 detail = crawler.fetch_abstract(url)
+            except crawler.CnkiGBTCitationMissing as exc:
+                # 单篇极个别:详情页缺少 GB/T 7714 hidden input / 导出 API 无 GB/T 条目
+                # 跳这 paper,不阻塞整次
+                log.warning("[cnki] %d/%d 跳过(无 GB/T 7714): %s | %s", idx, total, exc, url[:80])
+                emit(stage="log",
+                     msg=f"[摘要] {idx}/{total} 跳过,GB/T 7714 引文不可用(极个别): {exc}",
+                     db=db_type)
+                skipped += 1
+                continue
+            except crawler.CnkiGBTCitationAPIFailed as exc:
+                # 整次停:导出 API 本身挂了(网络/超时/限流/cookie 失效)
+                # 后续 paper 大概率也拿不到,直接告诉用户
+                log.error("[cnki] %d/%d GB/T 7714 导出 API 失败,停止整次: %s | %s",
+                         idx, total, exc, url[:80])
+                emit(stage="log",
+                     msg=f"[摘要] {idx}/{total} 致命错误,停止整次: {exc}",
+                     db=db_type)
+                raise
             except Exception as exc:
+                # 其他错误(SSL/超时/详情页 404 等)→ 老逻辑:跳过
                 # TRAE-debugger:首次 SSL 错误时落地证据
                 global _SSL_DIAG_LOGGED
                 if not _SSL_DIAG_LOGGED and (

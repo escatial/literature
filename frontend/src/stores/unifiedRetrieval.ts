@@ -35,7 +35,7 @@ interface EnTaskRow {
 interface State {
   // 主题
   topic: string;
-  // LLM 拆解:3 库各自的 3 条检索式字符串(后端按源透传)
+  // LLM 拆解:三个数据库各自动态生成 4～8 条检索式字符串(后端按源透传)
   queriesCnki: string[];
   queriesOpenalex: string[];
   queriesPubmed: string[];
@@ -53,6 +53,8 @@ interface State {
   extracting: boolean;
   chineseTaskId: string;
   englishTaskId: string;
+  // 本次「启动自动检索」的 UUID;中文 + 英文两边共享,后端 aggregator 用它合并写一条历史
+  runId: string;
   // v4.0 知网任务列表(以 db 为 key,切 tab 仍保留)
   cnkiTasks: Record<string, CnkiTaskRow>;
   // v4.1 英文任务按 db 拆的视图(对称中文)
@@ -66,6 +68,7 @@ interface State {
 }
 
 const STORAGE_KEY = 'lit-review-unified-retrieval-v1';
+const REQUIRED_DATABASES = ['cnki', 'openalex', 'pubmed'] as const;
 
 const initial: State = {
   topic: readSharedTopic(),
@@ -73,7 +76,7 @@ const initial: State = {
   queriesOpenalex: [],
   queriesPubmed: [],
   topicSummary: '',
-  selectedDbs: ['cnki'],
+  selectedDbs: [...REQUIRED_DATABASES],
   sessionId: '',
   dbTypes: [],
   currentIndex: 0,
@@ -81,6 +84,7 @@ const initial: State = {
   extracting: false,
   chineseTaskId: '',
   englishTaskId: '',
+  runId: '',
   cnkiTasks: {},
   enTasks: { openalex: { db: 'openalex', task_id: '', logs: [] }, pubmed: { db: 'pubmed', task_id: '', logs: [] } },
   ingestedEnKeys: new Set<string>(),
@@ -142,7 +146,7 @@ export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
       this.persist();
     },
 
-    /** LLM 拆解结果写入(3 库各 3 条检索式 + topic_summary)。 */
+    /** LLM 拆解结果写入(三个数据库各 4～8 条检索式 + topic_summary)。 */
     applyPlan(payload: {
       topic_summary: string;
       queries_cnki: string[];
@@ -156,8 +160,9 @@ export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
       this.persist();
     },
 
-    setDbs(dbs: string[]) {
-      this.selectedDbs = [...dbs];
+    setDbs(_dbs: string[]) {
+      // 三库是一次统一检索的不可拆分边界，禁止前端或旧状态只选部分库。
+      this.selectedDbs = [...REQUIRED_DATABASES];
       this.persist();
     },
 
@@ -176,6 +181,7 @@ export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
     },
 
     setPlanning(v: boolean) { this.planning = v; this.persist(); },
+    setRunId(v: string) { this.runId = v; this.persist(); },
     setExtracting(v: boolean) { this.extracting = v; this.persist(); },
     setAutoTarget(v: number) { this.autoTarget = v; this.persist(); },
     setAutoMaxPages(v: number) { this.autoMaxPages = v; this.persist(); },

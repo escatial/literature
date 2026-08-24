@@ -1,4 +1,4 @@
-"""LLM 查询规划 API:把中文主题直接拆成 3 库 × 3 条检索式。"""
+"""LLM 查询规划 API:把中文主题拆成三个数据库各自的动态检索式列表。"""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
@@ -18,7 +18,7 @@ class QueryPlanRequest(BaseModel):
 
 class QueryPlanResponse(BaseModel):
     topic_summary: str
-    # 3 库各自的 3 条检索式,后端按源透传给对应数据源
+    # 三库各自动态生成 4～8 条检索式,后端按源透传
     queries_cnki: list[str]
     queries_openalex: list[str]
     queries_pubmed: list[str]
@@ -26,9 +26,9 @@ class QueryPlanResponse(BaseModel):
 
 @router.post("/query-plan", response_model=QueryPlanResponse)
 def query_plan(req: QueryPlanRequest):
-    """用 LLM 把中文主题直接拆成 3 库各自的 3 条检索式字符串。
+    """用 LLM 把中文主题拆成三个数据库各自的动态检索式列表。
 
-    失败(LLM 抽风 / 不合法 JSON / 某库不是 3 条) → 抛 500 让用户重提,
+    失败(LLM 抽风 / 不合法 JSON / 某库检索式数量不在 4～8 条) → 抛 500,
     不静默兜底。
     """
     if not req.topic.strip():

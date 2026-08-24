@@ -21,6 +21,8 @@ class RetrievalTaskCreate(BaseModel):
     # 雪球扩展(引文回溯)独立开关;默认关闭,避免主循环之外的引文文献混入池
     use_snowball: bool = False
     sources: list[str] = Field(default_factory=lambda: ["pubmed", "openalex"])
+    # 一次「启动自动检索」由前端分配的 UUID;中文 + 英文两边共享,后端聚合写一条历史。
+    run_id: str | None = None
 
 
 class RetrievalTaskOut(BaseModel):
@@ -54,6 +56,13 @@ class RetrievalTaskCreated(BaseModel):
 
 @router.post("", response_model=RetrievalTaskCreated)
 def create_retrieval_task(req: RetrievalTaskCreate):
+    if not req.run_id:
+        raise HTTPException(status_code=422, detail="三库统一检索必须携带 run_id，不能单独运行英文库")
+    if set(req.sources) != {"openalex", "pubmed"} or len(req.sources) != 2:
+        raise HTTPException(
+            status_code=422,
+            detail="英文检索必须同时包含且仅包含 OpenAlex、PubMed；中国知网由同一前端任务并行启动",
+        )
     # v4.1:统一改走 v2 路径(SearchIntent + RetrievalController),
     # 让前端能拿到按 db 拆分的翻页事件(对称中文知网日志面板)。
     # 旧 create_task 路径不调 Controller,无 events,前端面板会一直空。
@@ -63,6 +72,7 @@ def create_retrieval_task(req: RetrievalTaskCreate):
         use_snowball=req.use_snowball,
         year_start=req.year_start,
         year_end=req.year_end,
+        run_id=req.run_id,
     )
     return RetrievalTaskCreated(task_id=task.task_id, status=task.status)
 

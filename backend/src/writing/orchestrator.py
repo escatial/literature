@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Generator
 
+import re as _re
+from writing.citeproc_renderer import format_citation_via_citeproc as _citeproc_render
 from retrieval.types import Paper, Source
 from screening.llm_filter import screen_batch
 from writing.classifier import Group, classify
@@ -89,6 +91,44 @@ class ReviewResult:
     dropped_citations: list[str] = field(default_factory=list)
 
 
+def _screen_papers(
+    topic: str,
+    papers: list[Paper],
+    do_screening: bool,
+) -> tuple[list[Paper], list[str]]:
+    """执行写作前唯一允许的文献入口筛选。"""
+    if not do_screening:
+        raise ValueError("写作必须先完成文献筛选,不允许跳过筛选阶段")
+    if not papers:
+        return [], []
+
+    decisions = screen_batch(papers, topic)
+    kept_ids = {
+        decision["lit_id"]
+        for decision in decisions
+        if decision.get("relevant") is True and decision.get("abstract_ok") is True
+    }
+    screened_out = [paper.lit_id for paper in papers if paper.lit_id not in kept_ids]
+    kept_papers = [paper for paper in papers if paper.lit_id in kept_ids]
+    if not kept_papers:
+        raise ValueError("文献筛选后没有符合主题且摘要完整的文献")
+    _enforce_chinese_source_mix(kept_papers)
+    return kept_papers, screened_out
+
+
+def _enforce_chinese_source_mix(papers: list[Paper]) -> None:
+    """确保进入写作的筛选结果中,中文来源至少占三分之二。"""
+    chinese_sources = {Source.CNKI, Source.USER_IMPORTED}
+    chinese_count = sum(paper.source in chinese_sources for paper in papers)
+    total_count = len(papers)
+    if chinese_count * 3 < total_count * 2:
+        raise ValueError(
+            "筛选后中文文献占比不足三分之二: "
+            f"中文 {chinese_count} 篇 / 总计 {total_count} 篇。"
+            "请扩大中国知网检索范围后重新检索,不能用英文文献补足比例。"
+        )
+
+
 def _sse_event(event: str, data: Any) -> str:
     """格式化为 SSE data 行。"""
     payload = json.dumps({"event": event, "data": data}, ensure_ascii=False)
@@ -109,17 +149,12 @@ def generate_review_stream(
             "classify_mode": classify_mode,
         })
 
-        screened_out: list[str] = []
-        if do_screening and papers:
-            yield _sse_event("screening_started", {"total": len(papers)})
-            decisions = screen_batch(papers, topic)
-            kept_ids = {d["lit_id"] for d in decisions if d.get("relevant", True)}
-            screened_out = [p.lit_id for p in papers if p.lit_id not in kept_ids]
-            papers = [p for p in papers if p.lit_id in kept_ids]
-            yield _sse_event("screening_done", {
-                "kept": len(papers),
-                "screened_out": screened_out,
-            })
+        yield _sse_event("screening_started", {"total": len(papers)})
+        papers, screened_out = _screen_papers(topic, papers, do_screening)
+        yield _sse_event("screening_done", {
+            "kept": len(papers),
+            "screened_out": screened_out,
+        })
 
         yield _sse_event("classify_started", {
             "classify_mode": classify_mode,
@@ -175,10 +210,19 @@ def generate_review_stream(
                         "dropped_citations": res.dropped_citations,
                     })
 
-        cited_ids = {cid for s in sections for cid in s.citations}
-        cited_papers = [p for p in papers if p.lit_id in cited_ids]
-        yield _sse_event("reference_started", {"count": len(cited_papers)})
-        ref = render_reference_list(cited_papers)
+        # 打通正文锚点与参考文献编号:分配全局编号、替换正文 [lit_xxx] -> [N]
+        ref, _number_map = apply_citation_numbering(sections, papers)
+        finalized_sections = [
+            {
+                "key": s.key,
+                "title": s.title,
+                "content": s.content,
+                "citations": s.citations,
+            }
+            for s in sections
+        ]
+        yield _sse_event("reference_started", {"count": len(collect_cited_ids(sections))})
+        yield _sse_event("sections_finalized", {"sections": finalized_sections})
         yield _sse_event("reference_list", {"reference_list": ref})
 
         yield _sse_event("complete", {
@@ -202,11 +246,7 @@ def generate_review(
         raise ValueError(f"unknown classify_mode: {classify_mode}")
 
     screened_out: list[str] = []
-    if do_screening and papers:
-        decisions = screen_batch(papers, topic)
-        kept_ids = {d["lit_id"] for d in decisions if d.get("relevant", True)}
-        screened_out = [p.lit_id for p in papers if p.lit_id not in kept_ids]
-        papers = [p for p in papers if p.lit_id in kept_ids]
+    papers, screened_out = _screen_papers(topic, papers, do_screening)
 
     groups = classify(papers, topic, classify_mode)
 
@@ -223,6 +263,9 @@ def generate_review(
         sections.append(res)
         all_dropped.extend(res.dropped_citations)
 
+    # 统一编号:正文 [lit_xxx] -> [N],与参考文献列表顺序一致(调用方渲染列表)
+    apply_citation_numbering(sections, papers)
+
     return ReviewResult(
         topic=topic,
         classify_mode=classify_mode,
@@ -233,35 +276,132 @@ def generate_review(
     )
 
 
-def render_reference_list(papers: list[Paper]) -> str:
-    """生成参考文献列表(中文用原文,英文用平台元数据)。"""
-    lines = []
-    for p in papers:
-        if p.source == Source.USER_IMPORTED and p.raw_citation:
-            lines.append(p.raw_citation)
-            continue
+_DIRTY_FRAGMENTS = (
+    "查看该刊数据库收录来源",
+    "查看该刊数据库收录。",
+    "知网节选",
+    "[知网节选]",
+    "下载App",
+    "在线阅读",
+)
+_CLEAN_RES = [_re.compile(_re.escape(s)) for s in _DIRTY_FRAGMENTS]
+_BRACKET_RE = _re.compile(r"\[[^\]]{0,30}\]")
+_SPACE_RE = _re.compile(r"\s{2,}")
 
-        parts: list[str] = []
-        authors = ", ".join(p.authors) if p.authors else "Anon"
-        parts.append(f"{authors}. {p.title}[J].")
-        tail_bits = []
-        if p.journal:
-            tail_bits.append(p.journal)
-        if p.year:
-            tail_bits.append(str(p.year))
-        vol_issue = ""
-        if p.volume and p.issue:
-            vol_issue = f"{p.volume}({p.issue})"
-        elif p.volume:
-            vol_issue = p.volume
-        elif p.issue:
-            vol_issue = f"({p.issue})"
-        if vol_issue:
-            tail_bits.append(vol_issue)
-        tail = ", ".join(tail_bits)
-        if p.pages:
-            tail = f"{tail}: {p.pages}" if tail else p.pages
-        if tail:
-            parts.append(tail + ".")
-        lines.append(" ".join(parts))
+
+
+
+
+
+def _clean_dirty(s: str | None) -> str:
+    """过滤抓取时的脏数据片段(知网跳转文案、App 推广等)。
+
+    重要:合法的 CSL 文献类型标识 [J] / [J/OL] / [M] / 访问日期 [YYYY-MM-DD]
+    **不能剥**——这些是 GB/T 7714 的合法字段,不是脏数据。
+    所以只剥 _CLEAN_RES 列出的已知脏片段,不做 blanket 剥 [xxx]。
+    """
+    if not s:
+        return ""
+    for pat in _CLEAN_RES:
+        s = pat.sub("", s)
+    s = _SPACE_RE.sub(" ", s).strip()
+    s = s.rstrip(",;:")
+    return s
+
+
+
+def _format_one_gbt(p: Paper) -> str:
+    """Return an official citation for a paper.
+
+    Routing:
+    - CNKI / USER_IMPORTED: 用户粘贴的 raw_citation(GB/T 7714 原文)
+    - OPENALEX / PUBMED: citeproc-py 规则渲染
+
+    兼顾中文手入库与英文 API 两种来源;无 raw_citation 时不构造,直接报错,
+    避免虚假拼接。
+    """
+    if p.source in (Source.CNKI, Source.USER_IMPORTED):
+        raw = _clean_dirty(getattr(p, "raw_citation", None))
+        if not raw:
+            raise ValueError(
+                f"中文手工导入缺少 raw_citation: {p.lit_id} ({p.title})"
+            )
+        return raw.rstrip(".") + "."
+
+    if p.source in (Source.OPENALEX, Source.PUBMED):
+        rendered = _citeproc_render(p)
+        if rendered:
+            return rendered
+        raise ValueError(
+            f"GB/T 7714-2025 citeproc rendering failed: "
+            f"source={p.source.value}, lit_id={p.lit_id}, title={p.title}"
+        )
+
+    raise ValueError(
+        f"Unsupported citation source: source={p.source.value}, "
+        f"lit_id={p.lit_id}, title={p.title}"
+    )
+
+
+_CITE_ANCHOR_RE = _re.compile(r"\[(lit_[a-zA-Z0-9_]+|hash:[a-zA-Z0-9_]+)\]")
+
+
+def collect_cited_ids(sections: list[SectionResult]) -> list[str]:
+    """按章节与引用出现顺序收集去重的 lit_id,作为参考文献顺序与编号依据。"""
+    cited: list[str] = []
+    for s in sections:
+        for cid in s.citations:
+            if cid not in cited:
+                cited.append(cid)
+    return cited
+
+
+def replace_anchors_with_numbers(content: str, number_map: dict[str, int]) -> str:
+    """把正文中的 [lit_xxx] 锚点替换为参考文献数字编号 [N]。
+
+    number_map 之外的未知锚点(理论上已被幻觉剥离逻辑过滤)原样保留。
+    """
+    def _repl(m: _re.Match) -> str:
+        token = m.group(1)
+        return f"[{number_map.get(token, token)}]"
+    return _CITE_ANCHOR_RE.sub(_repl, content or "")
+
+
+def apply_citation_numbering(
+    sections: list[SectionResult],
+    papers: list[Paper],
+) -> tuple[str, dict[str, int]]:
+    """打通正文锚点与参考文献编号两套体系。
+
+    - 按引用顺序分配全局编号 N(1, 2, 3, ...);
+    - 把各章节正文中的 [lit_xxx] 原地替换为 [N];
+    - 按同一顺序渲染参考文献列表(编号 [N] 连续)。
+
+    返回 (reference_list, lit_id -> N 映射)。
+    """
+    cited_ids = collect_cited_ids(sections)
+    number_map = {cid: i + 1 for i, cid in enumerate(cited_ids)}
+    for s in sections:
+        s.content = replace_anchors_with_numbers(s.content, number_map)
+    # 参考文献必须与引用顺序一致,不能沿用 papers 原始顺序,否则编号错位
+    by_id = {p.lit_id: p for p in papers}
+    cited_papers = [by_id[cid] for cid in cited_ids if cid in by_id]
+    return render_reference_list(cited_papers), number_map
+
+
+def render_reference_list(papers: list[Paper]) -> str:
+    """生成 GB/T 7714-2025 参考文献列表,按传入顺序统一编号 [N]。
+
+    - papers 顺序即引用顺序(由 collect_cited_ids 保证去重与保序);
+    - CNKI 使用 raw_citation,OpenAlex/PubMed 使用 citeproc 渲染条目;
+    - 编号由本函数统一分配,不再依赖 citeproc 单条渲染(否则每条都是 [1])。
+    """
+    lines: list[str] = []
+    for idx, p in enumerate(papers, start=1):
+        lines.append(f"[{idx}] {_format_one_gbt(p)}")
     return "\n".join(lines)
+
+
+
+
+

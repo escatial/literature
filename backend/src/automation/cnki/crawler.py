@@ -746,9 +746,10 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
 def parse_list(html: str):
     tree = etree.HTML(html)
     items = []
-    for td in tree.xpath('//td[@class="name"]'):
-        a = td.xpath(
-            './/a[contains(concat(" ", normalize-space(@class), " "), " fz14 ")]'
+    for tr in tree.xpath('//tr[td[@class="name"]]'):
+        # 1) 标题链接(原来就有的)
+        a = tr.xpath(
+            './/td[@class="name"]//a[contains(concat(" ", normalize-space(@class), " "), " fz14 ")]'
         )
         if not a:
             continue
@@ -756,7 +757,17 @@ def parse_list(html: str):
         href = a[0].get("href", "")
         if href.startswith("/"):
             href = CONFIG["endpoints"]["base"] + href
-        items.append({"title": title, "url": href})
+        # 2) GB/T 7714-2025 引文(同行的 td.quote 单元)
+        #    列表页本身就给了,无需再进详情页;格式如: $[1]作者.题名[J].刊名,年,(期):页码.DOI:...
+        quote_cells = tr.xpath('.//td[@class="quote"]')
+        quote_text = quote_cells[0].xpath("string(.)").strip() if quote_cells else ""
+        # 剥掉开头的 $[N] 序号(渲染时不需要)
+        if quote_text.startswith("$"):
+            quote_text = quote_text.lstrip("$")
+            # 去掉前导的 [N] 形式(知网的样式可能是 $[1]xxx 或 $[12] xxx)
+            import re as _re_quote
+            quote_text = _re_quote.sub(r'^\s*\[\d+\]\s*', '', quote_text).strip()
+        items.append({"title": title, "url": href, "quote_text": quote_text})
     return items
 
 
@@ -909,7 +920,115 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
     return all_items[:max_count]
 
 
+class CnkiGBTCitationError(Exception):
+    """GB/T 7714 引文获取失败的基类。"""
+    pass
+
+
+class CnkiGBTCitationMissing(CnkiGBTCitationError):
+    """单篇 paper 极个别情况(详情页缺少 hidden input / 导出 API 无 GB/T 条目)。
+
+    含义:不是 API 故障,是这一篇抓不到 GB/T 7714。
+    adapter 应该跳过这篇,不阻塞整次检索。
+    """
+    pass
+
+
+class CnkiGBTCitationAPIFailed(CnkiGBTCitationError):
+    """知网 GB/T 7714 导出 API 调用本身失败(网络/超时/限流/cookie 失效/code!=1)。
+
+    含义:整次检索应该停止,因为后续 paper 大概率也会同样失败。
+    adapter 接到后应该 raise 出去,触发 stage:error 事件给前端。
+    """
+    pass
+
+
 # ========================== 详情页元数据 ==========================
+def _extract_hidden(html: str, field: str) -> str:
+    """从详情页 HTML 抽 <input id='...' value='...'> 隐藏字段。"""
+    import re as _re_h
+    m = _re_h.search(rf'id="{_re_h.escape(field)}"[^>]*value="([^"]*)"', html)
+    if m:
+        return m.group(1)
+    m = _re_h.search(rf'value="([^"]*)"[^>]*id="{_re_h.escape(field)}"', html)
+    return m.group(1) if m else ""
+
+
+def _fetch_gbt_citation(html: str) -> str:
+    """从详情页 HTML 抽 GB/T 7714-2025 引文(server-side 路径,不依赖浏览器 JS)。
+
+    原理:知网页面里有 3 个隐藏 input:
+      #export-url  → https://kns.cnki.net/dm8/API/GetExport
+      #export-id   → paper filename(论文 id)
+      #paramdbcode → 库代码(CJFD/CAPJ 等)
+    POST 该 API,displaymode=GBTREFER 即可拿 GB/T 7714-2025 原文。
+
+    失败/异常处理:
+      - 详情页缺少 hidden input(极个别论文结构特殊)→ 抛 CnkiGBTCitationMissing
+        → adapter 跳过这 paper,继续下一篇
+      - 导出 API 本身失败(网络/超时/限流/cookie 失效/code!=1)→ 抛 CnkiGBTCitationAPIFailed
+        → adapter 停止整次检索,emit error 事件,告诉用户
+    """
+    import re as _re_gbt
+    export_url = _extract_hidden(html, "export-url")
+    export_id = _extract_hidden(html, "export-id")
+    if not (export_url and export_id):
+        # 极个别:这 paper 的详情页没有标准的 hidden input
+        raise CnkiGBTCitationMissing(
+            f"详情页缺少 GB/T 7714 导出 hidden input "
+            f"(export-url={bool(export_url)}, export-id={bool(export_id)})"
+        )
+    up_m = _re_gbt.search(r'id="uniplatform"[^>]*value="([^"]*)"', html) or _re_gbt.search(r'value="([^"]*)"[^>]*id="uniplatform"', html)
+    uniplatform = (up_m.group(1) if up_m else "") or "NZKPT"
+    data = {
+        "filename": export_id,
+        "displaymode": "GBTREFER",
+        "uniplatform": uniplatform,
+    }
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": "https://kns.cnki.net",
+        "Referer": "https://kns.cnki.net/",
+        "X-Requested-With": "XMLHttpStream",
+    }
+    try:
+        resp = session.post(export_url, data=data, headers=headers, timeout=CONFIG["http"]["timeout"])
+        resp.raise_for_status()
+    except Exception as exc:
+        raise CnkiGBTCitationAPIFailed(
+            f"知网 GB/T 7714 导出 API 请求失败 "
+            f"(url={export_url}, filename={export_id[:20]}…): {exc!r}"
+        ) from exc
+    try:
+        j = resp.json()
+    except Exception as exc:
+        raise CnkiGBTCitationAPIFailed(
+            f"知网 GB/T 7714 导出 API 返回非 JSON: {exc!r}"
+        ) from exc
+    if j.get("code") != 1 or not isinstance(j.get("data"), list):
+        raise CnkiGBTCitationAPIFailed(
+            f"知网 GB/T 7714 导出 API 拒绝请求: code={j.get('code')}, msg={j.get('msg')!r}"
+        )
+    # 解析 value,只取 GB/T 7714-2025 格式
+    parts: list[str] = []
+    for d in j["data"]:
+        if "GB/T 7714-2025" not in d.get("key", ""):
+            continue
+        for v in d.get("value", []):
+            clean = _re_gbt.sub(r"<br\s*/?>", "\n", v)
+            clean = _re_gbt.sub(r"<(?!\\s*br\\s*/?>)[^>]+>", "", clean)
+            clean = _re_gbt.sub(r"^\\s*\\$\\[\\d+\\]", "", clean).strip()
+            clean = _re_gbt.sub(r"^\\s*\\[\\d+\\]", "", clean).strip()
+            parts.append(clean)
+    if not parts:
+        # 极个别:导出 API 返回 data 但没有 GB/T 7714-2025 条目
+        raise CnkiGBTCitationMissing(
+            f"知网 GB/T 7714 导出 API 返回 data 但没有 GB/T 7714-2025 条目 "
+            f"(filename={export_id[:20]}…)"
+        )
+    return "\n".join(parts).strip()
+
+
 def fetch_abstract(detail_url: str) -> dict:
     resp = session.get(detail_url, timeout=CONFIG["http"]["timeout"])
     resp.encoding = "utf-8"
@@ -936,8 +1055,24 @@ def fetch_abstract(detail_url: str) -> dict:
         }
 
     try:
-        return _parse_detail(text, detail_url)
+        parsed = _parse_detail(text, detail_url)
     except Exception as e:
+        # 解析失败时保留页面供调试，避免每抓一篇都覆盖写盘
+        try:
+            debug_path = CONFIG["paths"]["debug_abstract_html"]
+            Path(debug_path).write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+        raise RuntimeError(f"_parse_detail 失败: {e!r}")
+
+    # GB/T 7714-2025 引文:失败时按异常类型(Missing 单篇跳过 / APIFailed 整次停)raise,
+    # 不在 try/except 块里 — 让异常直接传播到调用方(adapter)。
+    gbt = _fetch_gbt_citation(text)
+    parsed["gbt_citation"] = gbt
+    return parsed
+
+    # 下面的死代码保留以防 _fetch_gbt_citation 之外的旧 fall-back 路径(实际不会执行)
+    if False:
         # 仅解析失败时保留页面供调试，避免每抓一篇都覆盖写盘
         try:
             with open(CONFIG["paths"]["debug_abstract_html"], "w", encoding="utf-8") as f:

@@ -6,10 +6,19 @@ export interface BootstrapDeps {
 }
 
 export function bootstrapApp({ mountApp, clearPapers }: BootstrapDeps): void {
-    // 先挂载 UI，避免启动清理请求阻塞整页渲染。
-    mountApp();
-    void clearPapers().catch(() => {
-        // 后端未启动等场景直接放行，页面自行提示。
-    });
+    // 修复:必须先等 clearPapers 完成再 mount,否则 WritingPage 的 fetchAll
+    // 会在 clearPapers 之前返回(拿到旧数据)或之后返回(拿到空数据),
+    // 造成「应用启动 → 自动清空 → 组件调」三者的 race condition。
+    // 后端不可达时 2 秒超时兜底,避免卡死页面。
+    void Promise.race([
+        clearPapers(),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+    ])
+        .catch(() => {
+            // 后端未启动等场景直接放行
+        })
+        .finally(() => {
+            mountApp();
+        });
 }
 

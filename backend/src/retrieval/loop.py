@@ -164,6 +164,8 @@ class RetrievalController:
             try:
                 query = src.build_sub_query(query_string)
             except Exception as e:
+                self._emit("source_failed", source=src.name,
+                           message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式构建失败: {e}")
                 self._emit("fetching_source", source=src.name,
                            message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式构建失败,已跳过: {e}")
                 log.warning("%s 第 %s 条检索式构建失败: %s", src.name, qi + 1, e)
@@ -172,6 +174,8 @@ class RetrievalController:
                        message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式: {query_string[:60]}")
 
             empty_streak = 0
+            # 该源本轮累加入库数(paper_hit 用此展示,与前端 bar.saved 一致)
+            src_added_total = 0
             for page in range(1, self.loop_cfg["max_pages_per_source"] + 1):
                 if len(self.pool) >= self.loop_cfg["max_results_per_source"]:
                     self._emit("fetching_source", source=src.name, page=page,
@@ -183,18 +187,24 @@ class RetrievalController:
                         src, query, page, self.loop_cfg["per_page"]
                     )
                 except FutureTimeoutError:
+                    self._emit("source_failed", source=src.name, page=page,
+                               message=f"单页请求超时({PAGE_FETCH_TIMEOUT}s),已跳过该条检索式")
                     self._emit("fetching_source", source=src.name, page=page,
                                message=f"单页请求超时({PAGE_FETCH_TIMEOUT}s),已跳过该条检索式")
                     log.warning("%s 单页请求超时,已跳过第 %s 条", src.name, qi + 1)
                     break
                 except OpenAlexRateLimitError as e:
                     # 限流区别于「零结果」:明确提示用户是服务端限流
+                    self._emit("source_failed", source=src.name, page=page,
+                               message=f"{src.name} 限流(429): {e}")
                     self._emit("fetching_source", source=src.name, page=page,
                                message=f"{src.name} 限流(429): {e}")
                     log.warning("%s 限流(429): %s", src.name, e)
                     return
                 except Exception as e:
-                    # 单源翻页异常 → 警告 + 跳过该源(其他源不受影响)
+                    # 单源翻页异常 → 失败整个三库任务,不允许降级为部分成功
+                    self._emit("source_failed", source=src.name, page=page,
+                               message=f"{src.name} 翻页失败: {e}")
                     self._emit("fetching_source", source=src.name, page=page,
                                message=f"{src.name} 翻页失败,已跳过(其他源继续): {e}")
                     log.warning("%s 翻页失败: %s", src.name, e)
@@ -208,8 +218,9 @@ class RetrievalController:
                     return
                 truncated = resp.papers[:remaining] if remaining < len(resp.papers) else resp.papers
                 new_papers = self.pool.add(truncated, source=src.name)
+                src_added_total += len(new_papers)
                 self._emit("fetching_source", source=src.name, page=page,
-                           added=len(new_papers), total=len(self.pool),
+                           added=len(new_papers), total=src_added_total,
                            message=f"命中 {resp.total} 篇")
                 # 对称中文:逐条输出本次新增文献的题录
                 for np in new_papers:
@@ -225,8 +236,8 @@ class RetrievalController:
                     if np.year:
                         bib += f", {np.year}"
                     self._emit("paper_hit", source=src.name, page=page,
-                               added=1, total=len(self.pool),
-                               message=f"[命中] {len(self.pool)}/{self.loop_cfg['max_results_per_source']} | {bib}")
+                               added=1, total=src_added_total,
+                               message=f"[命中] {src_added_total}/{self.loop_cfg['max_results_per_source']} | {bib}")
                 if len(new_papers) == 0:
                     empty_streak += 1
                     if empty_streak >= self.loop_cfg["stop_on_consecutive_empty"]:

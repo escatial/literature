@@ -37,9 +37,11 @@ def replay_history(history_id: int):
     row = get_history(history_id)
     if not row:
         raise HTTPException(404, f"history {history_id} not found")
+    # history_service.get_history() 返回的是 dict(避免 ORM 实例 detached),
+    # 所以走 dict 访问,不要用 row.topic。
     task = create_task_v2(
-        topic=row.topic,
-        sources=list(row.sources or None),
+        topic=row["topic"],
+        sources=list(row.get("sources") or None),
         use_snowball=False,
     )
     return {"task_id": task.task_id, "status": task.status}

@@ -27,6 +27,7 @@ from retrieval.query_planner import plan_query_strings
 from retrieval.sources import OpenAlexSource, PubMedSource, CNKISource
 from retrieval.types import Paper
 import retrieval.history_service as history_service
+from retrieval.history_aggregator import add_english as aggregator_add_english
 import retrieval.pool_writer as pool_writer
 
 log = logging.getLogger(__name__)
@@ -238,6 +239,7 @@ def create_task_v2(
     run_inline: bool = False,
     year_start: int | None = None,
     year_end: int | None = None,
+    run_id: str | None = None,
 ) -> RetrievalTaskModel:
     """新版任务入口。
 
@@ -248,6 +250,11 @@ def create_task_v2(
 
     year_start / year_end 若提供,会覆盖 SearchIntent.filters 里的年份。
     """
+
+    selected = list(sources or ["openalex", "pubmed"])
+    if set(selected) != {"openalex", "pubmed"} or len(selected) != 2:
+        raise ValueError("英文检索必须同时包含且仅包含 OpenAlex、PubMed")
+
     task_id = str(uuid4())
     with _db_session.SessionLocal() as db:
         task = RetrievalTaskModel(
@@ -258,20 +265,20 @@ def create_task_v2(
         )
         db.add(task); db.commit(); db.refresh(task)
 
-    selected = sources or ["pubmed", "openalex"]
     if run_inline:
-        run_task_v2(task_id, selected, use_snowball)
+        run_task_v2(task_id, selected, use_snowball, run_id=run_id)
     else:
         threading.Thread(
-            target=run_task_v2, args=(task_id, selected, use_snowball), daemon=True,
+            target=run_task_v2, args=(task_id, selected, use_snowball, run_id), daemon=True,
         ).start()
     with _db_session.SessionLocal() as db:
         return db.get(RetrievalTaskModel, task_id)
 
 
 def run_task_v2(task_id: str, sources: list[str] | None = None,
-                use_snowball: bool = False) -> None:
-    """新版执行逻辑:走 plan_query_strings + Controller。"""
+                use_snowball: bool = False,
+                run_id: str | None = None) -> None:
+    """Run the v2 retrieval controller."""
     task = get_task(task_id)
     if not task or task.status in TERMINAL_STATUSES:
         return
@@ -371,6 +378,25 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
 
         pool = asyncio.run(_run_all())
 
+        required_sources = {"openalex", "pubmed"}
+        ready_sources = {source.name for source in src_objs}
+        failed_sources = {
+            event.get("source") for event in progress_events
+            if event.get("stage") == "source_failed"
+        }
+        missing_sources = required_sources - ready_sources
+        if missing_sources or failed_sources:
+            detail: list[str] = []
+            if missing_sources:
+                detail.append(f"未启动: {', '.join(sorted(missing_sources))}")
+            if failed_sources:
+                detail.append(f"检索失败: {', '.join(sorted(failed_sources))}")
+            error = "三库任务失败；" + "；".join(detail) + "。请重新开始"
+            _update(task_id, status="failed", progress=100,
+                    total_after_filter=0, papers=[], error=error)
+            _notify_task_result(task_id, False, f"任务 {task_id[:8]} {error}")
+            return
+
         # 4. 入库(按来源覆盖写,确保文献池与本次检索结果一致)
         if not pool.papers:
             _update(task_id, status="failed", progress=100,
@@ -396,15 +422,26 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
             src: write_stats.get("failed", 0)
             for src in selected if write_stats.get("failed", 0)
         }
-        # 记录历史(仅 succeeded 后)
+        # 记录历史(仅 succeeded 后)。有 run_id 走 aggregator(合并中文那一边);
+        # 没 run_id 兼容旧调用方,直接写一条历史。
         try:
-            history_service.record_history(
-                topic=task.topic,
-                sources=selected,
-                papers=pool.papers,
-                failed_sources=failed_sources,
-                task_id=task_id,
-            )
+            if run_id:
+                aggregator_add_english(
+                    run_id=run_id,
+                    topic=task.topic,
+                    papers=pool.papers,
+                    task_id=task_id,
+                    sources=selected,
+                    failed_sources=failed_sources,
+                )
+            else:
+                history_service.record_history(
+                    topic=task.topic,
+                    sources=selected,
+                    papers=pool.papers,
+                    failed_sources=failed_sources,
+                    task_id=task_id,
+                )
         except Exception as exc:
             log.warning("写入检索历史失败: %s", exc)
         _update(task_id, status="succeeded", progress=100,

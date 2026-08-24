@@ -112,6 +112,9 @@ class RetrievalHistoryModel(Base):
     failed_sources: Mapped[dict] = mapped_column(JSON, default=dict)
     papers_snapshot: Mapped[list] = mapped_column(JSON, default=list)
     task_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # 一次「启动自动检索」聚合后的 run_id;中文 + 英文两边共享同一个 run_id,
+    # 由前端启动时分配,后端在两边都完成时合并写一条检索历史。
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 

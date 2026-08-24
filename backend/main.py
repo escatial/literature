@@ -15,6 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
+# lib/ 放本地依赖(目前只有 citeproc-py,Anaconda site-packages 没写权限所以装这里)。
+LOCAL_LIB = BASE_DIR / "lib"
+if LOCAL_LIB.is_dir():
+    sys.path.insert(0, str(LOCAL_LIB))
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -27,9 +31,17 @@ def _configure_uvicorn_logging() -> None:
         "%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    access_formatter = logging.Formatter(
+    # uvicorn.access 必须用 uvicorn 自己的 AccessFormatter,而不是 logging.Formatter。
+    # AccessFormatter.formatMessage 会先从 record.args 拆出
+    # (client_addr, method, path, http_version, status_code) 注入到 record.__dict__,
+    # 再交给父类去解析 %(client_addr)s / %(request_line)s / %(status_code)s。
+    # 若直接套 logging.Formatter,父类拿不到 client_addr,会 KeyError 并反复刷屏。
+    from uvicorn.logging import AccessFormatter
+
+    access_formatter = AccessFormatter(
         '%(asctime)s %(client_addr)s - "%(request_line)s" %(status_code)s',
         datefmt="%Y-%m-%d %H:%M:%S",
+        use_colors=False,  # 写到 uvicorn.out 文件,禁用 ANSI 颜色
     )
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logger = logging.getLogger(logger_name)

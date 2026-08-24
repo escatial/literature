@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -254,6 +255,17 @@ def messages_create(
     for attempt in range(max_retries):
         try:
             client = get_client(provider=resolved.id, timeout=timeout_value)
+            # DeepSeek 等 OpenAI Compatible 平台强制要求:使用 response_format=json_object 时,
+            # system/user prompt 里必须出现字面 "json"。这里只在显式传入
+            # response_format 的场景下补一句最弱的提示,不会影响普通对话。
+            if response_format is not None:
+                rf_kind = response_format.get("type") if isinstance(response_format, dict) else None
+                if rf_kind in ("json_object", "json_schema"):
+                    system_aug = "\n\n(请以合法 JSON 格式输出,且仅输出 JSON,不要任何前后解释文字。)"
+                    if isinstance(system, str) and "json" not in system.lower():
+                        system = system + system_aug
+                    if isinstance(user, str) and "json" not in user.lower():
+                        user = user + "\n\n请用合法 JSON 格式返回结果。"
             if resolved.mode == "responses":
                 kwargs = dict(
                     model=model,
@@ -302,7 +314,36 @@ def messages_create(
 def normalize_model_output(text: str) -> str:
     """统一清洗模型输出,供一次性/流式两种调用复用。"""
     cleaned = _strip_code_fence(_strip_think(text))
+    cleaned = _unwrap_json_envelope(cleaned)
     return _strip_meta_reasoning_prefix(cleaned)
+
+
+def _unwrap_json_envelope(text: str) -> str:
+    """拆开模型在 json_object 模式下的多余 JSON 包裹。
+
+    DeepSeek 等 OpenAI Compatible 平台在使用 ``response_format={"type":
+    "json_object"}`` 时,即便提示词只要纯正文,模型有时也会把整段文字塞进
+    ``{"content": ...}`` / ``{"text": ...}`` 等键里。这里只对**整段**是合法
+    JSON object 且单一文本字段占主体(>120 字且占全文 ≥80%)的场景做拆封,
+    避免误伤正常 JSON 输出。
+    """
+    if not text:
+        return text
+    stripped = text.strip()
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        return text
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        return text
+    if not isinstance(parsed, dict) or len(parsed) != 1:
+        return text
+    only_value = next(iter(parsed.values()))
+    if not isinstance(only_value, str):
+        return text
+    if len(only_value) < 120 or len(only_value) < 0.8 * len(stripped):
+        return text
+    return only_value
 
 
 def _strip_think(text: str) -> str:

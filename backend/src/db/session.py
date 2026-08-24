@@ -120,3 +120,16 @@ def init_db() -> None:
                     "ALTER TABLE papers ADD COLUMN provenance JSON"
                 )
                 conn.commit()
+            # v6.0:统一检索历史的 run_id(前端启动时分配的 UUID,聚合中文/英文两边)
+            hist_cols = {
+                row[1] for row in conn.exec_driver_sql("PRAGMA table_info(retrieval_history)").fetchall()
+            }
+            if "run_id" not in hist_cols:
+                conn.exec_driver_sql(
+                    "ALTER TABLE retrieval_history ADD COLUMN run_id VARCHAR(36)"
+                )
+                conn.exec_driver_sql(
+                    "CREATE INDEX IF NOT EXISTS ix_retrieval_history_run_id "
+                    "ON retrieval_history (run_id)"
+                )
+                conn.commit()

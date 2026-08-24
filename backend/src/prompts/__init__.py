@@ -130,6 +130,12 @@ class PromptTemplate:
         for m in sec_re.finditer(body):
             sections[m.group(1)] = m.group(2).strip()
 
+        # 兼容旧版:某些 suite 文件第一个 ```section 块不带 id(就是 _base),
+        # 现在 _base 块里的共享规则永远不会被加载。如果出现这种情况,把它
+        # 当作 _base 处理。
+        if "" in sections and "_base" not in sections:
+            sections["_base"] = sections.pop("")
+
         # 从 _base 段提取 ```base <rule-id>``` 规则块
         base_rules: dict[str, str] = {}
         if "_base" in sections:

@@ -20,7 +20,14 @@ class ScreenResponse(BaseModel):
 
 
 @router.post("/screening/filter", response_model=ScreenResponse)
-async def screen(req: ScreenRequest):
+def screen(req: ScreenRequest):
+    """主题不符筛选。
+
+    保持同步:screen_batch 会调 LLM(数秒级),放线程里没有收益,
+    但放进 async handler 会阻塞事件循环直到 LLM 返回,期间其他请求全部卡住,
+    并且中间代理会因为长 keep-alive 静默而主动切断连接(产生 ECONNRESET)。
+    同步端点由 starlette 自动丢到外层 threadpool,与 async 互不阻塞。
+    """
     if not req.topic.strip():
         raise HTTPException(400, "topic 不能为空")
     papers = [Paper(**p) for p in req.papers]

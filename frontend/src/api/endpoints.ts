@@ -15,7 +15,7 @@ import type {
 
 export interface QueryPlanResponse {
   topic_summary: string;
-  // 3 库各自的 3 条检索式,后端按源透传,前端展示第 1 条作预览
+  // 三库各自动态生成 4～8 条检索式,后端按源透传,前端展示第 1 条作预览
   queries_cnki: string[];
   queries_openalex: string[];
   queries_pubmed: string[];
@@ -48,6 +48,8 @@ export const startCnkiFullAuto = (req: {
   target_count: number;
   max_pages?: number;
   db_type?: 'cnki';
+  /** 一次「启动自动检索」由前端分配的 UUID;中文 + 英文两边共享,后端聚合写一条历史 */
+  run_id?: string;
 }) =>
   http.post<CnkiStartResponse>('/cnki/start', req).then(r => r.data);
 

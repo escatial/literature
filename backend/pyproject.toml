@@ -17,6 +17,8 @@ dependencies = [
     "lxml>=5.0",
     "PyYAML>=6.0",
     "pycryptodome>=3.19",
+    # GB/T 7714-2015 引文渲染(citeproc-py 规则引擎 + csl-styles 官方 .csl 模板)
+    "citeproc-py>=0.10,<0.11",
 ]
 
 [project.optional-dependencies]

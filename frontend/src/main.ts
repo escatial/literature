@@ -7,11 +7,11 @@ import 'element-plus/dist/index.css';
 
 import App from './App.vue';
 import router from './router';
-import { clearPapers } from '@/api/endpoints';
 import { bootstrapApp } from '@/app/bootstrap';
 
-/** ★ 新会话语义:每次打开应用都是「新的任务」,文献池归零(不残留上次任务数据)。
- *  历史数据保存在 retrieval_history 中,可在「统一检索-最近检索记录」查看/恢复。 */
+/** 应用启动:不再自动清空文献池(避免与写作页 fetchAll 抢时序造成 race condition)。
+ *  用户若需清空,可在「文献池」页手动操作。
+ *  历史数据仍在 retrieval_history 中,可在「统一检索-最近检索记录」查看/恢复。 */
 function mountApp() {
   const app = createApp(App);
   app.use(createPinia());
@@ -22,5 +22,6 @@ function mountApp() {
 
 bootstrapApp({
   mountApp,
-  clearPapers: () => clearPapers(),
+  // 启动时不再清空,避免与 fetchAll 抢时序
+  clearPapers: () => Promise.resolve(),
 });

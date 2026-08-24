@@ -28,6 +28,16 @@ import type { RetrievalTask } from '@/api/types';
 import type { RetrievalHistory } from '@/api/endpoints';
 
 const router = useRouter();
+const REQUIRED_DATABASES = ['cnki', 'openalex', 'pubmed'] as const;
+const REQUIRED_DATABASE_LABELS = {
+  cnki: '中国知网',
+  openalex: 'OpenAlex',
+  pubmed: 'PubMed',
+} as const;
+const runStarted = ref(false);
+const runFailed = ref(false);
+const runFailureMessage = ref('');
+let autoRetryTimer: number | null = null;
 
 // 英文任务进度
 const englishTask = ref<RetrievalTask | null>(null);
@@ -35,12 +45,14 @@ let pollTimer: number | null = null;
 
 // 需求4:历史检索(最多 5 条)
 const history = ref<RetrievalHistory[]>([]);
+const historyLoadError = ref('');
 
 const refreshHistory = async () => {
   try {
+    historyLoadError.value = '';
     history.value = await listRetrievalHistory(5);
-  } catch {
-    /* 后端未启用时忽略 */
+  } catch (e: any) {
+    historyLoadError.value = `历史记录加载失败：${String(e?.message ?? e)}`;
   }
 };
 
@@ -171,11 +183,11 @@ const failureEntries = computed<Array<{ source: string; message: string }>>(() =
 const hasFailureEntries = computed(() => failureEntries.value.length > 0);
 
 const tasksFinished = computed(() => {
-  const cnkiDone = Object.values(cnkiTasks.value).every(
-    (t) => t.stage === 'done' || t.stage === 'error',
-  );
-  const enDone = !englishTask.value || ['succeeded', 'failed'].includes(englishTask.value.status || '');
-  return (Object.keys(cnkiTasks.value).length > 0 || !!englishTask.value) && cnkiDone && enDone;
+  const cnkiDone = REQUIRED_DATABASES.includes('cnki') &&
+    (ustore.cnkiTasks.cnki?.stage === 'done' || ustore.cnkiTasks.cnki?.stage === 'error');
+  const enStatus = englishTask.value?.status;
+  const enDone = Boolean(englishTask.value) && ['succeeded', 'failed'].includes(enStatus || '');
+  return runFailed.value || (cnkiDone && enDone);
 });
 
 /** 检索完成时(英文 succeeded + 中英都 done)主动刷新文献池 tab,
@@ -200,14 +212,18 @@ watch(tasksFinished, (finished: boolean) => {
   ].filter(Boolean).join(':');
   if (!key || lastHistoryRefreshKey === key) return;
   lastHistoryRefreshKey = key;
-  refreshHistory().catch(() => { /* 后端未启用时忽略 */ });
+  void refreshHistory();
+  window.setTimeout(() => void refreshHistory(), 1000);
+  window.setTimeout(() => void refreshHistory(), 3000);
 });
 
-const hasNoResults = computed(() => tasksFinished.value && totalRetrieved.value === 0);
+const hasNoResults = computed(() => tasksFinished.value && !hasTaskFailure.value && totalRetrieved.value === 0);
 const hasTaskFailure = computed(
   () =>
-    Object.values(cnkiTasks.value).some((t) => t.stage === 'error') ||
-    englishTask.value?.status === 'failed',
+    runFailed.value ||
+    REQUIRED_DATABASES.some((db) => db === 'cnki'
+      ? ustore.cnkiTasks.cnki?.stage === 'error'
+      : englishTask.value?.status === 'failed'),
 );
 /** 部分源失败但任务整体成功(如 OpenAlex SSL 闪断)——给一个警告栏而不是失败 alert */
 const hasTaskWarning = computed(() => {
@@ -220,12 +236,13 @@ const hasTaskWarning = computed(() => {
 });
 /** 当前任务精确错误信息(失败 / 警告 共用) */
 const taskErrorMessage = computed(() => {
+  if (runFailureMessage.value) return runFailureMessage.value;
   if (englishTask.value?.status === 'failed') {
-    return englishTask.value.error || '英文任务失败';
+    return englishTask.value.error || 'OpenAlex / PubMed 检索任务失败';
   }
   const cnkiErr = Object.values(cnkiTasks.value).find((t) => t.stage === 'error');
   if (cnkiErr) {
-    return cnkiErr.msg || cnkiErr.stage || '知网任务失败';
+    return cnkiErr.msg || cnkiErr.stage || '中国知网检索任务失败';
   }
   return '';
 });
@@ -264,6 +281,18 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
       /* noop */
     }
   });
+  es.onerror = () => {
+    runFailed.value = true;
+    runFailureMessage.value = '中国知网检索连接中断，本次三库任务失败，请重新开始';
+    ustore.appendCnkiLog(db, `[错误] ${runFailureMessage.value}`);
+    ustore.upsertCnkiTask(db, {
+      ...initial,
+      stage: 'error',
+      msg: runFailureMessage.value,
+    });
+    es.close();
+    sseSources.delete(initial.task_id);
+  };
 };
 
 // ─────────────── 三库进度条(统一结构) ───────────────
@@ -401,35 +430,56 @@ const refreshProgress = async () => {
 
 // ─────────────── 检索式展示区(第一栏) ───────────────
 const planPreview = computed(() => [
-  { key: 'cnki', name: '中国知网', tag: 'danger' as const, query: ustore.queriesCnki[0] || '', queries: ustore.queriesCnki },
-  { key: 'openalex', name: 'OpenAlex', tag: 'success' as const, query: ustore.queriesOpenalex[0] || '', queries: ustore.queriesOpenalex },
-  { key: 'pubmed', name: 'PubMed', tag: 'primary' as const, query: ustore.queriesPubmed[0] || '', queries: ustore.queriesPubmed },
+  { key: 'cnki', name: REQUIRED_DATABASE_LABELS.cnki, tag: 'danger' as const, query: ustore.queriesCnki[0] || '', queries: ustore.queriesCnki },
+  { key: 'openalex', name: REQUIRED_DATABASE_LABELS.openalex, tag: 'success' as const, query: ustore.queriesOpenalex[0] || '', queries: ustore.queriesOpenalex },
+  { key: 'pubmed', name: REQUIRED_DATABASE_LABELS.pubmed, tag: 'primary' as const, query: ustore.queriesPubmed[0] || '', queries: ustore.queriesPubmed },
 ]);
 
 // ─────────────── 检索式生成 ───────────────
 const generatePlan = async () => {
   const topic = ustore.topic.trim();
-  if (!topic) {
-    ElMessage.warning('请输入研究主题');
-    return false;
-  }
+  if (!topic) return false;
+
+  ustore.setPlanning(true);
   try {
-    ustore.setPlanning(true);
-    const resp = await queryPlan(topic);
-    ustore.applyPlan({
-      topic_summary: resp.topic_summary || '',
-      queries_cnki: resp.queries_cnki || [],
-      queries_openalex: resp.queries_openalex || [],
-      queries_pubmed: resp.queries_pubmed || [],
-    });
-    ElMessage.success('已生成 3 库 × 3 条检索式');
-    return true;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const resp = await queryPlan(topic);
+        ustore.applyPlan({
+          topic_summary: resp.topic_summary || '',
+          queries_cnki: resp.queries_cnki || [],
+          queries_openalex: resp.queries_openalex || [],
+          queries_pubmed: resp.queries_pubmed || [],
+        });
+        return true;
+      } catch (e) {
+        lastError = e;
+        if (attempt < 2) {
+          ustore.appendCnkiLog('cnki', `[编排] 检索式生成失败，${attempt + 1} 秒后自动重试…`);
+          await new Promise((resolve) => window.setTimeout(resolve, (attempt + 1) * 1000));
+        }
+      }
+    }
+    throw lastError ?? new Error('检索式生成失败');
   } catch (e) {
-    ElMessage.error('生成检索式失败: ' + String(e));
+    ustore.appendCnkiLog('cnki', `[错误] 检索式自动生成失败：${String(e)}`);
     return false;
   } finally {
     ustore.setPlanning(false);
   }
+};
+
+const scheduleAutoRetry = (topic: string) => {
+  if (autoRetryTimer !== null) return;
+  autoRetryTimer = window.setTimeout(async () => {
+    autoRetryTimer = null;
+    if (ustore.topic.trim() !== topic) return;
+    if (isRunning.value) await stopAll();
+    runFailed.value = false;
+    runFailureMessage.value = '';
+    void startUnifiedRetrieval();
+  }, 5000);
 };
 
 // ─────────────── 一键全自动 ───────────────
@@ -439,29 +489,24 @@ const startUnifiedRetrieval = async () => {
     ElMessage.warning('请输入研究主题');
     return;
   }
-  // 自动勾选 pubmed + openalex
-  const current = ustore.selectedDbs;
-  const needEn = ['pubmed', 'openalex'].filter((d) => !current.includes(d));
-  if (needEn.length) ustore.setDbs([...current, ...needEn]);
+  runStarted.value = true;
+  runFailed.value = false;
+  runFailureMessage.value = '';
+  // 每次点击都从三库全量重启，不能沿用上次只选部分数据源的旧状态。
+  ustore.setDbs([...REQUIRED_DATABASES]);
+  ustore.clearCnkiTasks();
+  ustore.initEnTasks('');
+  englishTask.value = null;
 
-  // ★ 立即在 store 里占位一个 cnki 任务行 + 一条启动日志,
-  //   保证用户点下按钮的那一瞬间就能看到「检索过程」面板出现,
-  //   不需要等后端 HTTP 返回。
-  const cnkiSelected = ustore.selectedDbs.includes('cnki');
-  if (cnkiSelected) {
-    ustore.initCnkiTask('cnki', topic);
-    ustore.appendCnkiLog('cnki', '[检索式] 正在根据主题生成中英文概念组和知网专业检索式…');
-  }
-  const englishSelected = ustore.selectedDbs.includes('pubmed') || ustore.selectedDbs.includes('openalex');
+  const cnkiSelected = true;
+  const englishSelected = true;
+  ustore.initCnkiTask('cnki', topic);
+  ustore.appendCnkiLog('cnki', '[检索式] 正在根据主题生成中英文概念组和知网专业检索式…');
 
   const planReady = await generatePlan();
   if (!planReady || !ustore.queriesCnki.length || !ustore.queriesOpenalex.length || !ustore.queriesPubmed.length) {
-    if (cnkiSelected) {
-      ustore.appendCnkiLog('cnki', '[错误] 检索式生成失败，已停止检索');
-      ustore.upsertCnkiTask('cnki', {
-        task_id: '', db_type: 'cnki' as const, stage: 'error',
-      });
-    }
+    ustore.appendCnkiLog('cnki', '[编排] 三库检索式未完整生成，系统将自动重新规划，不需要用户操作');
+    scheduleAutoRetry(topic);
     return;
   }
   if (cnkiSelected) {
@@ -479,6 +524,12 @@ const startUnifiedRetrieval = async () => {
 
     ElMessage.info('启动自动检索(知网 v4.0 + 英文 PubMed/OpenAlex)…');
 
+    // 本次「启动自动检索」的 runId:中文 + 英文两边共享,后端 aggregator 用它合并写一条历史
+    const runId = (typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : 'run-' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+    ustore.setRunId(runId);
+
     const startCnkiTask = async () => {
       if (!cnkiSelected) return;
       try {
@@ -489,6 +540,7 @@ const startUnifiedRetrieval = async () => {
           target_count: ustore.autoTarget,
           max_pages: ustore.autoMaxPages,
           db_type: 'cnki',
+          run_id: runId,
         });
         ustore.appendCnkiLog('cnki', `[本地] 后端已分配任务 ${resp.task_id.slice(0, 8)}…,正在建立 SSE 订阅`);
         const initial = { task_id: resp.task_id, db_type: 'cnki' as const, stage: 'starting' };
@@ -496,10 +548,13 @@ const startUnifiedRetrieval = async () => {
         subscribeCnki('cnki', initial);
       } catch (e: any) {
         const msg = String(e?.message ?? e);
+        runFailed.value = true;
+        runFailureMessage.value = `中国知网未能启动，系统将在 5 秒后自动重试：${msg}`;
         ustore.appendCnkiLog('cnki', `[错误] 调用 /api/cnki/start 失败: ${msg}`);
         ustore.upsertCnkiTask('cnki', {
-          task_id: '', db_type: 'cnki' as const, stage: 'error',
+          task_id: '', db_type: 'cnki' as const, stage: 'error', msg: runFailureMessage.value,
         });
+        scheduleAutoRetry(topic);
       }
     };
 
@@ -512,11 +567,12 @@ const startUnifiedRetrieval = async () => {
           limit: ustore.autoTarget,
           use_rerank: false,
           use_snowball: false, // 默认不开启雪球(引文回溯),避免大量无关引文混入池
-          sources: ['pubmed', 'openalex'].filter((d) => ustore.selectedDbs.includes(d)),
+          sources: ['openalex', 'pubmed'],
+          run_id: runId,
         });
         ustore.englishTaskId = resp.task_id || '';
         ustore.initEnTasks(resp.task_id);
-        const enDbs = ['pubmed', 'openalex'].filter((d) => ustore.selectedDbs.includes(d));
+        const enDbs = ['openalex', 'pubmed'];
         for (const d of enDbs) {
           ustore.appendEnLog(d as 'openalex' | 'pubmed', '[本地] 已点击「启动自动检索」,等待后端响应…');
         }
@@ -526,14 +582,20 @@ const startUnifiedRetrieval = async () => {
           ustore.ingestEnEvents(t.task_id, t.events);
         }
       } catch (e: any) {
-        ElMessage.error(`英文检索任务启动失败: ${String(e?.message ?? e)}`);
+        const msg = String(e?.message ?? e);
+        runFailed.value = true;
+        runFailureMessage.value = `OpenAlex / PubMed 未能同时启动，系统将在 5 秒后自动重试：${msg}`;
+        ElMessage.warning(runFailureMessage.value);
+        scheduleAutoRetry(topic);
       }
     };
 
     await Promise.allSettled([startCnkiTask(), startEnglishTask()]);
     startProgressPolling();
   } catch (e: any) {
-    ElMessage.error('启动失败: ' + String(e?.message ?? e));
+    const msg = String(e?.message ?? e);
+    ustore.appendCnkiLog('cnki', `[错误] 三库任务启动异常，系统将在 5 秒后自动重试: ${msg}`);
+    scheduleAutoRetry(topic);
   }
 };
 
@@ -574,6 +636,10 @@ const stopAll = async () => {
 };
 
 onMounted(async () => {
+  // Pinia store 会从 localStorage 恢复任务;同步到本页内存状态,确保刷新后仍显示完成汇总。
+  runStarted.value = Boolean(
+    ustore.englishTaskId || Object.keys(ustore.cnkiTasks).length,
+  );
   await refreshHistory();
   // 恢复英文任务进度
   if (ustore.englishTaskId) {
@@ -613,10 +679,21 @@ onBeforeUnmount(() => {
         placeholder="研究主题,如:无人机协同配送应急物资"
         style="flex: 1; min-width: 320px"
         clearable
-        @keyup.enter="startUnifiedRetrieval"
+        :disabled="isRunning"
       />
-      <el-button type="primary" :loading="isRunning" :disabled="isRunning" @click="startUnifiedRetrieval">
-        启动自动检索
+      <el-tag v-if="ustore.planning" type="primary" effect="plain">
+        Agent 正在自动生成三库检索式…
+      </el-tag>
+      <el-tag v-else-if="isRunning" type="success" effect="plain">
+        Agent 正在自动检索
+      </el-tag>
+      <el-button
+        type="primary"
+        :loading="ustore.planning"
+        :disabled="isRunning || !topicInput.trim()"
+        @click="startUnifiedRetrieval"
+      >
+        {{ '立即启动' }}
       </el-button>
       <el-button type="danger" plain :loading="stopping" :disabled="!isRunning" @click="stopAll">
         停止
@@ -694,41 +771,23 @@ onBeforeUnmount(() => {
     </el-card>
   </template>
 
-  <!-- 完成态(需求1:总数 / 成功导入数 / 异常条目) -->
-  <el-empty v-if="hasNoResults" description="未检索到有效文献,可调整主题或放宽检索式" />
+  <el-card v-if="hasNoResults" shadow="never" style="margin-top: 16px">
+    <template #header><span>本次检索结果汇总</span></template>
+    <el-empty description="未检索到有效文献,可调整主题或放宽检索式" :image-size="70" />
+  </el-card>
   <el-card v-else-if="tasksFinished" shadow="never" style="margin-top: 16px">
     <template #header>
       <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
-        <el-tag :type="hasTaskFailure ? 'danger' : hasFailureEntries ? 'warning' : 'success'" size="default">
+        <el-tag :type="hasTaskFailure ? 'danger' : hasFailureEntries ? 'warning' : 'success'">
           {{ hasTaskFailure ? '任务失败' : hasFailureEntries ? '部分异常' : '已完成' }}
         </el-tag>
         <span style="font-weight: 500">本次检索结果汇总</span>
       </div>
     </template>
     <el-row :gutter="16">
-      <el-col :span="8">
-        <div class="metric">
-          <div class="metric-label">检索总数量</div>
-          <div class="metric-value">{{ totalRetrieved }}</div>
-          <div class="metric-sub">篇</div>
-        </div>
-      </el-col>
-      <el-col :span="8">
-        <div class="metric">
-          <div class="metric-label">成功导入文献池</div>
-          <div class="metric-value metric-success">{{ importedSuccess }}</div>
-          <div class="metric-sub">篇</div>
-        </div>
-      </el-col>
-      <el-col :span="8">
-        <div class="metric">
-          <div class="metric-label">异常条目</div>
-          <div class="metric-value" :class="hasFailureEntries ? 'metric-danger' : 'metric-muted'">
-            {{ failureEntries.length }}
-          </div>
-          <div class="metric-sub">条</div>
-        </div>
-      </el-col>
+      <el-col :span="8"><div class="metric"><div class="metric-label">检索总数量</div><div class="metric-value">{{ totalRetrieved }}</div><div class="metric-sub">篇</div></div></el-col>
+      <el-col :span="8"><div class="metric"><div class="metric-label">成功导入文献池</div><div class="metric-value metric-success">{{ importedSuccess }}</div><div class="metric-sub">篇</div></div></el-col>
+      <el-col :span="8"><div class="metric"><div class="metric-label">异常条目</div><div class="metric-value" :class="hasFailureEntries ? 'metric-danger' : 'metric-muted'">{{ failureEntries.length }}</div><div class="metric-sub">条</div></div></el-col>
     </el-row>
     <el-collapse v-if="hasFailureEntries" style="margin-top: 12px">
       <el-collapse-item title="查看异常明细" name="fail-detail">
@@ -738,44 +797,34 @@ onBeforeUnmount(() => {
         </el-table>
       </el-collapse-item>
     </el-collapse>
-    <el-alert
-      v-if="hasTaskFailure"
-      type="error"
-      :closable="false"
-      show-icon
-      style="margin-top: 12px"
-      :title="taskErrorMessage || '任务失败'"
-    />
-    <el-alert
-      v-else-if="hasTaskWarning"
-      type="warning"
-      :closable="false"
-      show-icon
-      style="margin-top: 12px"
-      :title="`部分源异常,已自动忽略:${taskWarningMessage}`"
-    />
+    <el-alert v-if="hasTaskFailure" type="error" :closable="false" show-icon style="margin-top: 12px" :title="taskErrorMessage || '任务失败'" />
+    <el-alert v-else-if="hasTaskWarning" type="warning" :closable="false" show-icon style="margin-top: 12px" :title="`部分源异常,已自动忽略:${taskWarningMessage}`" />
   </el-card>
 
-  <!-- 需求4:最近 5 条历史检索 -->
-  <el-card v-if="history.length" shadow="never" style="margin-top: 16px">
+  <el-card shadow="never" style="margin-top: 16px">
     <template #header>
       <div style="display: flex; justify-content: space-between; align-items: center">
-        <span>最近检索记录({{ history.length }} 条)</span>
+        <span>最近检索记录（{{ history.length }} 条）</span>
         <el-button size="small" link @click="refreshHistory">刷新</el-button>
       </div>
     </template>
-    <el-table :data="history" stripe size="small">
+    <el-alert
+      v-if="historyLoadError"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="historyLoadError"
+    />
+    <el-empty
+      v-else-if="!history.length"
+      description="暂无已完成的三库检索记录"
+      :image-size="70"
+    />
+    <el-table v-else :data="history" stripe size="small">
       <el-table-column label="检索时间" width="180">
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </el-table-column>
-      <el-table-column label="检索关键词" min-width="240">
-        <template #default="{ row }">
-          <div style="font-weight: 500">{{ row.topic }}</div>
-          <div style="color: #909399; font-size: 12px">
-            数据源:{{ (row.sources || []).join(', ') || '—' }}
-          </div>
-        </template>
-      </el-table-column>
+      <el-table-column label="检索关键词" min-width="240" prop="topic" />
       <el-table-column label="文献总数" width="100" prop="total_count" />
       <el-table-column label="异常源" width="180">
         <template #default="{ row }">
@@ -793,14 +842,7 @@ onBeforeUnmount(() => {
       </el-table-column>
       <el-table-column label="操作" width="140">
         <template #default="{ row }">
-          <el-button
-            size="small"
-            type="primary"
-            link
-            @click="viewHistory(row)"
-          >
-            查看
-          </el-button>
+          <el-button size="small" type="primary" link @click="viewHistory(row)">查看</el-button>
           <el-button
             size="small"
             type="danger"
@@ -808,13 +850,12 @@ onBeforeUnmount(() => {
             :loading="deletingId === row.id"
             :disabled="deletingId !== null"
             @click="removeHistory(row)"
-          >
-            删除
-          </el-button>
+          >删除</el-button>
         </template>
       </el-table-column>
     </el-table>
   </el-card>
+
 </template>
 
 <style scoped>

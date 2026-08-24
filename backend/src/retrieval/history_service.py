@@ -49,6 +49,7 @@ def record_history(
     papers: list[Paper],
     failed_sources: dict[str, int] | None = None,
     task_id: str | None = None,
+    run_id: str | None = None,
     keep: int = _HISTORY_KEEP,
 ) -> dict:
     """写入一条检索历史,并裁剪到最近 keep 条。
@@ -65,6 +66,7 @@ def record_history(
             failed_sources=dict(failed_sources or {}),
             papers_snapshot=snapshot,
             task_id=task_id,
+            run_id=run_id,
         )
         db.add(row)
         db.commit()
@@ -77,6 +79,7 @@ def record_history(
             "failed_sources": dict(row.failed_sources or {}),
             "papers_snapshot": list(row.papers_snapshot or []),
             "task_id": row.task_id,
+            "run_id": row.run_id,
             "created_at": _iso_utc(row.created_at),
         }
         _trim(db, keep=keep)
@@ -114,6 +117,7 @@ def list_recent(limit: int = _HISTORY_KEEP) -> list[dict]:
                 "failed_sources": dict(r.failed_sources or {}),
                 "papers_snapshot": list(r.papers_snapshot or []),
                 "task_id": r.task_id,
+                "run_id": r.run_id,
                 "created_at": _iso_utc(r.created_at),
             }
             for r in rows
@@ -133,6 +137,7 @@ def get_history(history_id: int) -> dict | None:
             "failed_sources": dict(r.failed_sources or {}),
             "papers_snapshot": list(r.papers_snapshot or []),
             "task_id": r.task_id,
+            "run_id": r.run_id,
             "created_at": _iso_utc(r.created_at),
         }
     return None

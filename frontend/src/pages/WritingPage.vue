@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { storeToRefs } from 'pinia';
 import {
   ElAlert,
   ElButton,
   ElCard,
-  ElCheckbox,
   ElDivider,
   ElEmpty,
   ElMessage,
@@ -14,32 +14,23 @@ import {
 import { useTopicStore } from '@/stores/topic';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { usePapersStore } from '@/stores/papers';
-import { saveReview } from '@/api/endpoints';
-import { generateWritingStream, type StreamState } from '@/api/streaming';
+import { useWritingStore } from '@/stores/writing';
 import type { Paper } from '@/api/types';
 
 const topicStore = useTopicStore();
 const ustore = useUnifiedRetrievalStore();
 const papersStore = usePapersStore();
+const writingStore = useWritingStore();
 
 const form = reactive({
   mode: 'theme' as const,
-  doScreening: true,
 });
 
-const running = ref(false);
-const stream = ref<StreamState>({
-  phase: 'idle',
-  sections: [],
-  groups: [],
-  referenceList: '',
-  screenedOutIds: [],
-  droppedCitations: [],
-  progress: null,
-  currentSection: null,
-  detail: null,
-  error: null,
-});
+// 写作状态全局持有:切换 tab 不中断任务、不丢进度
+const { stream, running, topic, hasProgress } = storeToRefs(writingStore);
+
+// 组件挂载时尝试恢复快照(刷新页面或上次崩溃也能恢复进度)
+writingStore.restore();
 
 const allPapers = ref<Paper[]>([]);
 const loadingPapers = ref(false);
@@ -103,41 +94,16 @@ const start = async () => {
     ElMessage.error('文献池为空,请先添加文献');
     return;
   }
-  running.value = true;
-  stream.value = {
-    phase: 'idle',
-    sections: [],
-    groups: [],
-    referenceList: '',
-    screenedOutIds: [],
-    droppedCitations: [],
-    progress: null,
-    currentSection: null,
-    detail: null,
-    error: null,
-  };
-  try {
-    const finalResp = await generateWritingStream(
-      {
-        topic: topicInput.value.trim(),
-        papers: allPapers.value,
-        classify_mode: form.mode,
-        do_screening: form.doScreening,
-      },
-      (s) => { stream.value = s; },
-    );
-    await saveReview(finalResp);
-  } catch (e: any) {
-    stream.value = {
-      ...stream.value,
-      phase: 'error',
-      detail: e.message ?? String(e),
-      error: e.message ?? String(e),
-    };
-  } finally {
-    running.value = false;
-  }
+  // 状态与请求生命周期都在全局 store:切换 tab 不中断、不重复发起
+  await writingStore.start({
+    topic: topicInput.value.trim(),
+    papers: allPapers.value,
+    classify_mode: form.mode,
+    do_screening: true,
+  });
 };
+
+const stop = () => writingStore.stop();
 
 const downloadMd = () => {
   const lines: string[] = [];
@@ -158,6 +124,30 @@ const downloadMd = () => {
 
 <template>
   <div>
+    <!-- 后台运行提示:切 tab 写作不停,在顶部持续可见 -->
+    <el-alert
+      v-if="running"
+      type="success"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      :title="`后台继续生成中 · 主题《${topic ?? ''}》`"
+      :description="phaseLabel + (stream.currentSection?.title ? ' · 当前章节:' + stream.currentSection.title : '') + (stream.currentSection?.content ? ' · 已输出 ' + stream.currentSection.content.length + ' 字' : '')"
+    />
+    <el-alert
+      v-else-if="hasProgress && stream.phase !== 'complete' && stream.phase !== 'error'"
+      type="warning"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px"
+      title="检测到未完成的写作进度"
+      description="上次生成意外中断。可点下方 清理进度 按钮清空。"
+    >
+      <template #default>
+        <el-button size="small" type="primary" @click="writingStore.clearProgress()">清理进度</el-button>
+      </template>
+    </el-alert>
+
     <el-card>
       <template #header>综述写作</template>
       <div style="margin-bottom: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px">
@@ -173,11 +163,17 @@ const downloadMd = () => {
         <span style="color: #606266">文献池</span>
         <el-tag type="success" size="large">{{ selectedCount }} 篇</el-tag>
       </div>
-      <div style="margin-bottom: 12px">
-        <span style="margin-right: 12px; color: #606266">按研究主题动态生成章节</span>
-        <el-checkbox v-model="form.doScreening" :disabled="running" style="margin-left: 16px">
-          LLM 主题筛选
-        </el-checkbox>
+      <div style="margin-bottom: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px">
+        <span style="color: #606266">章节分类方式</span>
+        <el-radio-group v-model="form.mode" :disabled="running">
+          <el-radio-button value="locale">按国内外</el-radio-button>
+          <el-radio-button value="theme">按主题</el-radio-button>
+        </el-radio-group>
+      </div>
+      <div style="margin-bottom: 12px; color: #909399; font-size: 12px">
+        {{ form.mode === 'theme'
+          ? 'LLM 动态归纳 3-5 个并列研究主题,每个主题写一节'
+          : '按中文/外文两节分述,国内一节(知网)+ 国外一节(OpenAlex/PubMed)' }}
       </div>
       <el-button
         type="primary"
@@ -187,6 +183,9 @@ const downloadMd = () => {
         @click="start"
       >
         {{ running ? '生成中...' : '开始生成' }}
+      </el-button>
+      <el-button v-if="running" type="danger" size="large" plain @click="stop">
+        停止生成
       </el-button>
 
       <div v-if="running || stream.phase !== 'idle'" style="margin-top: 16px">

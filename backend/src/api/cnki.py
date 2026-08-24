@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 import db.session as _db_session
 from db.models import PaperModel
-from retrieval.history_service import record_history
+from retrieval.history_aggregator import add_cnki as aggregator_add_cnki
 from retrieval.types import Paper, Source
 from src.automation.cnki_adapter import run_cnki_full_auto
 
@@ -82,10 +82,12 @@ def stop_cnki_tasks(task_ids: list[str] | None = None) -> list[str]:
 class CnkiStartRequest(BaseModel):
     topic: str = Field(..., min_length=1)
     expert_query: str = Field(..., min_length=1)
-    expert_queries: list[str] = Field(..., min_length=1, max_length=5)
+    expert_queries: list[str] = Field(..., min_length=4, max_length=8)
     target_count: int = Field(300, ge=1, le=500)
     max_pages: int = Field(10, ge=1, le=50)
     db_type: str = Field("cnki", pattern="^cnki$")
+    # 一次「启动自动检索」由前端分配的 UUID;中文 + 英文两边共享,聚合写一条历史。
+    run_id: str | None = None
 
 
 class CnkiStartResponse(BaseModel):
@@ -108,6 +110,8 @@ async def start_cnki(
 
     X-Test-Sync header 仅供单元测试使用:为 "1" 时同步执行,避免 TestClient hang。
     """
+    if not req.run_id:
+        raise HTTPException(status_code=422, detail="三库统一检索必须携带 run_id，不能单独运行中国知网")
     task_id = uuid4().hex
     queue: asyncio.Queue = asyncio.Queue()
     _task_queues[task_id] = queue
@@ -127,16 +131,29 @@ async def start_cnki(
                 stop_event=stop_ev,
             )
             if result.get("status") == "succeeded":
-                try:
-                    record_history(
-                        topic=req.topic,
-                        sources=[req.db_type],
-                        papers=_cnki_papers_from_pool(),
-                        failed_sources={},
-                        task_id=task_id,
-                    )
-                except Exception as exc:
-                    log.warning("写入知网检索历史失败: %s", exc)
+                # 走 aggregator:有 run_id 就走聚合,没 run_id 兼容旧调用方直接写一条
+                if req.run_id:
+                    try:
+                        aggregator_add_cnki(
+                            run_id=req.run_id,
+                            topic=req.topic,
+                            papers=_cnki_papers_from_pool(),
+                            task_id=task_id,
+                        )
+                    except Exception as exc:
+                        log.warning("aggregator(知网)写入失败: %s", exc)
+                else:
+                    try:
+                        from retrieval.history_service import record_history
+                        record_history(
+                            topic=req.topic,
+                            sources=[req.db_type],
+                            papers=_cnki_papers_from_pool(),
+                            failed_sources={},
+                            task_id=task_id,
+                        )
+                    except Exception as exc:
+                        log.warning("写入知网检索历史失败: %s", exc)
             _task_results[task_id] = result
             return result
         finally:

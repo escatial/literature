@@ -46,6 +46,8 @@ export interface RetrievalTaskCreate {
   /** 雪球扩展(引文回溯)独立开关;默认关闭 */
   use_snowball?: boolean;
   sources?: string[];
+  /** 一次「启动自动检索」由前端分配的 UUID;中文 + 英文两边共享,后端聚合写一条历史 */
+  run_id?: string;
 }
 
 export interface RetrievalTaskCreated {
