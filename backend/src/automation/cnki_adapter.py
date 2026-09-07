@@ -542,6 +542,15 @@ def _dump_plan_queries(queries: list[str], topic: str) -> None:
         pass  # 取证落盘失败不影响主流程
 
 
+class _CnkiStopped(Exception):
+    """用户手动停止:各循环入口(check_stopped/冷却分段)抛出,尽快退出。
+
+    v9.8 从 run_cnki_full_auto 闭包提升到模块级 —— 自愈重启调度器
+    (_run_with_auto_restart)是模块级函数,闭包类会 NameError;单类也修正了
+    每次调用创建一个新异常类、跨调用 isinstance 不可比的隐患。
+    """
+
+
 def _sleep_in_chunks(sleep_fn, check_stopped, total: float, chunk: float = 5.0) -> None:
     """冷却期分段睡眠:每段之间检查停止请求,保证面板「停止」秒级响应。
 
@@ -559,6 +568,56 @@ def _sleep_in_chunks(sleep_fn, check_stopped, total: float, chunk: float = 5.0) 
 # (60/120/300,累计最多 8 分钟),比单页退避(15/45/120)更彻底地跨过风控窗口
 _RESCUE_ROUNDS = 3
 _RESCUE_COOLDOWNS = (60.0, 120.0, 300.0)
+
+# v9.8 agent 自愈重启:检索整体失败(会话风控/网络故障等环境性原因)后,
+# 冷却期间重置会话状态,自动重启整个检索 —— 与补漏(式子级,跑在同一会话里)
+# 的本质区别:整体重启会更换会话凭证,针对的是会话/网络级的风控封锁。
+# 非环境性故障(知网改版/超级鹰题分耗尽/用户停止)重启无意义,立即上抛。
+_AUTO_RESTART_ROUNDS = 2
+_AUTO_RESTART_COOLDOWNS = (120.0, 300.0)
+
+
+def _run_with_auto_restart(
+    inner,
+    *,
+    rounds: int = _AUTO_RESTART_ROUNDS,
+    cooldowns: tuple[float, ...] = _AUTO_RESTART_COOLDOWNS,
+    emit_fn,
+    sleep_fn,
+    check_stopped,
+    before_restart,
+):
+    """agent 自愈重启循环:检索整体失败 → 冷却 → 重置会话 → 自动重启。
+
+    - inner(): 无参回调,跑一次完整检索(列表+详情+入库),幂等可重入;
+    - rounds: 额外重启次数(总尝试 = 1 + rounds);
+    - 冷却分段睡眠,面板「停止」秒级响应(与补漏轮同一机制);
+    - before_restart(attempt): 重启前的会话重置钩子(清零空壳连击/换 cookie);
+    - 环境性故障(会话风控/网络/限流)重启,闸口故障(改版/题分耗尽/用户停止)
+      立即上抛;重启耗尽后抛最后一次异常,由外层以 error 终态如实上报。
+    纯调度逻辑:inner/emit/sleep/stop 钩子均可注入,离线确定性单测。
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return inner()
+        except _CnkiStopped:
+            raise  # 用户停止:任何重启都无意义
+        except (crawler.CnkiRevisionError, crawler.CnkiCaptchaBalanceError,
+                crawler.CnkiCookieError):
+            raise  # 闸口故障:需要人工介入(反馈开发者/充值/检查网络),重启只会重复失败
+        except Exception as exc:
+            if attempt > rounds:
+                raise  # 重启预算耗尽:如实上抛最后一次异常
+            cooldown = cooldowns[min(attempt - 1, len(cooldowns) - 1)]
+            emit_fn(
+                f"[自愈] 第 {attempt} 次尝试失败({exc}),"
+                f"冷却 {cooldown:.0f}s 后自动重启检索"
+                f"(第 {attempt + 1}/{rounds + 1} 次,可随时停止)"
+            )
+            _sleep_in_chunks(sleep_fn, check_stopped, cooldown)
+            before_restart(attempt)
 
 
 def _run_with_rescue(
@@ -582,8 +641,8 @@ def _run_with_rescue(
 
     fetcher(query) -> list[dict]:单式抓取+清洗(剔学位论文/降级守门由闭包负责);
       - CnkiServerBusyError/一般 Exception → 本式失败,进补漏队列(不丢单)
-      - 闸口故障(CnkiCookieError/CnkiCaptchaBalanceError/CnkiRevisionError)
-        → 自动处置已穷尽,原样上抛交外层 error 终态处置
+      - 闸口故障(CnkiCookieError/CnkiCaptchaBalanceError/CnkiRevisionError/
+        CnkiSessionBlockedError)→ 自动处置已穷尽,原样上抛交外层 error 终态处置
     返回 (merged: 去重条目表(键=_dedupe_key(url)), missing: 补漏后仍失败的式子)。
     纯调度逻辑:sleep_fn/check_stopped/fetcher 均可注入,可离线确定性单测。
     """
@@ -624,7 +683,7 @@ def _run_with_rescue(
             emit_fn("[检索] 数据源繁忙，休息 30s 后继续")
             sleep_fn(30.0)
         except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
-                crawler.CnkiRevisionError):
+                crawler.CnkiRevisionError, crawler.CnkiSessionBlockedError):
             raise  # 闸口故障:自动处置已穷尽,上抛交外层以 error 终态推前端横幅
         except Exception as exc:
             # 偶发异常(网络抖动等)同样不丢单:进补漏队列
@@ -662,7 +721,7 @@ def _run_with_rescue(
                 still_missing.append(query)
                 emit_fn("[补全] 数据源仍繁忙，该检索式留在补全队列")
             except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
-                    crawler.CnkiRevisionError):
+                    crawler.CnkiRevisionError, crawler.CnkiSessionBlockedError):
                 raise
             except Exception as exc:
                 still_missing.append(query)
@@ -707,9 +766,8 @@ async def run_cnki_full_auto(
         loop.call_soon_threadsafe(queue.put_nowait, evt)
 
     # 用户手动停止:置位后各循环入口抛 _CnkiStopped,尽快退出
-    class _CnkiStopped(Exception):
-        pass
-
+    # (类本体已提升到模块级:v9.8 自愈重启调度器是模块级函数,
+    #  闭包类会造成 NameError;单类也修正了每次调用创建新异常类的隐患)
     def _check_stopped():
         # v9.6:同时检查 registry 的取消事件——调用方不传 stop_event 时
         # (retrieval/sources/cnki.py、writing/orchestrator.py),面板
@@ -762,6 +820,8 @@ async def run_cnki_full_auto(
         max_count = max_pages * page_size
         emit(stage="plan_generated", queries=queries, db=db_type, max_count=max_count)
     emit(stage="search_submitted", db=db_type)
+    # v9.7:新任务清零会话级空壳连击 —— 上一任务的风控状态不带入本任务
+    crawler.reset_session_block_streak()
     # 把本次预计抓取上限打到日志面板,避免翻页数与用户预期对不上
     if max_count is None:
         emit(stage="log", msg=f"[计划] 共 {len(queries)} 条候选检索式,目标至少 {target_count} 篇,翻页上限=无", db=db_type)
@@ -773,6 +833,9 @@ async def run_cnki_full_auto(
 
         挂接爬虫的过程日志回调,把翻页/验证码/抓取进度实时推给前端 SSE;
         监控任务已在函数入口注册(Q-1 修复②),这里只推进 running 态与终态。
+        v9.8:外层 agent 自愈重启循环 —— 检索整体失败(会话风控/网络故障)
+        时冷却后重置会话自动重启;终态登记仍在 finally,保证只登记一次
+        (重启期间任务保持 running,面板可见「自愈等待/自愈重启」阶段)。
         """
         registry.mark_running(task_id, stage="预检")
         # 绑定任务线程:crawler.safe_request 的请求记账/环形日志归属本任务
@@ -780,8 +843,29 @@ async def run_cnki_full_auto(
         crawler.set_log_callback(lambda m: emit(stage="log", msg=m, db=db_type))
         outcome = "done"
         error_msg = ""
+
+        def _before_restart(attempt: int) -> None:
+            # 重启前重置会话状态:清零空壳连击 + 更换会话凭证;
+            # 配置代理时出口由代理池自动轮换,无需额外处理
+            crawler.reset_session_block_streak()
+            try:
+                crawler.refresh_cookies("自愈重启前更换会话")
+            except Exception:
+                log.warning("[cnki] 自愈重启前 cookie 续期失败,沿用当前会话")
+            progress["attempts"] = attempt + 1
+            try:
+                registry.mark_stage(task_id, "自愈重启")
+            except Exception:
+                pass
+
         try:
-            return _run_sync_inner()
+            return _run_with_auto_restart(
+                _run_sync_inner,
+                emit_fn=lambda msg: emit(stage="log", msg=msg, db=db_type),
+                sleep_fn=crawler.sleep_jitter,
+                check_stopped=_check_stopped,
+                before_restart=_before_restart,
+            )
         except _CnkiStopped as exc:
             outcome, error_msg = "stopped", str(exc)
             raise
@@ -828,9 +912,9 @@ async def run_cnki_full_auto(
                 target_count=target_count,
             )
         except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
-                crawler.CnkiRevisionError) as exc:
-            # v9 闸口故障(cookie 续期无效/超级鹰余额/知网改版):自动处置已穷尽,
-            # 直接上抛,外层以 error 终态推前端横幅
+                crawler.CnkiRevisionError, crawler.CnkiSessionBlockedError) as exc:
+            # v9 闸口故障(cookie 续期无效/超级鹰余额/知网改版/会话级风控):
+            # 自动处置已穷尽,直接上抛,外层以 error 终态推前端横幅
             log.error("[cnki] 检索命中闸口故障,停止: %s", exc)
             raise
         if missing:
@@ -1048,12 +1132,20 @@ async def run_cnki_full_auto(
 
     # 真实进度(闭包共享):异常退出时拿不到 _sync_run 内部局部变量,
     # 用它上报「失败前已入库多少篇」,前端面板不再显示误导性的 0 篇。
-    progress = {"saved": 0, "skipped": 0}
+    # attempts: 含自愈重启的总尝试次数,失败消息如实告知用户已自动重启过几轮。
+    progress = {"saved": 0, "skipped": 0, "attempts": 1}
+
+    def _failure_tail() -> str:
+        tail = f"(本次已入库 {progress['saved']} 篇"
+        if progress["attempts"] > 1:
+            tail += f",已自动重启 {progress['attempts'] - 1} 次仍失败"
+        return tail + ")"
+
     try:
         saved, skipped = await asyncio.to_thread(_sync_run)
     except _CnkiStopped as exc:
         # 用户手动停止:置位标志后循环抛错退出
-        emit(stage="error", msg=f"{exc}(本次已入库 {progress['saved']} 篇)", db=db_type)
+        emit(stage="error", msg=f"{exc}{_failure_tail()}", db=db_type)
         return {
             "status": "failed",
             "saved": progress["saved"],
@@ -1062,7 +1154,7 @@ async def run_cnki_full_auto(
         }
     except Exception as exc:
         log.exception("cnki 爬虫异常")
-        emit(stage="error", msg=f"{exc}(本次已入库 {progress['saved']} 篇)", db=db_type)
+        emit(stage="error", msg=f"{exc}{_failure_tail()}", db=db_type)
         return {
             "status": "failed",
             "saved": progress["saved"],

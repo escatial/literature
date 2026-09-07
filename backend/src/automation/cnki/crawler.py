@@ -1476,20 +1476,47 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             # 不是真零结果(正常零结果页无"请稍后重试"字样):带退避重试,
             # 仍空壳则抛错交由调用方处置 —— 继续烧完式子只会条条中招。
             throttle_hit("服务端限流空壳", heavy=True)
+            # v9.7:空壳真实原因在 value 属性里(空=真限流;参数校验/结构错误/
+            # 游标越界已在前置分支拦截),进入退避前记录,便于事后定位风控形态
+            shell_m = re.search(r'class="no-content"[^>]*value="([^"]*)"', html)
+            shell_value = (shell_m.group(1) if shell_m else "").strip()
+            zero_progress = page == 1 and not all_items
             # 插桩:空壳现场限速状态 —— 间隔偏小=典型频率风控;已抓条数多=越翻越易中招
             print(f"[诊断] 第{page}页 空壳现场: 当前请求间隔 {effective_delay():.1f}s, "
-                  f"已累计 {len(all_items)} 条, 样本见 debug_list_*busy*.html")
-            debug_log(f"[列表] 第{page}页 空壳现场诊断: 请求间隔 {effective_delay():.1f}s, 已抓 {len(all_items)} 条")
+                  f"已累计 {len(all_items)} 条, value={shell_value!r}, 样本见 debug_list_*busy*.html")
+            debug_log(f"[列表] 第{page}页 空壳现场诊断: 请求间隔 {effective_delay():.1f}s, "
+                      f"已抓 {len(all_items)} 条, value={shell_value!r}")
             for attempt, wait in enumerate(SERVER_BUSY_BACKOFF_SECONDS, start=1):
                 print(f"[列表] 第{page}页 服务端异常空壳(请稍后重试),退避 {wait:.1f}s 后重试({attempt}/{SERVER_BUSY_RETRIES})")
-                emit_log(f"[列表] 数据源暂时繁忙，正在自动重试(第 {attempt}/{SERVER_BUSY_RETRIES} 次)，已获取的数据不会丢失")
+                emit_log(f"[列表] 第{page}页 数据源暂时繁忙，正在自动重试"
+                         f"(第 {attempt}/{SERVER_BUSY_RETRIES} 次)，已获取的数据不会丢失")
                 sleep_jitter(wait)
+                # v9.7:零进度空壳时,第 2 次重试前自动更换会话凭证 ——
+                # 同一会话的完全相同请求在会话级风控下必然次次空壳;
+                # 游客态重访首页重种 KNS2COOKIE 至少更换一个因子,
+                # cookie 失效型空壳(最常见形态)就此自愈
+                if attempt == 2 and zero_progress and refresh_cookies("零进度空壳自愈"):
+                    print(f"[列表] 第{page}页 空壳未恢复,已自动更换会话凭证后重试")
+                    emit_log(f"[列表] 第{page}页 自动恢复会话后继续重试")
                 html = search_grid(query_json, page_num=page, page_size=cur_size,
                                    captcha_verification=captcha_verification,
                                    bool_search=bool_search)
                 if "请稍后重试" not in html:
                     break
             else:
+                if zero_progress:
+                    streak = _bump_session_block_streak()
+                    if streak >= 2:
+                        # v9.7 会话级熔断:连续多条式子在第 1 页即空壳且全程 0 条,
+                        # 说明会话/网络被知网整体风控 —— 退避/换式子/补漏轮
+                        # 都只会拿到同样的空壳(实测逐式烧完要 40+ 分钟)。
+                        # 立即终止并给出可操作建议,这是产品级的快速失败。
+                        raise CnkiSessionBlockedError(
+                            f"连续 {streak} 条检索式在零进度状态下被知网拒绝返回数据"
+                            f"(第{page}页空壳 value={shell_value or '(空)'}):"
+                            "当前会话或网络已被数据源风控,自动重试无法恢复。"
+                            "建议:更换网络环境或启用代理后重试;若持续出现请稍后再试"
+                        )
                 raise CnkiServerBusyError(
                     f"第{page}页连续 {SERVER_BUSY_RETRIES} 次未返回有效数据(数据源繁忙)"
                 )
@@ -1582,6 +1609,9 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                         )
                     break
         all_items.extend(items)
+        # 拿到真实数据 = 会话健康,清零会话级空壳连击
+        # (连击只在「连续多条式子零进度空壳」时熔断,中途任何成功都解除)
+        reset_session_block_streak()
         print(f"[列表] 第{page}页 抓到 {len(items)} 条，累计 {len(all_items)}")
         emit_log(f"[列表] 已获取 {len(items)} 条，累计 {len(all_items)} 条")
         if len(all_items) >= max_count:
@@ -1634,6 +1664,38 @@ class CnkiRevisionError(Exception):
     """知网页面结构改版,既有模板/接口全部失配——需人工逆向——前端横幅告知。"""
 
     code = "cnki_revision"
+
+
+class CnkiSessionBlockedError(Exception):
+    """会话/网络级风控:连续多条检索式在零进度状态下只收到服务端空壳。
+
+    与单式限流(CnkiServerBusyError)的本质区别:此时会话已被知网整体降级,
+    换式子、退避、补漏轮重试都会拿到同样的空壳——继续跑只会逐式烧完
+    3 分钟退避 × 3 轮补漏冷却(实测 40+ 分钟)后以 0 篇收场。
+    交由 adapter 立即终止任务,前端横幅给出可操作建议(换网络/代理/稍后再试)。
+    """
+
+    code = "session_blocked"
+
+
+# 会话级空壳连击:零进度(第 1 页即空壳且本式 0 条)连续命中计数。
+# 成功解析出任意一页真实数据即清零;任务启动时由 adapter 重置。
+# 列表抓取是串行的,锁只为防御未来并发化时的计数竞态。
+_session_block = {"streak": 0}
+_session_block_lock = threading.Lock()
+
+
+def reset_session_block_streak() -> None:
+    """新任务开始时清零会话级空壳连击(上一任务的风控状态不带入本任务)。"""
+    with _session_block_lock:
+        _session_block["streak"] = 0
+
+
+def _bump_session_block_streak() -> int:
+    """零进度空壳 +1 并返回当前连击数(调用方据此判定会话级熔断)。"""
+    with _session_block_lock:
+        _session_block["streak"] += 1
+        return _session_block["streak"]
 
 
 # 服务端异常空壳的退避表(秒):知网限流窗口为分钟级,短退避基本无效,
