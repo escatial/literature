@@ -1,7 +1,7 @@
 """统一检索历史 API(需求4)。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from db.schemas import RetrievalHistoryOut
 from retrieval.history_service import (
@@ -48,17 +48,27 @@ def replay_history(history_id: int):
 
 
 @router.post("/{history_id}/restore", response_model=dict)
-def restore_history(history_id: int):
+def restore_history(
+    history_id: int,
+    # v7.1:按前端隔离 ID 恢复,只清/只写当前任务的文献池
+    x_task_id: str | None = Header(None, alias="X-Task-Id"),
+):
     """把该条历史的文献快照恢复到文献池(先清空池再写入),供「查看」跳转文献池。"""
     try:
-        n = restore_to_pool(history_id)
+        n = restore_to_pool(history_id, pool_task_id=(x_task_id or "").strip() or None)
     except ValueError as e:
         raise HTTPException(404, str(e))
     return {"total": n}
 
 
 @router.delete("/{history_id}", status_code=204)
-def delete_history(history_id: int):
-    """删除一条检索历史(连同其数据库中的快照数据)。"""
-    if not delete_history_record(history_id):
+def delete_history(
+    history_id: int,
+    # v7.2:透传当前任务 ID,删除历史时把该次检索导入文献池的文献一并删干净
+    x_task_id: str | None = Header(None, alias="X-Task-Id"),
+):
+    """删除一条检索历史(连同其数据库中的快照数据与文献池中的对应文献)。"""
+    if not delete_history_record(
+        history_id, pool_task_id=(x_task_id or "").strip() or None
+    ):
         raise HTTPException(404, f"history {history_id} not found")

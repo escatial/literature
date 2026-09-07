@@ -12,11 +12,15 @@ import logging
 import re
 import threading
 import unicodedata
-from typing import Iterable
+from typing import Callable, Iterable
 
 from retrieval.types import Paper
 
 log = logging.getLogger(__name__)
+
+# 单源摘要回填上限。综述最终只引用 70-90 篇,没必要为 4900 篇逐条 efetch:
+# 每条 0.3-1s 的同步 HTTP,全量回填会让任务在「回填」阶段静默阻塞 40 分钟以上。
+DEFAULT_FILL_LIMIT = 400
 
 
 _DOI_PREFIX_RE = re.compile(r"^https?://(dx\.)?doi\.org/", re.IGNORECASE)
@@ -24,6 +28,15 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _LATEX_RE = re.compile(r"\$.*?\$", re.DOTALL)
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WS_RE = re.compile(r"\s+")
+
+
+def _matches_source(paper: Paper, source_name: str) -> bool:
+    """判断 paper 是否属于指定源。"""
+
+    source_value = getattr(paper.source, "value", paper.source)
+    if isinstance(source_value, str) and source_value:
+        return source_value == source_name
+    return paper.lit_id.startswith(f"lit_{source_name}_")
 
 
 def normalize_doi(doi: str) -> str:
@@ -130,29 +143,120 @@ class PaperPool:
         self,
         source: object,        # AcademicSource 实现
         concurrency: int = 4,
+        limit: int | None = DEFAULT_FILL_LIMIT,
+        on_progress: "Callable[[int, int], None] | None" = None,
     ) -> int:
-        """对所有 abstract 为空的 paper 调 fetch_abstract_if_missing。
-        并发数受 concurrency 控制。返回成功回填数。"""
-        missing = [p for p in self.papers if not (p.abstract and p.abstract.strip())]
-        if not missing:
+        """对缺失摘要的 paper 调 fetch_abstract_if_missing,返回成功回填数。
+
+        三个反卡死约束(修复「英文任务卡 99%」):
+        1. 只回填「属于该源」的文献,不再把 OpenAlex 的条目丢给 PubMed 重试;
+        2. fetch_abstract_if_missing 是同步阻塞 HTTP,必须 to_thread 下放线程池,
+           否则事件循环被占满,Semaphore 形同虚设、全程串行;
+        3. limit 限制单源回填上限,on_progress 逐条上报,UI 不再静默停在 99%。
+        """
+        source_name = str(getattr(source, "name", "") or "")
+        candidates = [
+            p for p in self.papers
+            if not (p.abstract and p.abstract.strip())
+            and (not source_name or _matches_source(p, source_name))
+        ]
+        if limit is not None and limit >= 0:
+            candidates = candidates[:limit]
+        total = len(candidates)
+        if not total:
             return 0
 
-        sem = asyncio.Semaphore(concurrency)
+        # 支持批量的源(如 PubMed efetch 单次可带 200 个 PMID)走批量通道:
+        # 400 篇回填从「逐条 400 次 HTTP」压到「2 次 efetch」,是回填提速的主路径。
+        batch_fn = getattr(source, "fetch_abstracts_batch", None)
+        if callable(batch_fn):
+            return await self._fill_via_batch(
+                batch_fn, candidates, total, concurrency, on_progress
+            )
+
+        sem = asyncio.Semaphore(max(1, concurrency))
         filled = 0
+        done = 0
+        lock = asyncio.Lock()
 
         async def _one(p: Paper):
-            nonlocal filled
+            nonlocal filled, done
             async with sem:
                 try:
-                    updated = source.fetch_abstract_if_missing(p)
+                    updated = await asyncio.to_thread(
+                        source.fetch_abstract_if_missing, p
+                    )
                     if updated and updated.abstract:
                         p.abstract = updated.abstract
-                        filled += 1
+                        async with lock:
+                            filled += 1
                 except Exception as e:
                     log.warning("回填 %s 摘要失败: %s", p.lit_id, e)
+                async with lock:
+                    done += 1
+                    current = done
+            if on_progress is not None:
+                try:
+                    on_progress(current, total)
+                except Exception as e:
+                    log.debug("回填进度回调失败: %s", e)
 
-        await asyncio.gather(*[_one(p) for p in missing])
-        log.info("PaperPool 异步回填: 缺失 %d, 成功 %d", len(missing), filled)
+        await asyncio.gather(*[_one(p) for p in candidates])
+        log.info(
+            "PaperPool 异步回填 source=%s 候选 %d, 成功 %d",
+            source_name or "?", total, filled,
+        )
+        return filled
+
+    async def _fill_via_batch(
+        self,
+        batch_fn: "Callable[[list[Paper]], dict[str, str]]",
+        candidates: list[Paper],
+        total: int,
+        concurrency: int,
+        on_progress: "Callable[[int, int], None] | None",
+    ) -> int:
+        """批量回填:按 ~200 篇/块 to_thread 下放线程池并发执行,按 lit_id 回写摘要。
+
+        批量请求本身就是大请求,信号量压到 2 即可——再高只会逼近 NCBI 限速
+        (无 key 3 req/s),对耗时的边际收益几乎为零。
+        """
+        chunk_size = 200
+        chunks = [
+            candidates[i:i + chunk_size]
+            for i in range(0, len(candidates), chunk_size)
+        ]
+        sem = asyncio.Semaphore(max(1, min(2, concurrency)))
+        filled = 0
+        done = 0
+        lock = asyncio.Lock()
+
+        async def _one_chunk(chunk: list[Paper]):
+            nonlocal filled, done
+            async with sem:
+                current = 0
+                try:
+                    got = await asyncio.to_thread(batch_fn, chunk)
+                    for p in chunk:
+                        abstract = got.get(p.lit_id)
+                        if abstract:
+                            p.abstract = abstract
+                    async with lock:
+                        filled += sum(1 for p in chunk if got.get(p.lit_id))
+                except Exception as e:
+                    # 整块失败只丢这一块,不影响其余分块(块内已有 2 次重试)
+                    log.warning("批量回填 %d 篇失败(跳过): %s", len(chunk), e)
+                async with lock:
+                    done += len(chunk)
+                    current = done
+            if on_progress is not None:
+                try:
+                    on_progress(current, total)
+                except Exception as e:
+                    log.debug("回填进度回调失败: %s", e)
+
+        await asyncio.gather(*[_one_chunk(c) for c in chunks])
+        log.info("PaperPool 批量回填候选 %d, 成功 %d", total, filled)
         return filled
 
 

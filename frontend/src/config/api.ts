@@ -13,3 +13,8 @@ export function getApiBaseURL(origin?: string): string {
 export function getWritingStreamURL(origin?: string): string {
     return `${getApiBaseURL(origin)}/writing/generate-stream`;
 }
+
+/** 阶段1:主题划分(筛选+分级+分类),停在确认点 */
+export function getWritingPlanStreamURL(origin?: string): string {
+    return `${getApiBaseURL(origin)}/writing/plan-stream`;
+}

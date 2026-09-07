@@ -5,7 +5,7 @@
  * - 计数(cn/en/selected)从当前页 + 本地缓存推算,带 "本页/总计" 两个维度。
  */
 import { defineStore } from 'pinia';
-import { ElMessage } from 'element-plus';
+import { toast } from '@/utils/toast';
 import {
   bulkUpsertPapers,
   clearPapers as apiClear,
@@ -29,6 +29,13 @@ interface PageMeta {
   total_pages: number;
 }
 
+/** 当前池中"已勾选去写作"的全部篇数(独立于 pageMeta,
+ *  refresh 拉到失败时仍保留,显示给用户作为稳定入口) */
+export interface PoolTotals {
+  total: number;       // 池总数(走当前筛选)
+  selected: number;    // 池中被 selected 的篇数
+}
+
 export const usePapersStore = defineStore('papers', {
   state: () => ({
     papers: [] as Paper[],
@@ -39,6 +46,8 @@ export const usePapersStore = defineStore('papers', {
       page_size: DEFAULT_PAGE_SIZE,
       total_pages: 1,
     } as PageMeta,
+    /** 文献池总篇数(独立刷新:不受当前 page 切换影响,与 pageMeta.total 同步) */
+    poolTotal: { total: 0, selected: 0 } as PoolTotals,
     /** 检索来源过滤:切换 Tab 触发刷新 */
     sourceFilter: 'all' as 'all' | 'cn' | 'en',
   }),
@@ -48,8 +57,13 @@ export const usePapersStore = defineStore('papers', {
     enPapers: (s) => s.papers.filter((p) => p && !isCnSource(p.source)),
   },
   actions: {
-    /** 兼容旧代码:当前页切换时不重置 page_size,只换 page。 */
-    async refresh(opts?: { page?: number; page_size?: number; source?: 'all' | 'cn' | 'en' }) {
+    /** 兼容旧代码:当前页切换时不重置 page_size,只换 page。
+     * 同步刷新 pageMeta + poolTotal;失败时保留旧数据。 */
+    async refresh(opts?: {
+      page?: number;
+      page_size?: number;
+      source?: 'all' | 'cn' | 'en';
+    }) {
       const page = opts?.page ?? this.pageMeta.page;
       const page_size = opts?.page_size ?? this.pageMeta.page_size;
       const src = opts?.source ?? this.sourceFilter;
@@ -67,24 +81,22 @@ export const usePapersStore = defineStore('papers', {
           total_pages: resp.total_pages,
         };
         this.sourceFilter = src;
-      } catch (e) {
-        // 拉取失败不静默吞:保留旧数据,把 pageMeta 归零避免 UI 误以为空
-        console.error('[papers] refresh failed:', e);
-        this.papers = [];
-        this.pageMeta = {
-          total: 0,
-          page: 1,
-          page_size: this.pageMeta.page_size || DEFAULT_PAGE_SIZE,
-          total_pages: 1,
+        // poolTotal 与 pageMeta 同步写 —— 避免"池空但显示 413"的不一致
+        this.poolTotal = {
+          total: resp.total,
+          selected: resp.items.filter((p) => p && p.selected).length,
         };
-        ElMessage.error('文献池拉取失败:后端无响应,请稍后重试');
+      } catch (e) {
+        // 拉取失败:保留旧数据(不归零 pageMeta,避免 UI 误以为空)
+        console.error('[papers] refresh failed:', e);
+        toast.error('文献池拉取失败:请稍后重试');
       } finally {
         this.loading = false;
       }
     },
     async addBatch(items: PaperCreatePayload[]) {
       const r = await bulkUpsertPapers(items);
-      ElMessage.success(`入库:新增 ${r.inserted},更新 ${r.updated}`);
+      toast.success(`入库:新增 ${r.inserted},更新 ${r.updated}`);
       await this.refresh();
     },
     /** 拉取文献池全部文献(自动翻页),供写作页使用,不依赖当前页勾选。 */
@@ -100,6 +112,47 @@ export const usePapersStore = defineStore('papers', {
       }
       return all;
     },
+    /** 拉取筛选后的文献(用于写作页的"筛选"快捷方式)。
+     *  默认 selected_only=true,优先取已勾选;若 selected_only=false 则拉全部并截断到 limit。 */
+    async fetchFiltered(opts: {
+      selected_only?: boolean;
+      limit?: number;
+    } = {}): Promise<Paper[]> {
+      const selectedOnly = opts.selected_only ?? true;
+      const limit = opts.limit ?? 200;
+      const all: Paper[] = [];
+      let page = 1;
+      const page_size = 100;
+      for (;;) {
+        const resp = await listPapers({
+          page,
+          page_size,
+          selected_only: selectedOnly,
+        });
+        all.push(...resp.items);
+        if (all.length >= resp.total || resp.items.length === 0) break;
+        if (all.length >= limit) break;
+        page += 1;
+        if (page > 20) break; // 安全上限
+      }
+      return all.slice(0, limit);
+    },
+    /** 拉取"全部 selected"篇数(独立于 pageMeta),供「去写作(N 篇)」按钮展示 */
+    async selectedCount(): Promise<number> {
+      let total = 0;
+      let page = 1;
+      const page_size = 100;
+      for (;;) {
+        const resp = await listPapers({ page, page_size, selected_only: true });
+        total += resp.items.length;
+        if (allDone(resp)) break;
+        page += 1;
+      }
+      return total;
+      function allDone(r: { items: unknown[]; total: number }): boolean {
+        return total >= r.total || r.items.length === 0;
+      }
+    },
     async toggle(paper: Paper) {
       await updatePaper(paper.lit_id, { selected: !paper.selected });
       paper.selected = !paper.selected;
@@ -113,14 +166,14 @@ export const usePapersStore = defineStore('papers', {
       await apiClear();
       this.papers = [];
       this.pageMeta = { total: 0, page: 1, page_size: DEFAULT_PAGE_SIZE, total_pages: 1 };
-      ElMessage.success('文献池已清空');
+      toast.success('文献池已清空');
     },
     async clearBySource(source: string) {
       await apiClear(source);
       this.papers = this.papers.filter((p) => p.source !== source);
       // 真实总数由后端持有,触发刷新拉齐
       await this.refresh();
-      ElMessage.success('已清空该来源文献');
+      toast.success('已清空该来源文献');
     },
     setPageSize(size: number) {
       if (!ALLOWED_PAGE_SIZES.includes(size as any)) return;

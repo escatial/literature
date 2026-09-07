@@ -9,6 +9,9 @@ backend/.venv/
 *.log
 *.out
 *.err
+.dbg/
+backend/.runs/
+.pytest_cache/
 backend.log
 uvicorn.out
 uvicorn.err
@@ -38,8 +41,12 @@ backend/data/
 *.db
 *.sqlite
 *.sqlite3
+# 敏感运行时凭据(知网会话 cookie 含真实 token/IP,禁止入库)
+backend/src/automation/cnki/data/cookies.json
+backend/src/automation/cnki/data/debug_*.html
 
 # Test artifacts
+backend/test-results/
 backend/probe_cnki.py
 backend/probe_cnki_advanced.py
 backend/probe2.py
@@ -47,12 +54,14 @@ backend/probe_mock.py
 backend/dump_cnki.py
 backend/test_*.py
 backend/verify_*.py
+debug_*.html
 
 # User resources (don't commit)
 humanizer-zh.zip
 literature-review.zip
 *.md
 !backend/README.md
+!backend/ADVANCED_MODULES_README.md
 !backend/src/**/*.md
 !docs/**/*.md
 

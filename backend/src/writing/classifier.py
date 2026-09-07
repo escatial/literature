@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import json as _json
+import logging
 import re as _re
 from dataclasses import dataclass, field
 
@@ -11,6 +13,8 @@ from prompts.service import parse_llm_json, render
 from src.llm.client import messages_create
 from src.retrieval.types import Paper, Source
 from src.writing.settings import LOCALE_GROUP_DOMESTIC, LOCALE_GROUP_FOREIGN
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,38 +24,80 @@ class Group:
 
 
 # 通用兜底组名,不作为学术章节标题使用
+# 注意:同时收录清洗后形态 —— "其余相关研究" 会被 _clean_group_name 剥成"其余"
 _GENERIC_GROUP_NAMES = frozenset({
     "其他", "其它", "其他相关研究", "其它相关研究", "其余相关研究",
-    "其他研究", "杂项", "others", "other", "misc", "miscellaneous",
+    "其余", "其他研究", "其他文献", "其它文献", "其他主题",
+    "其他方面", "其他内容", "其他类别",
+    "杂项", "others", "other", "misc", "miscellaneous",
     "general", "general research",
 })
-# 纯英文/数字/符号组成的组名(如 food / study / this / are),
+# 纯英文/数字/符号组成的组名,
 # 说明 LLM 把主题词碎片当成了章节标题,属于未正确分组。
 _LATIN_ONLY_GROUP_RE = _re.compile(r"^[A-Za-z0-9\s&+.,()/_-]+$")
-# 形如 "food 相关研究" / "study相关研究":英文单词打头、无其他中文描述,
-# 属于把主题词碎片拼上"相关研究"当标题。
-_EN_FRAGMENT_GROUP_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9&+./-]*\s*相关研究$")
+# 形如 "英文单词+相关研究/综述":英文单词打头、无其他中文描述,
+# 属于把主题词碎片拼上"相关研究/综述"当标题。
+_EN_FRAGMENT_GROUP_RE = _re.compile(
+    r"^([A-Za-z][A-Za-z0-9&+./-]*)\s*(相关研究|相关综述|研究综述|研究述评|综述|述评)$"
+)
 # 有实际学术含义的英文缩写,允许单独作为组名主体(统一大写存储)
 _EN_ACRONYM_ALLOWLIST = frozenset({
     "AI", "IOT", "MSC", "ERP", "B2B", "O2O", "SNS", "GDPR",
 })
+# 叙述性短语/连接词,严禁作为章节标题(LLM 偶发返回"近年来"、"然而"等)
+# 这类词没有信息量,只能用作正文过渡
+_NARRATIVE_GROUP_NAMES = frozenset({
+    "近年来", "然而", "综上所述", "综上", "总而言之", "首先", "其次",
+    "再次", "最后", "一方面", "另一方面", "此外", "同时", "因此",
+    "故", "是故", "进而", "更进一步", "更进一步地", "首先来看", "总的来说",
+    "如前所述", "上文所述", "下文将", "下文", "下文将展开", "以下将",
+    "以下", "下面", "本节", "本章节", "本章", "本章将",
+    "具体来说", "具体而言", "具体地", "事实上", "实际中", "实践中",
+    "近年来", "近些年", "近几年来", "近段时间", "近一时期",
+    "回顾", "回顾历史", "回顾性", "现状", "发展趋势", "未来展望",
+    "目前", "当前", "当下", "现阶段", "新时期", "新形势下",
+})
+# 组名长度上限:超出 12 字的 LLM 描述倾向堆砌,不再像标题
+_GROUP_NAME_MAX_LEN = 12
 
 
 def _group_name_acceptable(name: str) -> bool:
-    """组名是否可作为学术综述章节标题。"""
+    """组名是否可作为学术综述章节标题。
+
+    硬约束:
+      - 1~12 字
+      - 不是通用兜底名("其他"/"杂项"/"misc")
+      - 不是叙述性短语("近年来"/"然而"/"综上所述" 等)
+      - 不是英文碎片(纯英文单词或"英文单词+相关研究"式拼接)
+    """
     name = (name or "").strip()
     if not name:
         return False
-    if name in _GENERIC_GROUP_NAMES:
+    if name in _GENERIC_GROUP_NAMES or name in _NARRATIVE_GROUP_NAMES:
+        return False
+    if len(name) > _GROUP_NAME_MAX_LEN:
         return False
     if _LATIN_ONLY_GROUP_RE.fullmatch(name):
         return False
     m = _EN_FRAGMENT_GROUP_RE.match(name)
     if m:
-        head = m.group(0).split()[0]
+        head = m.group(1)
         if head.upper() not in _EN_ACRONYM_ALLOWLIST:
             return False
     return True
+
+
+def _clean_group_name(name: str) -> str:
+    """轻度清洗:剥掉前缀编号("1." / "一、"/ "(1)")和尾部"...相关研究"。
+
+    不改变语义,只把 LLM 偶发的修饰性前缀/后缀去掉,得到学术名词短语。
+    """
+    name = (name or "").strip()
+    # 剥前导编号: "1. xxx" / "一、xxx" / "(1) xxx"
+    name = _re.sub(r"^[\d一二三四五六七八九十]+[\.\u3001\s\)\(]+", "", name)
+    # 剥尾部"...相关研究"/"...综述"
+    name = _re.sub(r"(相关研究|相关综述|研究综述|研究述评|综述|述评)$", "", name)
+    return name.strip()
 
 
 def _groups_acceptable(groups: list[Group]) -> bool:
@@ -71,169 +117,248 @@ def classify_by_locale(papers: list[Paper]) -> list[Group]:
     return groups
 
 
+def _salvage_groups_json(raw: str) -> list[dict] | None:
+    """从「分析文字 + JSON」混合输出中抢救 groups 数组。
+
+    MiniMax 偶发无视 json_object 约束,先写大段分析过程再给 JSON;
+    parse_llm_json 只认「整段是合法 JSON」,这里做括号配对二次抢救。
+    返回 None 表示全文确实没有可解析的 {"groups": [...]} 结构(如被截断)。
+    """
+    marker = raw.find('{"groups"')
+    if marker == -1:
+        marker = raw.find('{ "groups"')
+    if marker == -1:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(marker, len(raw)):
+        ch = raw[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = _json.loads(raw[marker : i + 1])
+                except Exception:
+                    depth = 0  # 伪闭合(JSON 无效),继续向后找完整结构
+                    continue
+                groups = obj.get("groups") if isinstance(obj, dict) else None
+                if isinstance(groups, list):
+                    return [item for item in groups if isinstance(item, dict)]
+                return None
+    return None  # 未闭合(输出被截断),无法抢救
+
+
 def _parse_group_response(raw: str) -> list[dict]:
     data = parse_llm_json(raw)
     if isinstance(data, dict) and "groups" in data:
-        data = data["groups"]
-    return [item for item in data if isinstance(item, dict)]
+        return [item for item in data["groups"] if isinstance(item, dict)]
+    # json_object 失效时模型常输出「分析过程 + JSON」混合文本,先抢救
+    salvaged = _salvage_groups_json(raw)
+    if salvaged:
+        return salvaged
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
 
 
-def _build_groups(items: list[dict], valid_ids: set[str]) -> list[Group]:
+def _build_groups(items: list[dict], valid_ids: set[str]) -> tuple[list[Group], set[str]]:
     covered: set[str] = set()
     groups: list[Group] = []
     for item in items:
         name = item.get("name") or item.get("theme")
-        ids = [i for i in item.get("lit_ids", []) if i in valid_ids]
-        if not name or not ids:
+        if not name:
+            continue
+        # 一文一主题:已被前面组认领的 lit_id 不再重复归属
+        ids = [i for i in item.get("lit_ids", []) if i in valid_ids and i not in covered]
+        if not ids:
+            continue
+        name = _clean_group_name(name)
+        if not _group_name_acceptable(name):
             continue
         covered.update(ids)
         groups.append(Group(name=name, lit_ids=ids))
     return groups, covered
 
 
-def _keyword_fallback_groups(papers: list[Paper], topic: str, k: int = 4) -> list[Group]:
-    """LLM 只输出 1 组时的兜底:用标题关键词把文献粗分成 k 组。
-
-    策略:对每篇 paper 抽标题 + 摘要前 100 字的关键词,按关键词聚到 k 个 cluster。
-    不依赖 sklearn;用词频-共现 + 主题前置法:
-    1) 抽高频特征词(去停用、去主题词「无人机/卡车/应急/配送」避免全归一组);
-    2) 给每篇 paper 算它在前 k 个特征词上的命中数,贪心归到命中最多的特征;
-    3) 命中的特征作为组名,没命中的走「其他相关研究」组。
+def _min_groups(n_papers: int) -> int:
+    """组数下限(单一来源,classify 与 QC agent 共用):
+    ≥30 篇至少 4 组;9~29 篇至少 3 组;<9 篇 1 组即可。
     """
-    import re as _re
-    from collections import Counter
+    if n_papers >= 30:
+        return 4
+    if n_papers >= 9:
+        return 3
+    return 1
 
-    if not papers:
-        return [Group(name=topic, lit_ids=[])]
 
-    stop = {
-        "无人机", "卡车", "应急", "配送", "物资", "协同", "联合", "问题",
-        "研究", "基于", "面向", "一种", "模型", "优化", "设计", "物流",
-        "下的", "分析", "构建", "方法", "提出", "针对", "应用", "场景",
-        "the", "and", "of", "for", "a", "in", "with", "to", "on",
-    }
-    # 主题相关停用词(防止聚成一组)+ 英文停用词
-    word_re = _re.compile(r"[\u4e00-\u9fff]{2,6}|[A-Za-z]{3,12}")
+def _title_similarity(a: str, b: str) -> float:
+    """标题字符 bigram Jaccard 相似度(纯确定性,零 LLM 成本)。"""
+    a, b = (a or "").strip(), (b or "").strip()
+    if len(a) < 2 or len(b) < 2:
+        return 1.0 if a == b else 0.0
+    ga = {a[i : i + 2] for i in range(len(a) - 1)}
+    gb = {b[i : i + 2] for i in range(len(b) - 1)}
+    union = len(ga | gb)
+    return len(ga & gb) / union if union else 0.0
 
-    doc_tokens: list[list[str]] = []
-    for p in papers:
-        text = (p.title or "") + " " + (p.abstract or "")[:200]
-        # 中文 token 上限 6 字(避免贪婪匹配把整句当作一个 token);
-        # 英文 token 上限 12 字符。
-        toks = [w for w in word_re.findall(text) if w.lower() not in stop and (len(w) <= 6 if any('\u4e00' <= c <= '\u9fff' for c in w) else len(w) <= 12)]
-        doc_tokens.append(toks)
 
-    # 全局词频
-    freq: Counter = Counter()
-    for toks in doc_tokens:
-        freq.update(toks)
-    # 取 top 词频且至少出现在 2 篇里的词(避免噪声)
-    n_papers = max(1, len(papers))
-    # 候选词必须:1) ≥2 篇出现;2) 不超过 80% paper(过滤通用词);
-    candidates = [w for w, c in freq.most_common(80) if c >= 2 and c <= 0.8 * n_papers][:20]
-    if not candidates:
-        return [Group(name=topic, lit_ids=[p.lit_id for p in papers])]
-    # 取 top k 词作为组锚词
-    anchor_words = candidates[:k]
+def _reassign_orphans(papers: list[Paper], rest: list[str], groups: list[Group]) -> None:
+    """无组文献按标题相似度挂到最相近的现有组。
 
-    groups: list[Group] = []
-    bucket: dict[str, list[str]] = {w: [] for w in anchor_words}
-    others: list[str] = []
-    for p, toks in zip(papers, doc_tokens):
-        best = None
-        best_n = 0
-        for w in anchor_words:
-            n = sum(1 for t in toks if t == w)
-            if n > best_n:
-                best_n = n
-                best = w
-        if best is not None and best_n > 0:
-            bucket[best].append(p.lit_id)
-        else:
-            others.append(p.lit_id)
-
-    # 给每桶起个能读的主题名:直接用锚词,不再依赖主题硬编码词表
-    # (原 label_map 是"无人机协同配送"专用映射,对水产等其他主题会错位)
-    for w in anchor_words:
-        if not bucket[w]:
+    取代旧逻辑「全部追加进最后一组」—— 那会让最后一个主题变成大杂烩,
+    破坏主题互斥性;相似度同分时偏向更大的组,保持规模均衡。
+    """
+    if not groups:
+        return
+    by_id = {p.lit_id: p for p in papers}
+    for lid in rest:
+        p = by_id.get(lid)
+        if p is None:
+            groups[-1].lit_ids.append(lid)  # 池外异常 id,保守保留不丢文献
             continue
-        groups.append(Group(name=f"{w} 相关研究", lit_ids=bucket[w]))
-    if others:
-        # 兜底组名也简洁自然(用『其余相关研究』而不是 topic 前缀),避免冗长
-        groups.append(Group(name="其余相关研究", lit_ids=others))
-    return groups or [Group(name=topic, lit_ids=[p.lit_id for p in papers])]
+        best = max(
+            groups,
+            key=lambda g: (
+                max(
+                    (
+                        _title_similarity(p.title, by_id[m].title)
+                        for m in g.lit_ids
+                        if m in by_id
+                    ),
+                    default=0.0,
+                ),
+                len(g.lit_ids),
+            ),
+        )
+        best.lit_ids.append(p.lit_id)
 
 
 def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
     """主题分类:LLM 将文献归入若干主题。
 
     强约束(代码层兜底):
-      - LLM 至少输出 3 组(papers 数量 ≥ 30 时);不满足自动 retry 一次;
-      - 仍违规时,改用关键词兜底分组成 k=4 组。
+      - 组数下限见 _min_groups(≥30 篇至少 4 组,9~29 篇至少 3 组);
+      - 三次调用逐级升级:常规(0.3) → 显式返工(0.7) → 极简输入(0.7);
+      - 组名不合格的组剔除,其文献按标题相似度归入最相近的合格组;
+      - LLM 彻底失败时,单组全量确定性兜底(组名 = 清洗后的主题名)。
     """
     if not papers:
         return []
 
+    # 分组依据:标题 + 摘要节选。同主题文献标题高度相似,
+    # 区分「方法流派/应用情境/机制要素」的信息主要在摘要里。
     catalog = "\n".join(
-        f"- {p.lit_id} | {p.title} | {p.journal or 'N/A'} | {p.year or 'N/A'} | source={p.source.value}"
+        f"- {p.lit_id} | {p.title} | {p.year or 'N/A'} | 摘要:{(p.abstract or '').strip()[:120]}..."
         for p in papers
     )
     valid_ids = {p.lit_id for p in papers}
+    min_groups = _min_groups(len(papers))
 
-    min_groups = 3 if len(papers) >= 30 else 1
-
-    def _ask(force_split: bool = False) -> list[Group]:
-        # 防御性注入:组名要像学术综述章节标题(4-10 字,反映研究角度/方法),
-        # 严禁通用名(如 'emergency 相关研究' 与主题脱节)
+    def _ask(attempt: int) -> list[Group]:
+        """attempt 1=常规;2=显式返工(升温+强制组数);3=极简输入兜底。"""
+        # 只提正向要求,不列举反面例子 —— 负面清单会诱导 LLM 联想到坏组名;
+        # 组名不合格由代码校验链(_group_name_acceptable)兜底,无需 prompt 层禁令。
         topic_prefix_reminder = (
-            f"\n\n## 重要:组名要像学术综述章节标题 — 简洁(4-10 字)、有信息量。"
-            "示例(主题={topic}):「路径建模方法」「算法设计与求解」「不确定性与鲁棒优化」「应急情境应用」。"
-            f"**严禁**起通用名(如「emergency 相关研究」「logistics 相关研究」) — 与『{topic}』脱节。\n"
+            f"\n\n## 组名要求\n"
+            f"每个组名都要像学术综述的章节标题:简洁的中文学术名词短语(4-10 字),"
+            f"围绕主题「{topic}」,按研究对象/方法/视角/应用情境等维度归纳本组的研究角度。"
         )
-        extra = (
-            "\n\n## 强约束提醒\n你之前只输出了 1 个组,这违反了硬性要求。"
-            "请按 (a) 研究问题/方法 (b) 应用情境/ (d) 不确定性处理 等维度拆 3-5 个并列子主题。"
-            "严禁只输出 1 个总主题。\n"
-        ) + topic_prefix_reminder
-        system = render(
-            "literature-review:classify",
-            topic=topic,
-            classify_mode="theme",
-            papers_catalog=catalog,
+        # 输出纪律:MiniMax 偶发把「逐篇分析过程」当正文输出,
+        # 上限给小了 JSON 还没写就被截断 → 解析失败。
+        # 低温 + 提高上限 + 硬指令三管齐下压制。
+        output_discipline = (
+            "\n\n## 输出纪律(最高优先级)\n"
+            "禁止输出分析过程、逐篇归属说明、Markdown 列表或任何解释文字;"
+            "你的全部输出必须是一个以 { 开头、以 } 结尾的 JSON 对象,格式:\n"
+            '{"groups": [{"name": "<组名>", "lit_ids": ["<lit_id>", ...]}]}'
         )
-        user = f"研究主题:{topic}\n\n文献清单:\n{catalog}{extra}"
+        if attempt >= 3:
+            # 第三道防线:极简输入 + 一句话指令。
+            # 输入只剩编号+标题,模型没有「逐篇分析」的发挥空间;
+            # 输出纯 JSON 仅几百 token,物理上不可能截断。
+            catalog_min = "\n".join(
+                f"{p.lit_id} {p.title[:60]}" for p in papers
+            )
+            system = (
+                "你是文献计量助手。把文献按研究主题分成 3-5 组。"
+                "只输出 JSON 对象,不输出任何其他文字。"
+            )
+            user = (
+                f'主题「{topic}」的文献如下(每行:编号 标题)。'
+                f"按研究主题分为 {min_groups}-5 组,组名为 4-10 字中文学术名词短语,"
+                '每篇文献恰属一组。只输出:\n'
+                '{"groups": [{"name": "<组名>", "lit_ids": ["<编号>"]}]}'
+                f"\n\n{catalog_min}"
+            )
+        else:
+            if attempt >= 2:
+                # 返工要求只在重试时出现 —— 首调就指责模型犯错会污染输出。
+                rework = (
+                    f"\n\n## 返工要求(第 {attempt} 次)\n"
+                    f"上一次的分组不满足「至少 {min_groups} 组」的硬要求。"
+                    "请按研究问题/方法、应用情境、机制要素等维度拆出并列子主题,"
+                    f"共输出 {min_groups}-5 组,每组一个独立的章节式组名。\n"
+                ) + topic_prefix_reminder
+            else:
+                rework = topic_prefix_reminder
+            system = render(
+                "literature-review:classify",
+                topic=topic,
+                classify_mode="theme",
+                papers_catalog=catalog,
+            )
+            # catalog 只在 system 出现一次;user 只带增量指令,避免清单双份发送
+            user = f"研究主题:{topic}{rework}{output_discipline}"
         try:
             raw = messages_create(
-                system=system, user=user, max_tokens=2000,
+                system=system, user=user, max_tokens=5000,
+                temperature=0.3 if attempt == 1 else 0.7,
                 response_format={"type": "json_object"},
             )
             items = _parse_group_response(raw)
-        except Exception:
+        except Exception as exc:
+            logger.warning("主题分类 LLM 调用失败: %s", exc)
             return []
         groups, _ = _build_groups(items, valid_ids)
         return groups
 
-    groups = _ask(force_split=False)
-    if len(groups) < min_groups and len(papers) >= 30:
-        # 违规:retry 一次,显式要求拆分
-        groups = _ask(force_split=True)
-    if len(groups) < min_groups or not _groups_acceptable(groups):
-        # 数量不达标或组名不合格(如 food/study/this/are 这类英文碎片、
-        # "xxx 相关研究" 无信息量标题、纯通用名):关键词兜底重分组
-        fallback = _keyword_fallback_groups(papers, topic, k=4)
-        if _groups_acceptable(fallback) or len(fallback) >= min_groups:
-            groups = fallback
-        else:
-            # 兜底也失败:就返回 LLM 原样(或 1 组兜底)
-            groups = groups or _ask(force_split=False)
-            if not groups:
-                return [Group(name=topic, lit_ids=[p.lit_id for p in papers])]
+    groups = _ask(1)
+    if len(groups) < min_groups:
+        groups = _ask(2)
+    if len(groups) < min_groups:
+        logger.warning("主题分类前两次调用未达标,启用极简输入第三次重试")
+        groups = _ask(3)
+    # 组名不合格的组剔除(其文献由 _reassign_orphans 回收,不丢文献)
+    groups = [g for g in groups if _group_name_acceptable(g.name)] if groups else []
+    if not groups:
+        # LLM 彻底失败(接口不可用/连续输出废品):确定性兜底 ——
+        # 单组全量,组名用清洗后的主题名。
+        # 不做关键词聚类:主题锚词理应由 LLM 判定,
+        # 代码层正则切词凑出的组名质量更差。
+        logger.warning(
+            "主题分类三次调用均未产出有效分组(输入 %d 篇),降级单组兜底",
+            len(papers),
+        )
+        fallback_name = _clean_group_name(topic) or "研究综述"
+        return [Group(name=fallback_name, lit_ids=[p.lit_id for p in papers])]
 
-    # 把未覆盖的文献追加到最后一组(避免漏 paper)
+    # 无组文献按标题相似度归入最相近的组(避免漏 paper,不再倒进最后一组)
     covered = {lid for g in groups for lid in g.lit_ids}
     rest = [p.lit_id for p in papers if p.lit_id not in covered]
-    if rest and groups:
-        groups[-1].lit_ids.extend(rest)
+    _reassign_orphans(papers, rest, groups)
     return groups
 
 

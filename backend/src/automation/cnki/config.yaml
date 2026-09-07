@@ -49,6 +49,55 @@ http:
   trust_env: false
   # 翻页 token：会话绑定，可能随 cookie 失效而变化（运行时优先从高级检索页自动提取）
   turnpage: "8Kf6r96aVUubfe4hUZXU-w%21%21"
+  # ---------- 浏览器指纹随机化（会话级）----------
+  # enabled=true: 每次进程启动从内置指纹池随机挑一份(UA↔sec-ch-ua 严格配对,
+  #   含 Chrome/Edge/Firefox 桌面端),整个会话保持一致(会话中途换 UA 本身就是风控信号)
+  # enabled=false: 全程用上面的固定指纹(行为与旧版一致)
+  # pool: 追加自定义指纹(诊断某指纹被拉黑时从内置池下架、从这里上架),条目格式:
+  #   - {name: chrome134-win, user_agent: "Mozilla/5.0 ...", sec_ch_ua: '...', sec_ch_ua_platform: '"Windows"', sec_ch_ua_mobile: "?0"}
+  fingerprint:
+    enabled: true
+    pool: []
+
+# ---------- 稳定性：分层重试 + 断路器 + 告警推送 ----------
+resilience:
+  breaker:
+    # HTTP 断路器：连续失败达阈值熔断(拒绝发请求,防无效流量堆积),
+    # 冷却 recovery_timeout 秒后放行单个探测请求,成功恢复、失败重新熔断
+    failure_threshold: 5
+    recovery_timeout: 60.0
+  retry:
+    # 分层重试(仅 HTTP 层:超时/连接错误/状态码)：
+    #   TRANSIENT(网络波动/5xx)  短退避快速重试 transient_backoff 秒
+    #   RATE_LIMITED(429/503)    长退避跨知网限流窗口 rate_limited_backoff 秒
+    #   BLOCKED(风控/cookie失效) 不重试——由 cookie 自愈/代理切换处置
+    #   FATAL(业务致命)          不重试——立即上抛
+    # 退避含 ±jitter 抖动,打散多任务重试同步性
+    transient_retries: 3
+    rate_limited_retries: 2
+    transient_backoff: [1.0, 2.0, 4.0]
+    rate_limited_backoff: [15.0, 45.0]
+    jitter: 0.2
+  # 告警中心：同类告警 cooldown 秒内节流合并(count 累加);
+  # 推送目标读环境变量 CNKI_ALERT_WEBHOOK_URL(POST JSON),未配置则仅落内存缓冲(面板可查)
+  alert_cooldown: 300.0
+
+# ---------- 代理 IP 池（反爬应对）----------
+# mode:
+#   off      直连(默认,行为与旧版一致)
+#   on       所有请求走池内代理(按健康分加权轮换)
+#   failover 平时直连;直连请求失败重试时自动切代理出口
+# 池来源:下方 pool 列表 + 环境变量 CNKI_PROXY_LIST(逗号分隔),自动去重合并
+# 健康管理:mode=on 时后台线程按 check_interval 巡检;成功+5分/失败-10分,
+#   连续失败3次冷却 cooldown 秒;跌破 score_threshold 剔除轮换(保留观测)
+proxy:
+  mode: "off"
+  pool: []
+  check_url: "https://kns.cnki.net/kns8s/AdvSearch"
+  check_timeout: 8.0
+  check_interval: 300.0
+  cooldown: 600.0
+  score_threshold: 0.0
 
 # ---------- 检索默认值 ----------
 search:
@@ -73,9 +122,15 @@ resource_map:
 
 # ---------- 运行控制 ----------
 runtime:
-  delay_seconds: 1.0
+  # 基础请求间隔(秒):过低会触发知网限流/风控
+  delay_seconds: 2.0
   retry_times: 3
   progress_bar_width: 30
+  # 动态并发池边界:抓详情页的线程数在 [min_workers, max_workers] 区间内
+  # 按实时负载(响应延迟/失败率/风控信号/本机CPU)自适应调节——
+  # 站点顺畅提速、迎风减速到1线程,兼顾效率与目标站保护
+  min_workers: 1
+  max_workers: 6
 
 # ---------- 文件路径（嵌入后运行时文件统一落到本包 data/ 目录）----------
 paths:

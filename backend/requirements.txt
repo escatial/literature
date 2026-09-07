@@ -15,6 +15,9 @@ lxml>=5.0
 PyYAML>=6.0
 pycryptodome>=3.19
 
+# 核心期刊清单解析(backend/src/core_journals.py)
+openpyxl>=3.1
+
 # GB/T 7714-2015 引文渲染(citeproc-py 规则引擎 + csl-styles 官方 .csl 模板)
 # 实际安装位置:backend/lib/(Anaconda site-packages 无写权限时,装到项目内)
 # 如果部署环境 site-packages 有写权限,直接 pip install -r requirements.txt 即可

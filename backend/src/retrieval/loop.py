@@ -1,7 +1,7 @@
 """RetrievalController:不靠 LLM 的循环执行器。
 
-输入是 LLM 已经规划好的 3 条检索式字符串 + 默认循环配置,这里只负责:
-1. 每条检索式独立翻页
+输入是 LLM 已经规划好的多条检索式字符串 + 默认循环配置,这里只负责:
+1. 每条检索式独立翻页(源内检索式之间可并发,按源限速配置并发数)
 2. 跨条 / 跨源去重汇入 PaperPool
 3. (可选) 雪球 + 摘要回填
 """
@@ -29,6 +29,10 @@ DEFAULT_LOOP = {
     "max_results_per_source": 5000,
     "stop_on_consecutive_empty": 3,
     "source_concurrency": 3,
+    # 源内「检索式」并发数:int=全源统一;dict=按源名配置。
+    # OpenAlex 限速宽松(~10 req/s)开 4;PubMed 每页 2 次请求且 NCBI
+    # 无 key 限 3 req/s,只开 2,避免触发服务端限流。
+    "query_concurrency": {"openalex": 4, "pubmed": 2},
 }
 
 # 默认雪球配置(替代原 SearchIntent.snowball)
@@ -141,10 +145,14 @@ class RetrievalController:
     # === 主循环 ===
 
     def _fetch_one_source(self, src: AcademicSource) -> None:
-        """单源检索:对每条检索式独立翻页,结果统一汇入 PaperPool(自动去重)。
+        """单源检索:检索式之间并发(按源配置并发数),每条检索式独立翻页。
 
         queries_per_source 优先;否则使用 queries(共享给所有源)。
         源不支持 build_sub_query(query_string) 时退化为单条(取 queries[0])。
+        并发数取 loop_cfg["query_concurrency"]:int 全源统一;dict 按
+        src.name 取(pubmed 每页 2 次请求且 NCBI 限速紧,并发应更小)。
+        并发下 max_results_per_source 可能小幅超出(多个页同时入库),
+        但 pool.add 去重保证不重复,超出量 ≤ (并发数-1)×per_page,可接受。
         """
         if self.queries_per_source is not None:
             queries_for_src = self.queries_per_source.get(src.name) or []
@@ -155,99 +163,123 @@ class RetrievalController:
         if not queries_for_src:
             queries_for_src = [""]
 
-        for qi, query_string in enumerate(queries_for_src):
-            self._raise_if_stopped()
+        qc_cfg = self.loop_cfg.get("query_concurrency", 2)
+        if isinstance(qc_cfg, dict):
+            max_q_workers = int(qc_cfg.get(src.name, 2) or 1)
+        else:
+            max_q_workers = int(qc_cfg or 1)
+        max_q_workers = max(1, min(max_q_workers, len(queries_for_src)))
+
+        if max_q_workers <= 1:
+            for qi, query_string in enumerate(queries_for_src):
+                self._fetch_one_query(src, qi, queries_for_src, query_string)
+            return
+
+        self._emit("fetching_source", source=src.name,
+                   message=f"{src.name} 开启 {max_q_workers} 路检索式并发")
+        with ThreadPoolExecutor(max_workers=max_q_workers) as ex:
+            futs = {
+                ex.submit(self._fetch_one_query, src, qi, queries_for_src, q): qi
+                for qi, q in enumerate(queries_for_src)
+            }
+            for future in as_completed(futs):
+                qi = futs[future]
+                try:
+                    future.result()
+                except TaskCancelledError:
+                    raise
+                except Exception as exc:
+                    self._emit("fetching_source", source=src.name,
+                               message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式异常,已跳过: {exc}")
+                    log.warning("%s 第 %s 条检索式异常: %s", src.name, qi + 1, exc)
+
+    def _fetch_one_query(self, src: AcademicSource, qi: int,
+                         queries_for_src: list[str], query_string: str) -> None:
+        """单条检索式独立翻页(线程内串行翻页,结果汇入 PaperPool 自动去重)。"""
+        self._raise_if_stopped()
+        if len(self.pool) >= self.loop_cfg["max_results_per_source"]:
+            return
+        try:
+            query = src.build_sub_query(query_string)
+        except Exception as e:
+            self._emit("fetching_source", source=src.name,
+                       message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式构建失败,已跳过: {e}")
+            log.warning("%s 第 %s 条检索式构建失败: %s", src.name, qi + 1, e)
+            return
+        self._emit("fetching_source", source=src.name,
+                   message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式: {query_string[:60]}")
+
+        empty_streak = 0
+        # 该条检索式本轮累加入库数(paper_hit 用此展示,与前端 bar.saved 一致)
+        src_added_total = 0
+        for page in range(1, self.loop_cfg["max_pages_per_source"] + 1):
             if len(self.pool) >= self.loop_cfg["max_results_per_source"]:
-                self._emit("fetching_source", source=src.name,
+                self._emit("fetching_source", source=src.name, page=page,
                            message="达到 max_results_per_source,提前停止")
                 return
+            self._raise_if_stopped()
             try:
-                query = src.build_sub_query(query_string)
-            except Exception as e:
-                self._emit("source_failed", source=src.name,
-                           message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式构建失败: {e}")
-                self._emit("fetching_source", source=src.name,
-                           message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式构建失败,已跳过: {e}")
-                log.warning("%s 第 %s 条检索式构建失败: %s", src.name, qi + 1, e)
-                continue
-            self._emit("fetching_source", source=src.name,
-                       message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式: {query_string[:60]}")
-
-            empty_streak = 0
-            # 该源本轮累加入库数(paper_hit 用此展示,与前端 bar.saved 一致)
-            src_added_total = 0
-            for page in range(1, self.loop_cfg["max_pages_per_source"] + 1):
-                if len(self.pool) >= self.loop_cfg["max_results_per_source"]:
-                    self._emit("fetching_source", source=src.name, page=page,
-                               message="达到 max_results_per_source,提前停止")
-                    return
-                self._raise_if_stopped()
-                try:
-                    resp = self._execute_with_timeout(
-                        src, query, page, self.loop_cfg["per_page"]
-                    )
-                except FutureTimeoutError:
-                    self._emit("source_failed", source=src.name, page=page,
-                               message=f"单页请求超时({PAGE_FETCH_TIMEOUT}s),已跳过该条检索式")
-                    self._emit("fetching_source", source=src.name, page=page,
-                               message=f"单页请求超时({PAGE_FETCH_TIMEOUT}s),已跳过该条检索式")
-                    log.warning("%s 单页请求超时,已跳过第 %s 条", src.name, qi + 1)
-                    break
-                except OpenAlexRateLimitError as e:
-                    # 限流区别于「零结果」:明确提示用户是服务端限流
-                    self._emit("source_failed", source=src.name, page=page,
-                               message=f"{src.name} 限流(429): {e}")
-                    self._emit("fetching_source", source=src.name, page=page,
-                               message=f"{src.name} 限流(429): {e}")
-                    log.warning("%s 限流(429): %s", src.name, e)
-                    return
-                except Exception as e:
-                    # 单源翻页异常 → 失败整个三库任务,不允许降级为部分成功
-                    self._emit("source_failed", source=src.name, page=page,
-                               message=f"{src.name} 翻页失败: {e}")
-                    self._emit("fetching_source", source=src.name, page=page,
-                               message=f"{src.name} 翻页失败,已跳过(其他源继续): {e}")
-                    log.warning("%s 翻页失败: %s", src.name, e)
-                    return
-
-                # 如果整页加完会超 max_results,只取前 N 个
-                remaining = self.loop_cfg["max_results_per_source"] - len(self.pool)
-                if remaining <= 0:
-                    self._emit("fetching_source", source=src.name, page=page,
-                               message="达到 max_results_per_source,提前停止")
-                    return
-                truncated = resp.papers[:remaining] if remaining < len(resp.papers) else resp.papers
-                new_papers = self.pool.add(truncated, source=src.name)
-                src_added_total += len(new_papers)
+                resp = self._execute_with_timeout(
+                    src, query, page, self.loop_cfg["per_page"]
+                )
+            except FutureTimeoutError:
+                # 单页超时属局部挫折:跳过该条检索式,其余继续;成败由池产出判定
                 self._emit("fetching_source", source=src.name, page=page,
-                           added=len(new_papers), total=src_added_total,
-                           message=f"命中 {resp.total} 篇")
-                # 对称中文:逐条输出本次新增文献的题录
-                for np in new_papers:
-                    authors = np.authors or []
-                    author_str = ", ".join(str(a) for a in authors[:3])
-                    if len(authors) > 3:
-                        author_str += " 等"
-                    bib = f"《{np.title or '(无题名)'}》"
-                    if author_str:
-                        bib += f" / {author_str}"
-                    if np.journal:
-                        bib += f" / {np.journal}"
-                    if np.year:
-                        bib += f", {np.year}"
-                    self._emit("paper_hit", source=src.name, page=page,
-                               added=1, total=src_added_total,
-                               message=f"[命中] {src_added_total}/{self.loop_cfg['max_results_per_source']} | {bib}")
-                if len(new_papers) == 0:
-                    empty_streak += 1
-                    if empty_streak >= self.loop_cfg["stop_on_consecutive_empty"]:
-                        self._emit("fetching_source", source=src.name, page=page,
-                                   message=f"连续 {empty_streak} 页 0 新结果,跳到下一条检索式")
-                        break
-                else:
-                    empty_streak = 0
-                if not resp.has_next:
-                    break  # 本条检索式翻完
+                           message=f"单页请求超时({PAGE_FETCH_TIMEOUT}s),已跳过该条检索式")
+                log.warning("%s 单页请求超时,已跳过第 %s 条", src.name, qi + 1)
+                break
+            except OpenAlexRateLimitError as e:
+                # 限流区别于「零结果」:明确提示用户是服务端限流。
+                # 仅中止当前检索式;其余检索式首屏命中 429 后同样自停,额外请求量有限。
+                self._emit("fetching_source", source=src.name, page=page,
+                           message=f"{src.name} 限流(429): {e}")
+                log.warning("%s 限流(429): %s", src.name, e)
+                return
+            except Exception as e:
+                # 单源翻页异常 → 只跳过当前检索式,其余检索式/其他源继续
+                self._emit("fetching_source", source=src.name, page=page,
+                           message=f"{src.name} 翻页失败,已跳过(其他源继续): {e}")
+                log.warning("%s 翻页失败: %s", src.name, e)
+                return
+
+            # 如果整页加完会超 max_results,只取前 N 个
+            remaining = self.loop_cfg["max_results_per_source"] - len(self.pool)
+            if remaining <= 0:
+                self._emit("fetching_source", source=src.name, page=page,
+                           message="达到 max_results_per_source,提前停止")
+                return
+            truncated = resp.papers[:remaining] if remaining < len(resp.papers) else resp.papers
+            new_papers = self.pool.add(truncated, source=src.name)
+            src_added_total += len(new_papers)
+            self._emit("fetching_source", source=src.name, page=page,
+                       added=len(new_papers), total=src_added_total,
+                       message=f"命中 {resp.total} 篇")
+            # 对称中文:逐条输出本次新增文献的题录
+            for np in new_papers:
+                authors = np.authors or []
+                author_str = ", ".join(str(a) for a in authors[:3])
+                if len(authors) > 3:
+                    author_str += " 等"
+                bib = f"《{np.title or '(无题名)'}》"
+                if author_str:
+                    bib += f" / {author_str}"
+                if np.journal:
+                    bib += f" / {np.journal}"
+                if np.year:
+                    bib += f", {np.year}"
+                self._emit("paper_hit", source=src.name, page=page,
+                           added=1, total=src_added_total,
+                           message=f"[命中] {src_added_total}/{self.loop_cfg['max_results_per_source']} | {bib}")
+            if len(new_papers) == 0:
+                empty_streak += 1
+                if empty_streak >= self.loop_cfg["stop_on_consecutive_empty"]:
+                    self._emit("fetching_source", source=src.name, page=page,
+                               message=f"连续 {empty_streak} 页 0 新结果,跳到下一条检索式")
+                    break
+            else:
+                empty_streak = 0
+            if not resp.has_next:
+                break  # 本条检索式翻完
 
     # === 内部工具 ===
 
@@ -297,14 +329,26 @@ class RetrievalController:
     # === 异步摘要回填 ===
 
     async def fill_abstracts(self) -> None:
-        """并发对所有源缺失摘要的 paper 回填。"""
+        """并发对各源缺失摘要的 paper 回填。
+
+        由 pool.fill_missing_async 统一负责:按源过滤候选、把同步 HTTP
+        下放线程池真正并发、限制单源上限,并逐条回调进度。
+        """
         self._emit("filling", message="开始异步摘要回填")
         for src in self.sources:
             if not hasattr(src, "fetch_abstract_if_missing"):
                 continue
             self._raise_if_stopped()
+
+            def _report(done: int, total: int, _name: str = src.name) -> None:
+                # 每 25 条上报一次 + 最后一条必报,避免事件风暴又不让 UI 静默
+                if done % 25 and done != total:
+                    return
+                self._emit("filling", source=_name, added=done, total=total,
+                           message=f"{_name} 摘要回填 {done}/{total}")
+
             try:
-                await self.pool.fill_missing_async(src)
+                await self.pool.fill_missing_async(src, on_progress=_report)
             except Exception as e:
                 self._emit("filling_warning", source=src.name,
                            message=f"回填 {src.name} 摘要失败(已忽略): {e}")

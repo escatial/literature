@@ -69,6 +69,8 @@ from api.writing import router as writing_router  # noqa: E402
 from api.cnki import router as cnki_router
 from api.review import router as review_router  # noqa: E402
 from api.contacts import router as contacts_router  # noqa: E402
+from api.core_journals import router as core_journals_router  # noqa: E402
+from api.crawler_admin import router as crawler_admin_router  # noqa: E402
 from db.session import close_db, connect_db, init_db  # noqa: E402
 
 
@@ -76,6 +78,13 @@ from db.session import close_db, connect_db, init_db  # noqa: E402
 async def _lifespan(_: FastAPI):
     """应用生命周期:启动数据库,关闭数据库连接。"""
     init_db()
+    # 核心期刊清单:首次冷导入(从 xlsx 一次性灌入 DB),后续启动直接走 DB
+    try:
+        import core_journals as _cj_init
+        _cj_init.init_db()
+        _cj_init.invalidate_cache()
+    except Exception as exc:
+        log.warning("核心期刊冷导入非致命错误: %s", exc)
     connect_db()
     try:
         yield
@@ -94,9 +103,11 @@ async def _unhandled_exc(request, exc):
         request.method, request.url.path, traceback.format_exc(),
     )
     from fastapi.responses import JSONResponse
+    # 安全修复(S-2):完整 traceback 只进服务端日志,响应中不得携带,
+    # 避免向客户端泄露内部路径/栈帧/依赖版本等信息
     return JSONResponse(
         status_code=500,
-        content={"detail": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc().splitlines()[-12:]},
+        content={"detail": "服务器内部错误，请稍后重试"},
     )
 
 # CORS:allow_origins=["*"] 与 allow_credentials=True 同时开启会被 Starlette 拒绝
@@ -122,7 +133,9 @@ app.include_router(reviews_router, prefix="/api")
 app.include_router(prompts_router, prefix="/api")
 app.include_router(cnki_router, prefix="/api")
 app.include_router(contacts_router, prefix="/api")
+app.include_router(core_journals_router, prefix="/api")
 app.include_router(review_router, prefix="/api")
+app.include_router(crawler_admin_router, prefix="/api")
 
 
 @app.get("/")

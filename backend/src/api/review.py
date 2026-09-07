@@ -4,7 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from src.llm.client import get_default_provider, list_llm_providers
+from src.llm.client import (
+    get_default_provider,
+    get_provider_health,
+    get_fallback_order,
+    list_llm_providers,
+)
 from src.review.simple_review import run_simple_review
 
 router = APIRouter(prefix="/review", tags=["review"])
@@ -28,10 +33,26 @@ class SimpleReviewResponse(BaseModel):
 
 @router.get("/providers")
 def review_providers() -> dict:
-    """返回可选 LLM provider 列表。"""
+    """返回可选 LLM provider 列表 + 真正的轮换顺序(供前端 dashboard)。"""
     return {
         "default": get_default_provider(),
+        "fallback_order": list(get_fallback_order()),
         "providers": list_llm_providers(),
+    }
+
+
+@router.get("/providers/health")
+def review_providers_health() -> dict:
+    """运行时健康态:每个 provider 最近一次调用结果 + 真实生效顺序。
+
+    UI 可以用它显示「当前一级 provider 不可用,降级到 GPT」这类提示。
+    """
+    health = get_provider_health()
+    return {
+        "default": health["default"],
+        "fallback_order": list(get_fallback_order()),
+        "active_fallback_order": health["active_fallback_order"],
+        "providers": health["providers"],
     }
 
 

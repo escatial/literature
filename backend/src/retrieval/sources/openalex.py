@@ -14,8 +14,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
+import ssl
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -42,6 +45,76 @@ log = logging.getLogger(__name__)
 DEFAULT_MAILTO = os.getenv("OPENALEX_MAILTO", "your-email@example.com")
 DEFAULT_API_KEY = os.getenv("OPENALEX_API_KEY", "")
 BASE_URL = "https://api.openalex.org/works"
+
+
+class _HttpResp:
+    """httpx/urllib 兼容的最小响应对象。"""
+
+    __slots__ = ("status_code", "headers", "url", "json")
+
+    def __init__(self, status_code: int, headers: dict, url: str, json_obj: dict):
+        self.status_code = status_code
+        self.headers = headers
+        self.url = url
+        self.json = json_obj
+
+
+# 模块级共享 httpx.Client:复用 TCP+TLS 连接,省掉每请求重新握手(每次约 0.3~1s)。
+# httpx.Client 线程安全,支持多线程并发;超时按次覆盖(per-request timeout)。
+_shared_client: httpx.Client | None = None
+_client_lock = threading.Lock()
+
+
+def _get_http_client() -> httpx.Client:
+    global _shared_client
+    if _shared_client is None:
+        with _client_lock:
+            if _shared_client is None:
+                _shared_client = httpx.Client(
+                    timeout=30.0,
+                    trust_env=False,
+                    transport=httpx.HTTPTransport(local_address="0.0.0.0"),
+                )
+    return _shared_client
+
+
+def _http_get(url: str, params: dict, timeout):
+    """对 OpenAlex 发起 GET 请求。
+
+    优先 httpx(性能/重试可控);一旦发生 SSL 握手超时(本机 ssl stack 与
+    api.openalex.org 不兼容时常出现),自动切换到 urllib(走系统 SSL stack)。
+    """
+    # 1) 快速通道:httpx(共享连接池)
+    try:
+        resp = _get_http_client().get(url, params=params, timeout=timeout)
+        if resp.status_code == 200:
+            return _HttpResp(resp.status_code, dict(resp.headers), str(resp.url), resp.json())
+    except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError,
+            ssl.SSLError, Exception) as e:
+        # 兜底:urllib 走系统 SSL
+        log.warning("OpenAlex httpx 通道失败,切换 urllib: %s", e)
+        return _http_get_urllib(url, params, timeout)
+    # 非 200 走 urllib 或抛
+    if resp.status_code >= 400:
+        # 还尝试一下 urllib(可能是临时网络问题)
+        try:
+            return _http_get_urllib(url, params, timeout)
+        except Exception:
+            return _HttpResp(resp.status_code, dict(resp.headers), str(resp.url),
+                             {"_body": resp.text})
+    return _HttpResp(resp.status_code, dict(resp.headers), str(resp.url), resp.json())
+
+
+def _http_get_urllib(url: str, params: dict, timeout) -> _HttpResp:
+    """通过 urllib 发起 GET(走系统 SSL stack,避免部分 Python ssl 兼容问题)。"""
+    import urllib.parse, urllib.request
+
+    q = urllib.parse.urlencode(params, doseq=True, quote_via=urllib.parse.quote)
+    full = f"{url}?{q}"
+    req = urllib.request.Request(full, headers={"User-Agent": "literature-review-agent/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout if isinstance(timeout, (int, float)) else 30.0) as r:
+        body = r.read()
+        return _HttpResp(r.status, dict(r.headers), r.geturl(), json.loads(body))
 
 
 class OpenAlexRateLimitError(RuntimeError):
@@ -94,8 +167,8 @@ def _rebuild_abstract(inverted: dict | None) -> str | None:
 
 
 def _make_lit_id(title: str | None, doi: str | None) -> str:
-    raw = f"{title or ''}|{doi or ''}"
-    return "lit_" + hashlib.sha256(raw.encode()).hexdigest()[:16]
+    from retrieval.paper_identity import build_lit_id
+    return build_lit_id(source="openalex", title=title or "", doi=doi or "")
 
 
 class OpenAlexSource:
@@ -152,16 +225,23 @@ class OpenAlexSource:
         last_err: Exception | None = None
         for attempt in range(3):
             try:
-                with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
-                    resp = client.get(BASE_URL, params=params)
-                    resp.raise_for_status()
-                j = resp.json()
+                resp = _http_get(BASE_URL, params=params, timeout=self.timeout)
+                # resp: SimpleNamespace(status_code=int, headers=dict, url=str, json=dict)
+                if resp.status_code == 429:
+                    detail = (resp.json.get("message")
+                              if isinstance(resp.json, dict) else None) or ""
+                    raise OpenAlexRateLimitError(detail or "rate limited")
+                if resp.status_code >= 400:
+                    log.warning("OpenAlex HTTP %s: %s", resp.status_code, resp.json)
+                    return SourcePage(papers=[], total=0, has_next=False,
+                                      page=page, raw_query=params)
+                j = resp.json
                 # 真实性保障-校验一: 响应来源溯源(官方域名 + envelope + 限流头)
                 report = self.validator.validate(
                     envelope=j,
-                    final_url=str(resp.url),
+                    final_url=resp.url,
                     status_code=resp.status_code,
-                    headers=dict(resp.headers),
+                    headers=resp.headers,
                 )
                 if report.verified != report.total or report.rejected:
                     log.warning(
@@ -181,23 +261,19 @@ class OpenAlexSource:
                     papers=papers, total=total, has_next=has_next,
                     page=page, raw_query=params,
                 )
+            except OpenAlexRateLimitError:
+                raise
             except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as e:
                 last_err = e
                 wait = 2 ** attempt
                 log.warning("OpenAlex attempt=%d 失败: %s; %ds 后重试", attempt + 1, e, wait)
                 time.sleep(wait)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    # 429 = 免费池额度耗尽 / 操作符过多 / 请求过频;
-                    # 必须抛「限流」错误,不能返回 total=0 伪装成「零结果」,
-                    # 否则任务层会误触发放宽重检并显示误导性的「命中 0 篇」。
-                    try:
-                        detail = e.response.json().get("message") or e.response.text[:200]
-                    except Exception:
-                        detail = e.response.text[:200] or str(e)
-                    raise OpenAlexRateLimitError(detail) from e
-                log.warning("OpenAlex HTTP %s: %s", e.response.status_code, e)
-                return SourcePage(papers=[], total=0, has_next=False, page=page, raw_query=params)
+            except Exception as e:
+                # urllib / SSL / 其他网络层错误也走退避重试
+                last_err = e
+                wait = 2 ** attempt
+                log.warning("OpenAlex attempt=%d 失败: %s; %ds 后重试", attempt + 1, e, wait)
+                time.sleep(wait)
         log.error("OpenAlex 全部重试失败: %s", last_err)
         return SourcePage(papers=[], total=0, has_next=False, page=page, raw_query=params)
 
@@ -215,14 +291,17 @@ class OpenAlexSource:
         depth=1: 拉直接引用的一层。depth>1: 递归,但通常不要超过 2。"""
         if not paper.lit_id.startswith("lit_openalex_"):
             return []
-        openalex_id = paper.lit_id.replace("lit_openalex_", "")
+        # lit_id 是 build_lit_id 身份哈希,尾巴不是 OpenAlex ID(W 开头);
+        # source_url 是平台原始返回(https://openalex.org/W{id}),从这里取。
+        openalex_id = (paper.source_url or "").rsplit("/", 1)[-1]
+        if not openalex_id.startswith("W"):
+            return []
         url = f"{BASE_URL}/{openalex_id}"
         try:
-            with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
-                resp = client.get(url, params={"api_key": self.api_key})
-                resp.raise_for_status()
-                j = resp.json()
-                ref_ids = j.get("referenced_works", []) or []
+            resp = _get_http_client().get(url, params={"api_key": self.api_key}, timeout=self.timeout)
+            resp.raise_for_status()
+            j = resp.json()
+            ref_ids = j.get("referenced_works", []) or []
         except Exception as e:
             log.warning("OpenAlex 拉 %s 引用失败: %s", paper.lit_id, e)
             return []
@@ -231,22 +310,21 @@ class OpenAlexSource:
         # 批量查询 references
         ids_filter = "|".join(rid.rsplit("/", 1)[-1] for rid in ref_ids[:50])
         try:
-            with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
-                resp = client.get(
-                    BASE_URL,
-                    params={"filter": f"ids.openalex:{ids_filter}", "per-page": 50, "api_key": self.api_key},
-                )
-                resp.raise_for_status()
-                return [self._parse(w) for w in resp.json().get("results", [])]
+            resp = _get_http_client().get(
+                BASE_URL,
+                params={"filter": f"ids.openalex:{ids_filter}", "per-page": 50, "api_key": self.api_key},
+                timeout=self.timeout,
+            )
+            resp.raise_for_status()
+            return [self._parse(w) for w in resp.json().get("results", [])]
         except Exception as e:
             log.warning("OpenAlex 批量拉 references 失败: %s", e)
             return []
 
     def health_check(self) -> bool:
         try:
-            with httpx.Client(timeout=10.0, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
-                resp = client.get(BASE_URL, params={"per-page": 1, "api_key": self.api_key})
-                return resp.status_code == 200
+            resp = _get_http_client().get(BASE_URL, params={"per-page": 1, "api_key": self.api_key}, timeout=10.0)
+            return resp.status_code == 200
         except Exception:
             return False
 
@@ -273,9 +351,8 @@ class OpenAlexSource:
         params = {k: v for k, v in dict(query).items() if v not in (None, "")}
         params.update({"cursor": cursor, "per-page": min(per_page, 100)})
 
-        with httpx.Client(timeout=self.timeout, trust_env=False, transport=httpx.HTTPTransport(local_address="0.0.0.0")) as client:
-            resp = client.get(url, params=params)
-            resp.raise_for_status()
+        resp = _get_http_client().get(url, params=params, timeout=self.timeout)
+        resp.raise_for_status()
         j = resp.json()
         report = self.validator.validate(
             envelope=j, final_url=str(resp.url),
@@ -417,6 +494,7 @@ class OpenAlexSource:
         doi_raw = w.get("doi") or ""
         doi = doi_raw.replace("https://doi.org/", "") or None
         title = (w.get("title") or w.get("display_name") or "").strip()
+        year = int(w.get("publication_year") or 0)
 
         authors = [
             a["author"]["display_name"]
@@ -443,7 +521,11 @@ class OpenAlexSource:
         journal = source_loc.get("display_name") or ""
 
         openalex_id = str(w.get("id") or "").rstrip("/").rsplit("/", 1)[-1]
-        lit_id = f"lit_openalex_{openalex_id.lower()}" if openalex_id else _make_lit_id(title, doi)
+        from retrieval.paper_identity import build_lit_id
+        lit_id = build_lit_id(
+            source="openalex", title=title or "", authors=authors,
+            year=year, doi=doi or "",
+        )
         source_url = f"https://openalex.org/{openalex_id}" if openalex_id else ""
         # 双重校验通过的记录才带溯源链(证明来自官方合规数据源)
         provenance = build_provenance(w, api_url or BASE_URL)
@@ -453,7 +535,7 @@ class OpenAlexSource:
             title=title,
             authors=authors,
             journal=journal,
-            year=w.get("publication_year") or 0,
+            year=year,
             volume=volume,
             issue=issue,
             pages=pages,

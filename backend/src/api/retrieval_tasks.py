@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from retrieval.task_service import create_task_v2, delete_task, get_task, list_tasks
@@ -16,7 +16,8 @@ class RetrievalTaskCreate(BaseModel):
     year_start: int | None = None
     year_end: int | None = None
     min_citations: int = 0
-    limit: int = 50
+    # 本次英文检索的目标文献总量(OpenAlex + PubMed 共享同一个池)
+    limit: int = Field(50, ge=1, le=5000)
     use_rerank: bool = True
     # 雪球扩展(引文回溯)独立开关;默认关闭,避免主循环之外的引文文献混入池
     use_snowball: bool = False
@@ -55,7 +56,12 @@ class RetrievalTaskCreated(BaseModel):
 
 
 @router.post("", response_model=RetrievalTaskCreated)
-def create_retrieval_task(req: RetrievalTaskCreate):
+def create_retrieval_task(
+    req: RetrievalTaskCreate,
+    # v7.1:前端 axios 拦截器统一注入的文献池隔离 ID,
+    # 透传到写入链路,否则文献池按 X-Task-Id 过滤会显示 0 条。
+    x_task_id: str | None = Header(None, alias="X-Task-Id"),
+):
     if not req.run_id:
         raise HTTPException(status_code=422, detail="三库统一检索必须携带 run_id，不能单独运行英文库")
     if set(req.sources) != {"openalex", "pubmed"} or len(req.sources) != 2:
@@ -67,12 +73,9 @@ def create_retrieval_task(req: RetrievalTaskCreate):
     # 让前端能拿到按 db 拆分的翻页事件(对称中文知网日志面板)。
     # 旧 create_task 路径不调 Controller,无 events,前端面板会一直空。
     task = create_task_v2(
-        topic=req.topic,
-        sources=req.sources,
-        use_snowball=req.use_snowball,
-        year_start=req.year_start,
-        year_end=req.year_end,
-        run_id=req.run_id,
+        topic=req.topic, sources=req.sources, use_snowball=req.use_snowball,
+        year_start=req.year_start, year_end=req.year_end, run_id=req.run_id,
+        limit=req.limit, pool_task_id=(x_task_id or "").strip() or None,
     )
     return RetrievalTaskCreated(task_id=task.task_id, status=task.status)
 

@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElContainer, ElHeader, ElMain, ElMenu, ElMenuItem } from 'element-plus';
+import AppToast from '@/components/AppToast.vue';
 
 const route = useRoute();
 const active = computed(() => route.path);
@@ -11,6 +12,7 @@ const menus = [
   { path: '/retrieval', label: '统一检索' },
   { path: '/pool', label: '文献池' },
   { path: '/writing', label: '写作' },
+  { path: '/crawler', label: '爬虫监控' },
 ];
 </script>
 
@@ -34,6 +36,8 @@ const menus = [
       <router-view />
     </el-main>
   </el-container>
+  <!-- 全局吐司宿主:所有提醒从右上角弹出 -->
+  <AppToast />
 </template>
 
 <style scoped>

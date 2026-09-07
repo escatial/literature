@@ -11,6 +11,48 @@ import type {
   WritingResponse,
 } from './types';
 
+// ─── LLM Provider(轮换状态) ──────────────────────────
+
+export interface LLMProviderInfo {
+  id: string;
+  label: string;
+  model: string;
+  mode: 'chat' | 'responses';
+  available: boolean;
+  is_default: boolean;
+  /** v7.1:是否在当前 LLM_FALLBACK_ORDER 里(只有 true 才会被默认流程调用) */
+  is_active_fallback: boolean;
+  fallback_rank: number;
+}
+
+export interface LLMProvidersResponse {
+  default: string;
+  fallback_order: string[];
+  providers: LLMProviderInfo[];
+}
+
+export interface LLMProviderHealth {
+  called: boolean;
+  healthy: boolean | null;
+  last_success_age_s: number | null;
+  consecutive_failures: number;
+  last_error: string | null;
+}
+
+export interface LLMProvidersHealthResponse {
+  default: string;
+  fallback_order: string[];
+  /** 已经剔除未配 key provider 后的真实执行顺序 */
+  active_fallback_order: string[];
+  providers: Record<string, LLMProviderHealth>;
+}
+
+export const getLLMProviders = () =>
+  http.get<LLMProvidersResponse>('/review/providers').then(r => r.data);
+
+export const getLLMProvidersHealth = () =>
+  http.get<LLMProvidersHealthResponse>('/review/providers/health').then(r => r.data);
+
 // ─── 查询规划 / 重排 / 筛选 / 写作 ──────────────────────────
 
 export interface QueryPlanResponse {
@@ -82,8 +124,22 @@ export const listPapers = (params?: {
   selected_only?: boolean;
   page?: number;
   page_size?: number;
+  in_core?: 'true' | 'false' | 'all';
+  year_start?: number;
+  year_end?: number;
 }) =>
   http.get<PaperListResponse>('/papers', { params }).then(r => r.data);
+
+export interface CoreJournalStats {
+  pku_core: number;
+  cscd_core: number;
+  cscd_ext: number;
+  cssci_core: number;
+  all: number;
+}
+
+export const getCoreJournalStats = () =>
+  http.get<CoreJournalStats>('/core-journals/stats').then(r => r.data);
 
 export interface RetrievalHistory {
   id: number;
@@ -132,6 +188,85 @@ export const deletePaper = (litId: string) =>
 
 export const clearPapers = (source?: string) =>
   http.delete('/papers', { params: source ? { source } : undefined }).then(() => undefined);
+
+// ─── 写作导入筛选(去写作:筛选预览 + 批量勾选) ────────────────
+
+export interface LangExportFilter {
+    /** 导入数量上限,0=不限 */
+    limit?: number;
+    year_start?: number;
+    year_end?: number;
+}
+
+export interface ExportPreviewRequest {
+    cn?: LangExportFilter;
+    /** 中文仅取核心期刊文献 */
+    cn_core_only?: boolean;
+    /** cn_core_only=true 时生效的中文核心导入数量,0=不限 */
+    cn_core_limit?: number;
+    en?: LangExportFilter;
+}
+
+export interface LangPoolRange {
+    total: number;
+    min_year: number;
+    max_year: number;
+}
+
+export interface YearDistItem {
+    year: number;
+    cn: number;
+    en: number;
+}
+
+export interface ExportPreviewStats {
+    total: number;
+    cn_total: number;
+    cn_core: number;
+    cn_non_core: number;
+    en_total: number;
+    truncated: boolean;
+    year_distribution: YearDistItem[];
+    lit_ids: string[];
+}
+
+export interface ExportPreviewResponse {
+    pool: { cn: LangPoolRange; en: LangPoolRange };
+    filtered: ExportPreviewStats;
+}
+
+/** 筛选预览:返回全池范围 + 筛选后统计(核心/非核心/年份分布)与 lit_ids。 */
+export const exportPreviewPapers = (req: ExportPreviewRequest) =>
+    http.post<ExportPreviewResponse>('/papers/export-preview', req).then(r => r.data);
+
+/** 批量勾选文献。mode=replace 先清空当前任务勾选再标记(「去写作」导入用)。 */
+export const batchSelectPapers = (litIds: string[], mode: 'replace' | 'add' = 'replace') =>
+    http.post<{ updated: number; cleared: number }>('/papers/batch-select', {
+        lit_ids: litIds,
+        mode,
+    }).then(r => r.data);
+
+// ─── v7.0 任务隔离 ──────────────────────────────────────────
+
+/** 后端返回的 new-session 响应。reused=true 表示复用并清空现有 task。 */
+export interface NewSessionResponse {
+  task_id: string;
+  reused: boolean;
+  cleared: number;
+}
+
+/**
+ * 申请一个新 task(或者复用当前 task 并清空其文献池)。
+ * 前端启动新检索时调用,后续所有 /papers 请求通过 X-Task-Id header 带入。
+ */
+export const newPaperSession = (currentTaskId?: string) =>
+  http.post<NewSessionResponse>(
+    '/papers/new-session',
+    {},
+    {
+      headers: currentTaskId ? { 'X-Task-Id': currentTaskId } : {},
+    },
+  ).then(r => r.data);
 
 // ─── 综述历史 ──────────────────────────────────────────────
 

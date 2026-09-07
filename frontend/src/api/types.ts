@@ -103,6 +103,10 @@ export interface WritingRequest {
   papers: Paper[];
   classify_mode: 'locale' | 'theme';
   do_screening: boolean;
+  /** 两阶段模式阶段2:用户确认后的主题分组;传入时 do_screening 必须为 false */
+  confirmed_groups?: WritingGroup[];
+  /** 阶段1产出的相关性分级报告,阶段2回传用于归档 */
+  relevance_report?: Record<string, unknown> | null;
 }
 
 export interface WritingResponse {

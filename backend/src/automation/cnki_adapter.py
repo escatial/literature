@@ -15,15 +15,123 @@ import asyncio
 import hashlib
 import logging
 import os
+import random
+import re
 import socket
 import ssl
 import threading
+import time
 from urllib.parse import parse_qs, urlparse
 
 from .cnki import crawler
+from .cnki import monitor as _monitor
+from .cnki import quality as _quality
+from .cnki import scheduler as _scheduler
+from .cnki.crawler import CnkiServerBusyError
+from core_journals import clean_journal_name
 from retrieval.query_planner import normalize_cnki_query
 
 log = logging.getLogger(__name__)
+
+# 摘要详情页抓取的温和并发数。crawler 为模块级单例(全局 CONFIG + requests.Session),
+# 知网风控敏感:3 线程 + 每篇 0.3~0.8s 抖动延迟是「能感知提速又不触发验证码风暴」
+# 的平衡点;列表页/检索式循环仍保持串行,由严到宽的梯度短路逻辑不受影响。
+DETAIL_CONCURRENCY = 3
+
+
+def _on_param_change(task_id: str, patch: dict) -> None:
+    """监控面板参数热调整回调：delay_seconds 变更立即生效到爬虫限速器。
+
+    其余白名单参数（max_workers/page_size/max_per_keyword）由动态池与
+    检索逻辑在各自循环点自然读取，无需显式回调。
+    """
+    delay = patch.get("delay_seconds")
+    if delay is None:
+        return
+    try:
+        crawler.throttle_init(float(delay))
+        log.info("[cnki] 任务 %s 热调整 delay_seconds=%s 已生效", task_id, delay)
+    except Exception:
+        log.exception("[cnki] delay_seconds 热调整失败")
+
+
+# 注册到全局任务注册表（单例，幂等去重）：面板改参数 → 运行中任务即时生效
+_monitor.get_registry().register_param_hook(_on_param_change)
+
+# 报纸类条目过滤(v8.3):
+# - 知网 url 参数 dbcode=CCND 表示「中国重要报纸全文数据库」,收录的是报纸文章
+#   而非学术论文,混进综述会拉低引用质量(如《夜访农家听民声》这类报道)。
+# - GB/T 7714 引文中的 [N] 类型标记 = Newspaper,双保险。
+_NEWS_DBCODES = {"ccnd"}
+_NEWS_TYPE_MARK_RE = re.compile(r"\[N\]")
+
+
+def _is_news_item(record: dict, url: str) -> bool:
+    """判断一条知网记录是否为报纸类条目。"""
+    try:
+        qs = parse_qs(urlparse(url).query)
+        dbcode = (qs.get("dbcode") or [""])[0].strip().lower()
+    except Exception:
+        dbcode = ""
+    if dbcode in _NEWS_DBCODES:
+        return True
+    citation = (record.get("raw_citation") or "").strip()
+    return bool(citation and _NEWS_TYPE_MARK_RE.search(citation))
+
+
+# ---- v8.7 学位论文过滤:文献综述只允许期刊文献 ----
+# 根因:config 里 CAPJ(期刊)与 CROSSDB(总库)共用同一串 KuaKuCode,且
+# searchFrom 表单写死「资源范围:总库」→ 期刊检索实际跑在总库上,
+# 硕士(CMFD)/博士(CDFD)学位论文混入结果。修复:入库链路确定性过滤。
+# 判据(确定性,不依赖知网库参数是否生效):
+#   1) url 参数 dbname/dbcode 以 CMFD(硕士库)/CDFD(博士库)开头
+#   2) GB/T 7714 引文类型标识 [D](Dissertation)
+_THESIS_DB_PREFIXES = ("cmfd", "cdfd")
+_THESIS_TYPE_MARK_RE = re.compile(r"\[D\]")
+
+
+def _is_thesis_url(url: str) -> bool:
+    """列表条目/详情 url 是否指向学位论文库(CMFD 硕士 / CDFD 博士)。"""
+    try:
+        qs = parse_qs(urlparse(url).query)
+    except Exception:
+        return False
+    for key in ("dbname", "dbName", "dbcode", "DbCode"):
+        for val in qs.get(key, []):
+            if val.strip().lower().startswith(_THESIS_DB_PREFIXES):
+                return True
+    return False
+
+
+def _is_thesis_item(record: dict, url: str) -> bool:
+    """判断一条知网记录是否为学位论文(硕士/博士)。综述仅收期刊,一律剔除。"""
+    if _is_thesis_url(url):
+        return True
+    citation = (record.get("raw_citation") or "").strip()
+    return bool(citation and _THESIS_TYPE_MARK_RE.search(citation))
+
+
+def _strip_thesis_items(items: list[dict], emit, db_type: str) -> list[dict]:
+    """列表级过滤:预检阶段剔除学位论文条目(凭 url dbname 与引文 [D] 标识)。
+
+    放在守门 _gate_list_items 之前:先除杂再判命中率,避免学位论文
+    拉低命中率的统计;剔除数打日志,用户可见。
+    """
+    kept: list[dict] = []
+    removed = 0
+    for it in items:
+        url = it.get("url") or ""
+        quote = (it.get("quote_text") or "").strip()
+        if _is_thesis_url(url) or (quote and _THESIS_TYPE_MARK_RE.search(quote)):
+            removed += 1
+            continue
+        kept.append(it)
+    if removed:
+        emit(stage="log",
+             msg=f"[过滤] 已剔除 {removed} 篇学位论文(文献综述仅收期刊文献)",
+             db=db_type)
+    return kept
+
 
 
 # ===== TRAE-debugger 临时埋点:cnki-cert-mismatch =====
@@ -115,8 +223,10 @@ def _dedupe_key(url: str) -> str:
     return url.split("#", 1)[0]
 
 
-def _clear_source_records(db_type: str) -> int:
+def _clear_source_records(db_type: str, pool_task_id: str | None = None) -> int:
     """入库前清空同源历史(需求3:同源覆盖写入,与英文 pool_writer.upsert_with_overwrite 对齐)。
+
+    v7.1:pool_task_id 非空时只清「该任务」的同源数据,不跨任务误删。
 
     返回清空的条数。仅在确认本次抓到了列表后才调用,避免检索失败时误清旧数据。
     """
@@ -124,7 +234,10 @@ def _clear_source_records(db_type: str) -> int:
     from db.session import SessionLocal
 
     with SessionLocal() as db:
-        rows = db.query(PaperModel).filter(PaperModel.source == db_type).all()
+        q = db.query(PaperModel).filter(PaperModel.source == db_type)
+        if pool_task_id:
+            q = q.filter(PaperModel.task_id == pool_task_id)
+        rows = q.all()
         n = len(rows)
         for r in rows:
             db.delete(r)
@@ -132,8 +245,11 @@ def _clear_source_records(db_type: str) -> int:
     return n
 
 
-def _persist_record(record: dict) -> bool:
-    """基于 lit_id upsert;provenance 校验失败返回 False。"""
+def _persist_record(record: dict, pool_task_id: str | None = None) -> bool:
+    """基于 lit_id upsert;provenance 校验失败返回 False。
+
+    v7.1:写入/更新时打 task_id 标签,否则文献池按 X-Task-Id 过滤会显示 0 条。
+    """
     from db.models import PaperModel
     from db.session import SessionLocal
     from retrieval.provenance import validate_paper_provenance
@@ -144,8 +260,16 @@ def _persist_record(record: dict) -> bool:
         )
     except ValueError:
         return False
+    if pool_task_id:
+        record = {**record, "task_id": pool_task_id}
     with SessionLocal() as db:
-        existing = db.get(PaperModel, record["lit_id"])
+        # v8.1:按 (task_id, lit_id) 查重 —— 同一文献可在不同任务各存一行
+        q = db.query(PaperModel).filter(PaperModel.lit_id == record["lit_id"])
+        if pool_task_id:
+            q = q.filter(PaperModel.task_id == pool_task_id)
+        else:
+            q = q.filter(PaperModel.task_id.is_(None))
+        existing = q.first()
         if existing:
             for k, v in record.items():
                 if k in {"lit_id", "created_at"}:
@@ -155,6 +279,99 @@ def _persist_record(record: dict) -> bool:
             db.add(PaperModel(**record))
         db.commit()
     return True
+
+
+def _persist_records(records: list[dict], pool_task_id: str | None = None) -> list[bool]:
+    """批量 upsert:单 session + 单 commit;返回与 records 顺序对应的成败列表。
+
+    原逐篇 _persist_record 每篇一次 session+commit,300 篇就是 300 次写事务;
+    攒一批后写放大从 N 次 fsync 降到 1 次,入库阶段耗时随 commit 次数线性下降。
+    provenance 校验失败的条目直接标 False,不进本次事务。
+    """
+    from db.models import PaperModel
+    from db.session import SessionLocal
+    from retrieval.provenance import validate_paper_provenance
+
+    results: list[bool] = []
+    valid: list[dict] = []
+    for record in records:
+        try:
+            validate_paper_provenance(
+                record["source"], record["lit_id"], record.get("source_url") or ""
+            )
+        except ValueError:
+            results.append(False)
+            continue
+        if pool_task_id:
+            record = {**record, "task_id": pool_task_id}
+        valid.append(record)
+        results.append(True)
+    if not valid:
+        return results
+    try:
+        with SessionLocal() as db:
+            for record in valid:
+                # v8.1:按 (task_id, lit_id) 查重 —— 同一文献可在不同任务各存一行
+                q = db.query(PaperModel).filter(PaperModel.lit_id == record["lit_id"])
+                rid = record.get("task_id")
+                if rid:
+                    q = q.filter(PaperModel.task_id == rid)
+                else:
+                    q = q.filter(PaperModel.task_id.is_(None))
+                existing = q.first()
+                if existing:
+                    for k, v in record.items():
+                        if k in {"lit_id", "created_at"}:
+                            continue
+                        setattr(existing, k, v)
+                else:
+                    db.add(PaperModel(**record))
+            db.commit()
+    except Exception as exc:
+        # 批量 commit 失败(如瞬时锁冲突/个别坏行连坐整批):
+        # 降级为逐条写入,只让真正有问题的行失败,不连坐整块。
+        log.warning("[cnki] 批量入库失败,降级逐条写入: %s", exc)
+        vi = 0
+        for i, ok in enumerate(results):
+            if not ok:
+                continue
+            try:
+                results[i] = _persist_record(valid[vi], pool_task_id)
+            except Exception as row_exc:
+                # 单行写入也失败(约束冲突等):标记 False,继续处理下一行
+                log.warning("[cnki] 降级单条入库失败 lit_id=%s: %s", valid[vi].get("lit_id"), row_exc)
+                results[i] = False
+            vi += 1
+    return results
+
+
+_AUTHORS_HEAD_RE = re.compile(r"^\s*\[\d+\]\s*")
+
+
+def _authors_from_citation(citation: str) -> list[str]:
+    """从 GB/T 7714 引文解析作者(详情页 authorpart XPath 未命中时的回填源)。
+
+    根因背景:知网详情页有多种模板变体,部分页面没有 h3.author#authorpart,
+    导致 _parse_detail 的 authors=[];而 GB/T 引文(服务端导出,必含作者段)
+    此刻已成功拿到,不用白不用。引文形如:
+      `[1]张三, 李四. 某标题[J]. 某刊, 2024.`
+    取第一个句点前的作者段,按逗号拆分,过滤「等」与异常段。
+    """
+    text = (citation or "").strip()
+    if not text:
+        return []
+    text = _AUTHORS_HEAD_RE.sub("", text)  # 去列表页序号 [1] [2]...
+    head = re.split(r"[.。]", text, maxsplit=1)[0]
+    authors: list[str] = []
+    for part in re.split(r"[,，;；]", head):
+        name = part.strip()
+        # 「等」/空段跳过;过长或带文献类型标记([J][D]等)的段不是作者名
+        if not name or name in ("等", "et al", "ET AL"):
+            continue
+        if len(name) > 40 or "[" in name:
+            continue
+        authors.append(name)
+    return authors[:25]
 
 
 def _detail_to_record(d: dict, db_type: str) -> dict:
@@ -176,16 +393,47 @@ def _detail_to_record(d: dict, db_type: str) -> dict:
     gbt = (d.get("gbt_citation") or "").strip()
     quote_text = (d.get("quote_text") or "").strip()
     citation = gbt or quote_text
-    # 清洗:知网的 GB/T 7714 引文末尾会带「查看该刊数据库收录来源」之类的脏尾巴
+    # 清洗:知网的 GB/T 7714 引文末尾会带「查看该刊数据库收录来源」之类的脏尾巴。
+    # 历史 bug:同一篇正文里出现过 `贵州畜牧兽医, 2026, 50(04) 查看该刊数据库收录来源, 2026`
+    # 这种尾巴(年号重复/换行混排),必须有兜底规则。
     if citation:
-        citation = _re_gbt.sub(r"\s*查看该刊数据库收录来源[\s\S]*$", "", citation)
+        # 1) 任何"查看该刊数据库收录来源"开始、后面接任意内容,一律截断到句号
+        citation = _re_gbt.sub(r"查看该刊数据库收录来源[\s\S]*?(?=[。\.](?:\s|$)|\n|$)", "", citation)
+        # 2) 同段落里"年份, 年份"重复(kjb 有些详情页会粘两遍出版年和在线公开年):
+        #    A,B,C,2026, 50(04):... ,2026 -> 留下" ,2026" 之前的内容。
+        #    匹配最后 ", YYYY 或 ,YYYY" 段后跟空格或 :, 并在原文中出现两次以上
+        citation = _re_gbt.sub(
+            r"(?<=[\.\u3002\)\]])[\s,，]*(1[89]\d{2}|20\d{2})\s*$",
+            "",
+            citation,
+        )
+        # 3) 收尾空白 / 多余空格
         citation = _re_gbt.sub(r"\s{2,}", " ", citation).strip()
-    return {
-        "lit_id": _build_lit_id(url),
+        citation = _re_gbt.sub(r"[,，\s]+$", "", citation).strip()
+    from retrieval.paper_identity import (
+        build_identity_key,
+        build_lit_id,
+        repair_paper_fields,
+        validate_paper_identity,
+    )
+    # 作者回填:必须在 build_lit_id 之前,保证身份指纹与回填后的作者一致
+    authors = d.get("authors") or []
+    if not authors:
+        authors = _authors_from_citation(citation)
+        if authors:
+            log.warning("[cnki] 详情页无作者节点,已从 GB/T 引文回填 %d 位作者: %s",
+                        len(authors), url[:80])
+    record = {
+        "lit_id": build_lit_id(
+            source=db_type, title=d.get("title") or "", authors=authors,
+            year=year, doi=d.get("doi") or "",
+        ),
         "source": db_type,
         "title": d.get("title") or "",
-        "authors": d.get("authors") or [],
-        "journal": d.get("source") or "",
+        "authors": authors,
+        # v7.3:详情页 source 原文是「刊名 . 年卷期 查看该刊数据库收录来源」,
+        # 直接落库会污染 journal 字段导致核心期刊匹配全败,落库前先清洗。
+        "journal": clean_journal_name(d.get("source") or ""),
         "year": year,
         "abstract": d.get("abstract") or "",
         "abstract_text": d.get("abstract") or "",
@@ -196,6 +444,213 @@ def _detail_to_record(d: dict, db_type: str) -> dict:
         "quote_text": citation,
         "selected": True,
     }
+    record = repair_paper_fields(record)
+    record["identity_key"] = build_identity_key(
+        source=db_type, title=record["title"], authors=record["authors"],
+        year=record["year"], doi=record["doi"],
+    )
+    validate_paper_identity(record)
+    return record
+
+
+# ---- v8.4 结果侧守门:防知网静默降级 ----
+# 事故实证(2026-08-29):知网对无法执行的 Expert 检索式不报错,静默降级为
+# 「最新收录」默认列表(165 篇全 2026 大杂烩,含「院士寄语」,主题交叉命中 0 篇)。
+# 爬虫解析器照单全收,垃圾直接入库。守门:列表抓回后先验证与检索词的匹配率。
+
+_QUERY_TERM_RE = re.compile(r"'([^']+)'")
+_GATE_MIN_ITEMS = 10        # 少于该条数不做批级判定(样本太小)
+# 阈值 0.05 而非 0.5:知网静默降级返回"最新收录大杂烩",标题命中率趋近 0;
+# 而 SU= 主题检索是标引匹配,正常结果的标题命中率本就常在 5%~40%
+# (标题用词≠主题标引词)。0.5 会把正常结果整批误杀 → 0 篇入库(2026-08-31 22:50 事故)。
+_GATE_HIT_RATIO = 0.05      # 批命中率低于该值 → 判定检索式未生效,整批弃用
+
+
+def _extract_query_terms(query: str) -> list[str]:
+    """从专业检索式提取全部引号内词项('主题词A'+'主题词B')*'主题词C' → [主题词A,主题词B,主题词C]。"""
+    return [t.strip().lower() for t in _QUERY_TERM_RE.findall(query or "") if t.strip()]
+
+
+def _gate_list_items(query: str, items: list[dict], db_type: str, emit) -> list[dict]:
+    """批级守门:返回结果里标题命中任一检索词的占比过低 → 知网没执行检索式。
+
+    命中按标题做(列表页只有标题可靠);摘要还没抓,不浪费请求。
+    返回原列表(不裁剪单条——检索结果本应宽松,只做批级真伪判定)。
+    判定失败时抛 ValueError,由调用方决定弃用该式并告警。
+    """
+    terms = _extract_query_terms(query)
+    if not terms or len(items) < _GATE_MIN_ITEMS:
+        return items
+    hit = sum(
+        1 for it in items
+        if any(t in (it.get("title") or "").lower() for t in terms)
+    )
+    ratio = hit / len(items)
+    if ratio < _GATE_HIT_RATIO:
+        # 知网静默降级的典型形态:最新收录大杂烩,标题命中率趋近 0
+        emit(stage="log",
+             msg=f"[守门] 检索式未生效:返回 {len(items)} 条中仅 {hit} 条标题含检索词"
+                 f"(命中率 {ratio:.0%} < {_GATE_HIT_RATIO:.0%}),疑似知网降级返回默认列表,"
+                 f"该式整批弃用: {query[:80]}",
+             db=db_type)
+        raise ValueError(f"知网检索式未生效(批命中率 {ratio:.0%}): {query[:60]}")
+    return items
+
+
+def _dump_plan_queries(queries: list[str], topic: str) -> None:
+    """检索式落盘 .dbg:plan_generated 只推前端 SSE 不落库,降级事故无法事后取证。
+
+    2026-08-29 事故时本次提交的式子原文已丢失,只能靠结果反推。此后每次落盘。
+    """
+    try:
+        import json
+        import time
+        from pathlib import Path
+        dbg_dir = Path(__file__).resolve().parent.parent / ".dbg"
+        dbg_dir.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        payload = {"topic": topic, "created": stamp, "queries": queries}
+        (dbg_dir / f"cnki_queries_{stamp}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:
+        pass  # 取证落盘失败不影响主流程
+
+
+def _sleep_in_chunks(sleep_fn, check_stopped, total: float, chunk: float = 5.0) -> None:
+    """冷却期分段睡眠:每段之间检查停止请求,保证面板「停止」秒级响应。
+
+    补漏轮冷却长达数十至数百秒,若一次性 sleep,用户点停止后要等满整段才能退出。
+    """
+    slept = 0.0
+    while slept < total:
+        check_stopped()
+        step = min(chunk, total - slept)
+        sleep_fn(step)
+        slept += step
+
+
+# 补漏轮数与轮间冷却(秒):知网限流窗口为分钟级,轮间冷却逐级拉长
+# (60/120/300,累计最多 8 分钟),比单页退避(15/45/120)更彻底地跨过风控窗口
+_RESCUE_ROUNDS = 3
+_RESCUE_COOLDOWNS = (60.0, 120.0, 300.0)
+
+
+def _run_with_rescue(
+    queries: list[str],
+    fetcher,
+    *,
+    emit_fn,
+    sleep_fn,
+    check_stopped,
+    delay_seconds: float,
+    target_count: int,
+    rescue_rounds: int = _RESCUE_ROUNDS,
+    rescue_cooldowns: tuple[float, ...] = _RESCUE_COOLDOWNS,
+) -> tuple[dict[str, dict], list[str]]:
+    """首轮顺序抓取 + 失败式子多轮补漏调度(产品级「不丢单」语义)。
+
+    背景(2026-09 用户反馈):旧预检循环里式子命中限流空壳就 continue 换下一条、
+    连续 3 条失败直接中止——限流期跑完用户拿到的是「静默缺失」甚至 0 篇。
+    现语义:失败式子一律记入补漏队列,首轮跑完后按轮冷却(60/120/300s)重试,
+    直到全部补回/达标/轮数耗尽;耗尽时返回缺口清单由调用方如实报告。
+
+    fetcher(query) -> list[dict]:单式抓取+清洗(剔学位论文/降级守门由闭包负责);
+      - CnkiServerBusyError/一般 Exception → 本式失败,进补漏队列(不丢单)
+      - 闸口故障(CnkiCookieError/CnkiCaptchaBalanceError/CnkiRevisionError)
+        → 自动处置已穷尽,原样上抛交外层 error 终态处置
+    返回 (merged: 去重条目表(键=_dedupe_key(url)), missing: 补漏后仍失败的式子)。
+    纯调度逻辑:sleep_fn/check_stopped/fetcher 均可注入,可离线确定性单测。
+    """
+    merged: dict[str, dict] = {}
+    missing: list[str] = []
+    delay = float(delay_seconds)
+
+    def absorb(found: list[dict]) -> int:
+        before = len(merged)
+        for item in found:
+            url = item.get("url") or ""
+            if url:
+                merged.setdefault(_dedupe_key(url), item)
+        return len(merged) - before
+
+    # ---- 首轮:顺序尝试全部式子 ----
+    busy_streak = 0  # 连续命中空壳的式子数(判据:限流窗口已成型,暂停首轮硬撞)
+    aborted_by_busy = False
+    last_index = 0
+    for index, query in enumerate(queries, start=1):
+        last_index = index
+        check_stopped()
+        # 式子之间加间隔,背靠背提交是触发知网限流/风控的典型诱因
+        if index > 1:
+            sleep_fn(delay)
+        emit_fn(f"[检索] {index}/{len(queries)} 提交: {query}")
+        try:
+            found = fetcher(query)
+        except CnkiServerBusyError as exc:
+            missing.append(query)
+            busy_streak += 1
+            emit_fn(f"[检索] {index}/{len(queries)} 数据源暂时繁忙，已记入待补全队列（待补 {len(missing)} 条）")
+            if busy_streak >= 3:
+                aborted_by_busy = True
+                emit_fn("[检索] 数据源暂时繁忙，首轮已暂停，未完成的检索已自动转入补全队列")
+                break
+            # 冷却 30s 让知网限流窗口衰减(连续短退避只会加重风控)
+            emit_fn("[检索] 数据源繁忙，休息 30s 后继续")
+            sleep_fn(30.0)
+        except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
+                crawler.CnkiRevisionError):
+            raise  # 闸口故障:自动处置已穷尽,上抛交外层以 error 终态推前端横幅
+        except Exception as exc:
+            # 偶发异常(网络抖动等)同样不丢单:进补漏队列
+            missing.append(query)
+            emit_fn(f"[检索] {index}/{len(queries)} 本次检索未成功，已记入待补全队列（待补 {len(missing)} 条）")
+        else:
+            busy_streak = 0  # 本条式子请求层正常(即使 0 结果),解除连续异常计数
+            added = absorb(found)
+            emit_fn(f"[检索] {index}/{len(queries)} 已获取 {len(found)} 条，新增 {added} 条，累计 {len(merged)} 条")
+            if len(merged) >= target_count:
+                emit_fn(f"[检索] 已达目标篇数（{target_count} 篇），停止后续检索")
+                missing.clear()  # 达标后缺口无意义
+                return merged, missing
+    if aborted_by_busy:
+        # 首轮提前中止:未跑到的式子也进入补漏队列,一个不丢
+        missing.extend(queries[last_index:])
+
+    # ---- 补漏:轮间冷却逐级拉长,跨过知网分钟级限流窗口 ----
+    for round_index in range(rescue_rounds):
+        if not missing:
+            break
+        cooldown = rescue_cooldowns[min(round_index, len(rescue_cooldowns) - 1)]
+        emit_fn(f"[补全] 第 {round_index + 1}/{rescue_rounds} 轮：待补 {len(missing)} 条检索式，"
+                f"稍后自动开始（可随时停止）")
+        _sleep_in_chunks(sleep_fn, check_stopped, cooldown)
+        still_missing: list[str] = []
+        for order, query in enumerate(missing, start=1):
+            check_stopped()
+            if order > 1:
+                sleep_fn(delay)
+            emit_fn(f"[补全] 第 {round_index + 1} 轮 {order}/{len(missing)}：重试 {query}")
+            try:
+                found = fetcher(query)
+            except CnkiServerBusyError as exc:
+                still_missing.append(query)
+                emit_fn("[补全] 数据源仍繁忙，该检索式留在补全队列")
+            except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
+                    crawler.CnkiRevisionError):
+                raise
+            except Exception as exc:
+                still_missing.append(query)
+                emit_fn("[补全] 本次重试未成功，留待下轮")
+            else:
+                added = absorb(found)
+                emit_fn(f"[补全] 补全成功：新增 {added} 条，累计 {len(merged)} 条")
+                if len(merged) >= target_count:
+                    emit_fn(f"[补全] 已达目标篇数（{target_count} 篇），停止补全")
+                    still_missing.clear()
+                    break
+        missing = still_missing
+    return merged, missing
 
 
 async def run_cnki_full_auto(
@@ -212,6 +667,7 @@ async def run_cnki_full_auto(
     max_pages: int = 10,
     db_type: str = "cnki",
     stop_event: "threading.Event | None" = None,
+    pool_task_id: str | None = None,
 ) -> dict:
     """顶层入口:驱动嵌入爬虫,事件推入 queue。
 
@@ -233,6 +689,21 @@ async def run_cnki_full_auto(
         if stop_event is not None and stop_event.is_set():
             raise _CnkiStopped("用户已手动停止")
 
+    # 监控任务登记（Q-1 修复②）:注册提前到检索式预检之前,
+    # 预检失败的任务也在面板留痕(failed 终态),杜绝「start 返回 running
+    # 但面板永远无此任务」的静默丢失
+    registry = _monitor.get_registry()
+    task_id = pool_task_id or f"cnki-{time.strftime('%Y%m%d%H%M%S')}"
+    state = registry.register(task_id, query=topic, params={
+        "target_count": target_count,
+        "max_pages": max_pages,
+        "delay_seconds": float(crawler.CONFIG["runtime"]["delay_seconds"]),
+    })
+    # 桥接:监控面板/运维接口的取消事件与业务侧 stop_event 合一,
+    # registry.stop_task 与 api 层手动停止任一置位都能协作式退出
+    if stop_event is not None:
+        state.cancel_event = stop_event
+
     raw_queries = [query.strip() for query in (expert_queries or []) if query.strip()]
     if not raw_queries and expert_query and expert_query.strip():
         raw_queries = [expert_query.strip()]
@@ -241,9 +712,17 @@ async def run_cnki_full_auto(
             queries = [normalize_cnki_query(query) for query in raw_queries]
         except ValueError as exc:
             emit(stage="error", msg=f"知网检索式语法无效,任务未提交: {exc}", db=db_type)
+            # 预检失败同样在面板落 failed 终态(与 API 层 422 预检互为双保险:
+            # API 层拦住已知非法式,这里兜住直连 adapter 的调用方)
+            try:
+                registry.mark_failed(task_id, f"检索式语法无效: {exc}")
+            except Exception:
+                log.exception("[cnki] 预检失败终态登记异常")
             return {"status": "failed", "saved": 0, "skipped": 0, "error": str(exc)}
     else:
         queries = [topic]
+    # v8.4:检索式落盘取证(plan_generated 只推 SSE 不落库,降级事故无法事后追查式子原文)
+    _dump_plan_queries(queries, topic)
 
     # max_pages<=0 视为"翻到知网无结果为止";否则按页数计算 max_count
     page_size = int(crawler.CONFIG["search"]["page_size"] or 20)
@@ -263,128 +742,292 @@ async def run_cnki_full_auto(
     def _sync_run() -> tuple[int, int]:
         """同步阻塞:列表 + 逐条摘要 + 入库,返回 (saved, skipped)。
 
-        挂接爬虫的过程日志回调,把翻页/验证码/抓取进度实时推给前端 SSE。
+        挂接爬虫的过程日志回调,把翻页/验证码/抓取进度实时推给前端 SSE;
+        监控任务已在函数入口注册(Q-1 修复②),这里只推进 running 态与终态。
         """
+        registry.mark_running(task_id, stage="预检")
+        # 绑定任务线程:crawler.safe_request 的请求记账/环形日志归属本任务
+        crawler.set_current_task(task_id)
         crawler.set_log_callback(lambda m: emit(stage="log", msg=m, db=db_type))
+        outcome = "done"
+        error_msg = ""
         try:
             return _run_sync_inner()
+        except _CnkiStopped as exc:
+            outcome, error_msg = "stopped", str(exc)
+            raise
+        except Exception as exc:
+            outcome, error_msg = "failed", str(exc)
+            raise
         finally:
             crawler.set_log_callback(None)
+            crawler.set_current_task(None)
+            try:
+                if outcome == "done":
+                    registry.mark_done(task_id)
+                elif outcome == "stopped":
+                    registry.mark_stopped(task_id)
+                else:
+                    registry.mark_failed(task_id, error_msg)
+            except Exception:
+                log.exception("[cnki] 监控任务终态登记失败")
 
     def _run_sync_inner() -> tuple[int, int]:
-        unique_items: dict[str, dict] = {}
-        for query_index, query in enumerate(queries, start=1):
-            _check_stopped()
-            per_query_count = target_count if max_count is None else min(max_count, target_count)
-            emit(stage="log", msg=f"[预检] {query_index}/{len(queries)} 提交: {query}", db=db_type)
-            try:
-                query_json = (
-                    crawler.build_expert_query(expert_str=query)
-                    if query.startswith(("SU=", "TI=", "KY=", "AB=", "FT="))
-                    else crawler.build_query(keyword=query)
-                )
-                found = crawler.fetch_all_list(query_json=query_json, max_count=per_query_count)
-            except Exception as exc:
-                emit(stage="log", msg=f"[预检] {query_index}/{len(queries)} 失败: {exc}", db=db_type)
-                continue
-            before = len(unique_items)
-            for item in found:
-                url = item.get("url") or ""
-                if url:
-                    unique_items.setdefault(_dedupe_key(url), item)
-            added = len(unique_items) - before
-            emit(stage="log", msg=f"[预检] {query_index}/{len(queries)} 命中 {len(found)} 条,新增 {added} 条,累计去重 {len(unique_items)} 条", db=db_type)
-            if len(unique_items) >= target_count:
-                emit(stage="log", msg=f"[预检] 已达到目标阈值 {target_count} 篇,停止尝试后续检索式", db=db_type)
-                break
-        items = list(unique_items.values())[:target_count]
+        per_query_count = target_count if max_count is None else min(max_count, target_count)
+
+        def fetcher(query: str) -> list[dict]:
+            query_json = (
+                crawler.build_expert_query(expert_str=query)
+                if query.startswith(("SU=", "TI=", "KY=", "AB=", "FT="))
+                else crawler.build_query(keyword=query)
+            )
+            found = crawler.fetch_all_list(query_json=query_json, max_count=per_query_count)
+            # v8.7:总库混入学位论文,先剔除(只留期刊)
+            found = _strip_thesis_items(found, emit, db_type)
+            # v8.4 守门:知网静默降级(检索式未生效)时整批弃用,交调度器入补漏队列
+            return _gate_list_items(query, found, db_type, emit)
+
+        # 检索调度:失败式子入补漏队列,多轮冷却重试,不静默丢单(v9.3 产品级补漏)
+        try:
+            merged, missing = _run_with_rescue(
+                queries,
+                fetcher,
+                emit_fn=lambda msg: emit(stage="log", msg=msg, db=db_type),
+                sleep_fn=crawler.sleep_jitter,
+                check_stopped=_check_stopped,
+                delay_seconds=crawler.CONFIG["runtime"]["delay_seconds"],
+                target_count=target_count,
+            )
+        except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
+                crawler.CnkiRevisionError) as exc:
+            # v9 闸口故障(cookie 续期无效/超级鹰余额/知网改版):自动处置已穷尽,
+            # 直接上抛,外层以 error 终态推前端横幅
+            log.error("[cnki] 检索命中闸口故障,停止: %s", exc)
+            raise
+        if missing:
+            emit(stage="log", msg=f"[缺口] {len(missing)} 条检索式经 {_RESCUE_ROUNDS} 轮自动补全仍未获取"
+                 f": {'; '.join(missing)}", db=db_type)
+        items = list(merged.values())[:target_count]
         emit(stage="search_done", ok=bool(items), total=len(items), db=db_type)
         if not items:
+            # 产品级:0 篇入库必须给前端明确的失败终态,
+            # 否则前端会把任务停在 active → 进度条显示「0 篇 已完成」
+            emit(
+                stage="error",
+                msg="未获取到文献：数据源暂时不可用（可能受访问限制），"
+                "请稍后重试，或适当调低目标篇数",
+                db=db_type,
+            )
             return 0, 0
-        # 需求3:入库前清空同源历史,避免文献池累积多次检索的旧数据
-        cleared = _clear_source_records(db_type)
+        # 需求3:入库前清空同源历史,避免文献池累积多次检索的旧数据。
+        # 修复:补传 pool_task_id,只清「本任务」同源数据,不跨任务误删(与英文侧对齐)。
+        cleared = _clear_source_records(db_type, pool_task_id)
         if cleared:
             emit(stage="log", msg=f"[入库] 已清空同源旧数据 {cleared} 篇,本次将覆盖写入", db=db_type)
         saved = skipped = 0
         total = len(items)
-        for idx, it in enumerate(items, start=1):
-            _check_stopped()
-            url = it.get("url") or ""
-            if not url:
-                skipped += 1
-                continue
+        valid_items = [
+            (idx, it) for idx, it in enumerate(items, start=1) if (it.get("url") or "").strip()
+        ]
+        skipped += len(items) - len(valid_items)
+
+        def _fetch_one(url: str) -> dict:
+            """工作线程:单篇摘要抓取。停止检查 + 抖动延迟,压低并发请求的节奏规律性。
+
+            线程内绑定任务 ID:crawler.safe_request 的请求记账/环形日志归属本任务。
+            """
+            crawler.set_current_task(task_id)
             try:
-                detail = crawler.fetch_abstract(url)
-            except crawler.CnkiGBTCitationMissing as exc:
-                # 单篇极个别:详情页缺少 GB/T 7714 hidden input / 导出 API 无 GB/T 条目
-                # 跳这 paper,不阻塞整次
-                log.warning("[cnki] %d/%d 跳过(无 GB/T 7714): %s | %s", idx, total, exc, url[:80])
-                emit(stage="log",
-                     msg=f"[摘要] {idx}/{total} 跳过,GB/T 7714 引文不可用(极个别): {exc}",
-                     db=db_type)
-                skipped += 1
-                continue
-            except crawler.CnkiGBTCitationAPIFailed as exc:
-                # 整次停:导出 API 本身挂了(网络/超时/限流/cookie 失效)
-                # 后续 paper 大概率也拿不到,直接告诉用户
-                log.error("[cnki] %d/%d GB/T 7714 导出 API 失败,停止整次: %s | %s",
-                         idx, total, exc, url[:80])
-                emit(stage="log",
-                     msg=f"[摘要] {idx}/{total} 致命错误,停止整次: {exc}",
-                     db=db_type)
-                raise
-            except Exception as exc:
-                # 其他错误(SSL/超时/详情页 404 等)→ 老逻辑:跳过
-                # TRAE-debugger:首次 SSL 错误时落地证据
-                global _SSL_DIAG_LOGGED
-                if not _SSL_DIAG_LOGGED and (
-                    "SSLCertVerificationError" in repr(exc)
-                    or "Hostname mismatch" in repr(exc)
-                    or "CERTIFICATE_VERIFY_FAILED" in repr(exc)
-                ):
-                    _diag_ssl_once(idx, total, exc)
-                    _SSL_DIAG_LOGGED = True
-                log.warning("[cnki] 摘要失败 %s: %s", url[:80], exc)
-                emit(stage="log", msg=f"[摘要] {idx}/{total} 抓取失败: {exc}", db=db_type)
-                skipped += 1
-                continue
-            record = _detail_to_record(detail, db_type)
-            if _persist_record(record):
-                saved += 1
-            else:
-                skipped += 1
-            # 阶段事件:前端用 saved/total 计算进度条
-            emit(
-                stage="fetched",
-                page_no=idx, saved=saved, total=saved,
-                skipped_invalid_source=skipped, db=db_type,
-                progress_total=total, progress_done=idx,
+                _check_stopped()
+                time.sleep(random.uniform(0.3, 0.8))
+                return crawler.fetch_abstract(url)
+            finally:
+                crawler.set_current_task(None)
+
+        # 摘要阶段:动态并发池(scheduler.DynamicWorkerPool)驱动,分块消费。
+        # - 块内并发度由池按滚动窗口延迟/失败率/风控信号自适应伸缩(min~max),
+        #   命中验证码/限流立即收缩,替代原固定 3 线程模型(需求4);
+        # - 块间串行保证:停止请求及时生效、进度条平滑推进、失败不跨块扩散。
+        pool = _scheduler.get_pool() or _scheduler.configure_pool(crawler.CONFIG["runtime"])
+        stop_flag = stop_event if stop_event is not None else threading.Event()
+        chunk_size = max(DETAIL_CONCURRENCY * 2, pool.max_workers * 2)
+        registry.mark_stage(task_id, "摘要抓取")
+        for chunk_start in range(0, len(valid_items), chunk_size):
+            _check_stopped()
+            chunk = valid_items[chunk_start:chunk_start + chunk_size]
+            # 动态池消费本块:按期望并发度分批提交、批间重算并发度;
+            # stop_flag 置位后批间中断(未开始的不提交),结果与输入同序(进度不跳号)
+            outcomes = pool.run_items(
+                lambda pair: _fetch_one(pair[1]["url"]),
+                chunk,
+                stop_event=stop_flag,
             )
-            # 题录与抓取进度合并为单行日志(去「黑色控制台」感)
-            authors = record.get("authors") or []
-            author_str = ", ".join(authors[:3]) + ("等" if len(authors) > 3 else "")
-            bib = f"《{record.get('title') or '(无题名)'}》"
-            if author_str:
-                bib += f" / {author_str}"
-            if record.get("journal"):
-                bib += f" / {record.get('journal')}"
-            if record.get("year"):
-                bib += f", {record.get('year')}"
-            emit(stage="log",
-                 msg=f"[摘要] {idx}/{len(items)} | 入库 {saved} | {bib}",
-                 db=db_type)
+            # 按提交顺序收结果,异常分类与原语义一致:
+            # GB/T 缺失→跳过 / GB/T API 故障→停整次 / 手动停止→上抛 /
+            # 闸口故障(cookie/打码/改版)→停整次 / 其他(SSL/超时/404)→跳过
+            parsed: list[tuple[int, dict, dict]] = []
+            for (idx, it), outcome in zip(chunk, outcomes):
+                url = it.get("url") or ""
+                if outcome is None:
+                    # 池在批间被 stop_flag 中断,本条未执行 → 统一走停止出口
+                    _check_stopped()
+                    raise _CnkiStopped("用户已手动停止")
+                _pair, detail, exc = outcome
+                if exc is not None:
+                    if isinstance(exc, crawler.CnkiGBTCitationMissing):
+                        # 单篇极个别:详情页缺少 GB/T 7714 hidden input / 导出 API 无 GB/T 条目
+                        # 跳这 paper,不阻塞整次
+                        log.warning("[cnki] %d/%d 跳过(无 GB/T 7714): %s | %s", idx, total, exc, url[:80])
+                        emit(stage="log",
+                             msg=f"[摘要] {idx}/{total} 跳过,GB/T 7714 引文不可用(极个别): {exc}",
+                             db=db_type)
+                        skipped += 1
+                        continue
+                    if isinstance(exc, crawler.CnkiGBTCitationAPIFailed):
+                        # 整次停:导出 API 本身挂了(网络/超时/限流/cookie 失效)
+                        # 后续 paper 大概率也拿不到,直接告诉用户
+                        log.error("[cnki] %d/%d GB/T 7714 导出 API 失败,停止整次: %s | %s",
+                                  idx, total, exc, url[:80])
+                        emit(stage="log",
+                             msg=f"[摘要] {idx}/{total} 致命错误,停止整次: {exc}",
+                             db=db_type)
+                        raise exc
+                    if isinstance(exc, _CnkiStopped):
+                        raise exc
+                    if isinstance(exc, (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
+                                        crawler.CnkiRevisionError)):
+                        # v9 闸口故障:自动处置已穷尽(cookie 续期/打码熔断/改版哨兵),
+                        # 继续烧完只会条条失败 → 上抛,外层统一以 error 终态推前端横幅
+                        log.error("[cnki] %d/%d 闸口故障,停止整次: %s | %s", idx, total, exc, url[:80])
+                        emit(stage="log", msg=f"[摘要] {idx}/{total} 闸口故障,停止整次: {exc}", db=db_type)
+                        raise exc
+                    # 其他错误(SSL/超时/详情页 404 等)→ 老逻辑:跳过
+                    # TRAE-debugger:首次 SSL 错误时落地证据
+                    global _SSL_DIAG_LOGGED
+                    if not _SSL_DIAG_LOGGED and (
+                        "SSLCertVerificationError" in repr(exc)
+                        or "Hostname mismatch" in repr(exc)
+                        or "CERTIFICATE_VERIFY_FAILED" in repr(exc)
+                    ):
+                        _diag_ssl_once(idx, total, exc)
+                        _SSL_DIAG_LOGGED = True
+                    log.warning("[cnki] 摘要失败 %s: %s", url[:80], exc)
+                    emit(stage="log", msg=f"[摘要] {idx}/{total} 抓取失败: {exc}", db=db_type)
+                    skipped += 1
+                    continue
+                try:
+                    record = _detail_to_record(detail, db_type)
+                except Exception as exc:
+                    # 摘要解析或 paper identity 校验失败(缺作者/年等)→ 单篇跳过
+                    registry.incr(task_id, "parse_errors")
+                    log.warning("[cnki] 摘要解析失败 %s: %s", url[:80], exc)
+                    emit(stage="log",
+                         msg=f"[摘要] {idx}/{total} 解析失败,已跳过: {exc}",
+                         db=db_type)
+                    skipped += 1
+                    continue
+                # v8.3:报纸类条目(dbcode=CCND 或 GB/T 引文带 [N])不是学术论文,
+                # 混入会拉低引用质量,过滤并记日志。
+                if _is_news_item(record, url):
+                    log.info("[cnki] %d/%d 过滤报纸类条目: %s", idx, total,
+                             (record.get("title") or "")[:50])
+                    emit(stage="log",
+                         msg=(f"[摘要] {idx}/{total} 已过滤报纸类条目: "
+                              f"{(record.get('title') or '')[:50]}"),
+                         db=db_type)
+                    skipped += 1
+                    continue
+                # v8.7:学位论文(硕士 CMFD/博士 CDFD)不入综述文献池,一律剔除。
+                # 列表层已过滤,这里是详情级兜底(凭引文 [D] 标识双保险)。
+                if _is_thesis_item(record, url):
+                    log.info("[cnki] %d/%d 过滤学位论文: %s", idx, total,
+                             (record.get("title") or "")[:50])
+                    emit(stage="log",
+                         msg=(f"[摘要] {idx}/{total} 已过滤学位论文(仅收期刊): "
+                              f"{(record.get('title') or '')[:50]}"),
+                         db=db_type)
+                    skipped += 1
+                    continue
+                # 数据质量管线(需求3):字段标准化 + 缺失补全 + 只读评分。
+                # record 就地清洗;flags 仅记账面板聚合,不写入 record(入库模型硬约束)
+                record, q_report = _quality.quality_pipeline(record)
+                registry.add_quality_report(task_id, q_report)
+                parsed.append((idx, it, record))
+            # 本块解析成功的记录批量入库(单 session 单 commit)。
+            # 入库失败只跳过本块,绝不杀整次任务:
+            # 曾因一次 commit 异常直接逃出外层 except,数分钟抓取成果
+            # 全部丢弃(saved 归 0)且前端无任何入库失败日志。
+            try:
+                ok_flags = (
+                    _persist_records([record for _, _, record in parsed], pool_task_id)
+                    if parsed else []
+                )
+            except Exception as exc:
+                log.exception(
+                    "[cnki] 块入库失败 %d-%d/%d",
+                    chunk_start + 1, chunk_start + len(chunk), total,
+                )
+                emit(stage="log",
+                     msg=(f"[入库] 第 {chunk_start + 1}-{chunk_start + len(chunk)}/{total} "
+                          f"条块写入失败,已跳过 {len(parsed)} 篇: {exc}"),
+                     db=db_type)
+                ok_flags = [False] * len(parsed)
+            # 按序补发进度事件与题录日志(saved 已在批量入库后确定)
+            for (idx, _it, record), ok in zip(parsed, ok_flags):
+                if ok:
+                    saved += 1
+                    registry.incr(task_id, "saved_total")
+                else:
+                    skipped += 1
+                # 阶段事件:前端用 saved/total 计算进度条
+                emit(
+                    stage="fetched",
+                    page_no=idx, saved=saved, total=saved,
+                    skipped_invalid_source=skipped, db=db_type,
+                    progress_total=total, progress_done=idx,
+                )
+                # 题录与抓取进度合并为单行日志(去「黑色控制台」感)
+                authors = record.get("authors") or []
+                author_str = ", ".join(authors[:3]) + ("等" if len(authors) > 3 else "")
+                bib = f"《{record.get('title') or '(无题名)'}》"
+                if author_str:
+                    bib += f" / {author_str}"
+                if record.get("journal"):
+                    bib += f" / {record.get('journal')}"
+                if record.get("year"):
+                    bib += f", {record.get('year')}"
+                emit(stage="log",
+                     msg=f"[摘要] {idx}/{len(items)} | 入库 {saved} | {bib}",
+                     db=db_type)
+            # 块结束:同步真实进度到监控面板,异常退出时 except 分支可上报已入库数
+            progress["saved"] = saved
+            progress["skipped"] = skipped
+            registry.update_progress(task_id, saved=saved, skipped=skipped)
         return saved, skipped
 
+    # 真实进度(闭包共享):异常退出时拿不到 _sync_run 内部局部变量,
+    # 用它上报「失败前已入库多少篇」,前端面板不再显示误导性的 0 篇。
+    progress = {"saved": 0, "skipped": 0}
     try:
         saved, skipped = await asyncio.to_thread(_sync_run)
     except _CnkiStopped as exc:
         # 用户手动停止:置位标志后循环抛错退出
-        emit(stage="error", msg=str(exc), db=db_type)
-        return {"status": "failed", "saved": 0, "reason": str(exc)}
+        emit(stage="error", msg=f"{exc}(本次已入库 {progress['saved']} 篇)", db=db_type)
+        return {
+            "status": "failed",
+            "saved": progress["saved"],
+            "skipped": progress["skipped"],
+            "reason": str(exc),
+        }
     except Exception as exc:
         log.exception("cnki 爬虫异常")
-        emit(stage="error", msg=str(exc), db=db_type)
-        return {"status": "failed", "saved": 0, "reason": str(exc)}
+        emit(stage="error", msg=f"{exc}(本次已入库 {progress['saved']} 篇)", db=db_type)
+        return {
+            "status": "failed",
+            "saved": progress["saved"],
+            "skipped": progress["skipped"],
+            "reason": str(exc),
+        }
 
     emit(
         stage="done",
@@ -409,10 +1052,11 @@ def build_query(keyword: str) -> str:
 
 
 def check_cookies_health() -> dict:
-    """调用爬虫 check_cookies() 探测 cookie 是否可用(不触发搜索/不扣题分)。"""
+    """调用爬虫 check_cookies() 探测登录态是否可用(不触发搜索/不扣题分)。"""
     try:
         ok = crawler.check_cookies()
-        return {"ok": bool(ok), "detail": "cookie 校验通过" if ok else "cookie 失效或缺失"}
+        return {"ok": bool(ok),
+                "detail": "登录状态正常" if ok else "登录状态无效或已过期，请刷新登录状态后重试"}
     except Exception as exc:
         log.warning("cookie 健康检查异常: %s", exc)
-        return {"ok": False, "detail": f"cookie 检查异常: {exc}"}
+        return {"ok": False, "detail": "登录状态检查失败，请稍后重试"}

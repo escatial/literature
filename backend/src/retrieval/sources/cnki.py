@@ -11,7 +11,12 @@ import asyncio
 import logging
 import os
 
-from automation.cnki_adapter import run_cnki_full_auto
+try:  # 与面板 crawler_admin 同源：automation.* 优先，保证 CONFIG/registry/
+    # 断路器/动态池单例同树（此前 src.* 优先曾致生产双单例分裂：任务在跑、
+    # 面板全 0——main.py 同时注入 backend 根与 src，两棵树都能导入成功）
+    from automation.cnki_adapter import run_cnki_full_auto
+except ImportError:  # 仅 backend/src 不在 sys.path 的独立脚本兜底
+    from src.automation.cnki_adapter import run_cnki_full_auto
 from retrieval.sources.base import AcademicSource, SourcePage
 from retrieval.types import Paper, Source
 

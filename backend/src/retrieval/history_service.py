@@ -11,14 +11,29 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 import db.session as _db_session
 from db.models import PaperModel, RetrievalHistoryModel
+from retrieval.paper_identity import build_identity_key, repair_paper_fields
 from retrieval.types import Paper
 
 
 _HISTORY_KEEP = 5  # 仅保留最近 5 条
+
+
+def _pool_total(db, task_id: str | None, fallback: int) -> int:
+    """v8.6 统一口径:历史「文献总数」= 文献池实际行数(按 task_id 数 papers 表)。
+
+    检索侧合并去重(lit_id)与入库侧二次去重(identity_key)+ provenance 淘汰
+    存在差值(如检索 135 / 入库 132),此前两处显示打架;
+    现在与汇总面板「入库文献」同一数据源。无 task_id(老记录)回退历史存量值。
+    """
+    if not task_id:
+        return fallback
+    return db.execute(
+        select(func.count()).select_from(PaperModel).where(PaperModel.task_id == task_id)
+    ).scalar() or 0
 
 
 def _utcnow() -> datetime:
@@ -75,7 +90,63 @@ def record_history(
             "id": row.id,
             "topic": row.topic,
             "sources": list(row.sources or []),
-            "total_count": int(row.total_count or 0),
+            "total_count": _pool_total(db, row.task_id, int(row.total_count or 0)),
+            "failed_sources": dict(row.failed_sources or {}),
+            "papers_snapshot": list(row.papers_snapshot or []),
+            "task_id": row.task_id,
+            "run_id": row.run_id,
+            "created_at": _iso_utc(row.created_at),
+        }
+        _trim(db, keep=keep)
+        return out
+
+
+def upsert_history_by_run_id(
+    *,
+    run_id: str,
+    topic: str,
+    sources: list[str],
+    papers: list[Paper],
+    failed_sources: dict[str, int] | None = None,
+    task_id: str | None = None,
+    keep: int = _HISTORY_KEEP,
+) -> dict:
+    """按 run_id 幂等写入检索历史:已有同 run 记录则更新,没有则插入。
+
+    v8.2 统计口径修正:一次「启动自动检索」= 一条历史记录。
+    中文/英文两半可能分批到达(聚合器先到先写、迟到半边补写),
+    必须落回同一条记录合并总数,而不是拆成两条各记一半。
+    """
+    snapshot = [_paper_to_snapshot(p) for p in papers]
+    with _db_session.SessionLocal() as db:
+        row = None
+        if run_id:
+            row = (
+                db.execute(
+                    select(RetrievalHistoryModel)
+                    .where(RetrievalHistoryModel.run_id == run_id)
+                    .order_by(RetrievalHistoryModel.created_at.desc())
+                    .limit(1)
+                )
+                .scalars()
+                .first()
+            )
+        if row is None:
+            row = RetrievalHistoryModel(topic=topic, run_id=run_id)
+            db.add(row)
+        row.topic = topic
+        row.sources = list(sources)
+        row.total_count = len(papers)
+        row.failed_sources = dict(failed_sources or {})
+        row.papers_snapshot = snapshot
+        row.task_id = task_id
+        db.commit()
+        db.refresh(row)
+        out = {
+            "id": row.id,
+            "topic": row.topic,
+            "sources": list(row.sources or []),
+            "total_count": _pool_total(db, row.task_id, int(row.total_count or 0)),
             "failed_sources": dict(row.failed_sources or {}),
             "papers_snapshot": list(row.papers_snapshot or []),
             "task_id": row.task_id,
@@ -94,8 +165,18 @@ def _paper_to_snapshot(p: Paper) -> dict[str, Any]:
         "authors": list(p.authors or []),
         "journal": p.journal or "",
         "year": int(p.year or 0),
+        "volume": p.volume,
+        "issue": p.issue,
+        "pages": p.pages,
+        "abstract": p.abstract,
         "source": str(p.source.value if hasattr(p.source, "value") else p.source),
         "doi": p.doi or "",
+        "source_url": p.source_url or "",
+        "cited_by_count": int(p.cited_by_count or 0),
+        "journal_level": p.journal_level,
+        "relevance_score": p.relevance_score,
+        "provenance": p.provenance,
+        "raw_citation": p.raw_citation,
     }
 
 
@@ -113,7 +194,7 @@ def list_recent(limit: int = _HISTORY_KEEP) -> list[dict]:
                 "id": r.id,
                 "topic": r.topic,
                 "sources": list(r.sources or []),
-                "total_count": int(r.total_count or 0),
+                "total_count": _pool_total(db, r.task_id, int(r.total_count or 0)),
                 "failed_sources": dict(r.failed_sources or {}),
                 "papers_snapshot": list(r.papers_snapshot or []),
                 "task_id": r.task_id,
@@ -133,7 +214,7 @@ def get_history(history_id: int) -> dict | None:
             "id": r.id,
             "topic": r.topic,
             "sources": list(r.sources or []),
-            "total_count": int(r.total_count or 0),
+            "total_count": _pool_total(db, r.task_id, int(r.total_count or 0)),
             "failed_sources": dict(r.failed_sources or {}),
             "papers_snapshot": list(r.papers_snapshot or []),
             "task_id": r.task_id,
@@ -159,27 +240,66 @@ def _trim(db, keep: int) -> None:
     db.commit()
 
 
-def restore_to_pool(history_id: int) -> int:
+def restore_to_pool(history_id: int, pool_task_id: str | None = None) -> int:
     """把某条历史检索的文献快照恢复到文献池(先清空池再写入),返回恢复条数。
 
     语义:文献池是「当前工作区」,查看历史即加载该条历史的文献快照。
+    v7.1:pool_task_id 非空时,只清该任务的池、写入打上 task_id 标签,
+    否则恢复后文献池按 X-Task-Id 过滤会显示 0 条。
     """
     rec = get_history(history_id)
     if not rec:
         raise ValueError(f"history {history_id} not found")
     snapshot = rec.get("papers_snapshot") or []
     with _db_session.SessionLocal() as db:
-        db.query(PaperModel).delete(synchronize_session=False)
+        legacy_ids = [
+            s.get("lit_id")
+            for s in snapshot
+            if s.get("lit_id")
+            and not (s.get("abstract") or s.get("abstract_text"))
+        ]
+        existing_abstracts = {
+            row.lit_id: row.abstract_text or row.abstract
+            for row in db.execute(
+                select(PaperModel).where(PaperModel.lit_id.in_(legacy_ids))
+            ).scalars()
+            if row.abstract_text or row.abstract
+        }
+        del_q = db.query(PaperModel)
+        if pool_task_id:
+            del_q = del_q.filter(PaperModel.task_id == pool_task_id)
+        del_q.delete(synchronize_session=False)
         for s in snapshot:
+            payload = repair_paper_fields(dict(s))
+            payload["abstract"] = payload.get("abstract") or existing_abstracts.get(s.get("lit_id")) or None
+            source = str(payload.get("source") or "openalex")
             db.add(
                 PaperModel(
-                    lit_id=s.get("lit_id") or "",
-                    source=s.get("source") or "openalex",
-                    title=s.get("title") or "",
-                    authors=list(s.get("authors") or []),
-                    journal=s.get("journal") or "",
-                    year=int(s.get("year") or 0),
-                    doi=s.get("doi") or "",
+                    lit_id=payload.get("lit_id") or "",
+                    identity_key=build_identity_key(
+                        source=source, title=str(payload.get("title") or ""),
+                        authors=list(payload.get("authors") or []),
+                        year=int(payload.get("year") or 0), doi=str(payload.get("doi") or ""),
+                    ),
+                    source=source,
+                    title=payload.get("title") or "",
+                    authors=list(payload.get("authors") or []),
+                    journal=payload.get("journal") or "",
+                    year=int(payload.get("year") or 0),
+                    volume=payload.get("volume") or None,
+                    issue=payload.get("issue") or None,
+                    pages=payload.get("pages") or None,
+                    abstract=payload.get("abstract"),
+                    doi=payload.get("doi") or "",
+                    source_url=payload.get("source_url") or "",
+                    cited_by_count=int(payload.get("cited_by_count") or 0),
+                    journal_level=payload.get("journal_level") or None,
+                    relevance_score=payload.get("relevance_score"),
+                    provenance=payload.get("provenance"),
+                    raw_citation=payload.get("raw_citation") or None,
+                    quote_text=payload.get("quote_text") or None,
+                    abstract_text=payload.get("abstract_text") or payload.get("abstract"),
+                    task_id=pool_task_id,
                     selected=True,
                 )
             )
@@ -187,12 +307,31 @@ def restore_to_pool(history_id: int) -> int:
     return len(snapshot)
 
 
-def delete_history_record(history_id: int) -> bool:
-    """删除一条检索历史(含其数据库中的快照数据)。返回是否删除成功。"""
+def delete_history_record(history_id: int, pool_task_id: str | None = None) -> bool:
+    """删除一条检索历史,并把该次检索导入文献池的文献一并删干净。
+
+    v7.2:此前只删历史行,papers 表残留该次检索的全部文献。
+    - 按快照中的 lit_id 匹配 papers;
+    - pool_task_id(X-Task-Id)非空时限定只删当前任务池,绝不误伤
+      __legacy__ / 其他任务的文献;
+    - pool_task_id 为空时只删历史行(无任务上下文不做大范围删除)。
+    返回是否删除成功。
+    """
     with _db_session.SessionLocal() as db:
         row = db.get(RetrievalHistoryModel, history_id)
         if not row:
             return False
+        if pool_task_id:
+            lit_ids = [
+                (s or {}).get("lit_id")
+                for s in (row.papers_snapshot or [])
+                if (s or {}).get("lit_id")
+            ]
+            if lit_ids:
+                db.query(PaperModel).filter(
+                    PaperModel.task_id == pool_task_id,
+                    PaperModel.lit_id.in_(lit_ids),
+                ).delete(synchronize_session=False)
         db.delete(row)
         db.commit()
     return True

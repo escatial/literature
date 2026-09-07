@@ -21,26 +21,34 @@ from sqlalchemy import select
 import db.session as _db_session
 from db.models import PaperModel
 from retrieval.history_aggregator import add_cnki as aggregator_add_cnki
+from retrieval.query_planner import normalize_cnki_query
 from retrieval.types import Paper, Source
-from src.automation.cnki_adapter import run_cnki_full_auto
+try:  # 与面板 crawler_admin/e2e 同源：automation.* 优先，确保拿到与爬虫运行
+      # 实例相同的模块单例（CONFIG/registry/断路器/动态池），避免双单例分裂
+    from automation.cnki_adapter import run_cnki_full_auto
+except ImportError:  # 仅 backend/src 不在 sys.path 的独立脚本兜底
+    from src.automation.cnki_adapter import run_cnki_full_auto
 
 log = logging.getLogger(__name__)
 
 
-def _cnki_papers_from_pool() -> list[Paper]:
+def _cnki_papers_from_pool(pool_task_id: str | None = None) -> list[Paper]:
     """本次知网任务结束后,从文献池读 source='cnki' 的全部记录,构造 Paper 列表。
 
     为什么从文献池读而不是 adapter 直接返回:
     cnki_adapter.run_cnki_full_auto 目前只对外暴露 saved 计数,不在 result 中附带
     Paper 列表;若强行改 adapter 签名会影响 v4.0 测试 / SSE 流式契约。文献池在
     _persist_record 阶段已落盘,所以从 DB 读是最低耦合的做法。
+
+    v7.2:传入 pool_task_id(检索发起时的 X-Task-Id)时严格按任务过滤,
+    否则会把 __legacy__ 迁移的历史 cnki 数据一起算进检索记录
+    (如 267 旧数据 + 58 本次 = total 325 虚高)。
     """
     with _db_session.SessionLocal() as db:
-        rows = list(
-            db.execute(
-                select(PaperModel).where(PaperModel.source == "cnki")
-            ).scalars().all()
-        )
+        stmt = select(PaperModel).where(PaperModel.source == "cnki")
+        if pool_task_id:
+            stmt = stmt.where(PaperModel.task_id == pool_task_id)
+        rows = list(db.execute(stmt).scalars().all())
         return [
             Paper(
                 lit_id=row.lit_id,
@@ -49,7 +57,16 @@ def _cnki_papers_from_pool() -> list[Paper]:
                 authors=list(row.authors or []),
                 journal=row.journal or "",
                 year=int(row.year or 0),
+                volume=row.volume,
+                issue=row.issue,
+                pages=row.pages,
+                abstract=row.abstract_text or row.abstract,
                 doi=row.doi or None,
+                source_url=row.source_url or "",
+                cited_by_count=int(row.cited_by_count or 0),
+                relevance_score=row.relevance_score,
+                provenance=row.provenance,
+                raw_citation=row.raw_citation,
             )
             for row in rows
         ]
@@ -61,6 +78,15 @@ _task_queues: dict[str, asyncio.Queue] = {}
 _task_results: dict[str, dict] = {}
 # 任务级取消标志:用户点「停止」后置位,爬虫循环尽快退出
 _CANCEL_EVENTS: dict[str, threading.Event] = {}
+# 性能修复(P-1):任务结果/队列的保留时长。客户端从未连 SSE 的任务也要有兜底回收,
+# 否则 _task_results/_task_queues 随任务数无界增长(内存泄漏)
+_RESULT_TTL_SECONDS = 3600.0
+
+
+def _reap_task(task_id: str) -> None:
+    """到期回收任务残留:结果字典与 SSE 队列(pop 幂等,不碰仍被消费的活跃流)。"""
+    _task_results.pop(task_id, None)
+    _task_queues.pop(task_id, None)
 
 
 def stop_cnki_tasks(task_ids: list[str] | None = None) -> list[str]:
@@ -105,6 +131,9 @@ def _schedule(coro) -> object:
 async def start_cnki(
     req: CnkiStartRequest,
     x_test_sync: str | None = Header(default=None, alias="X-Test-Sync"),
+    # v7.1:前端 axios 拦截器统一注入的文献池隔离 ID,
+    # 透传到爬虫入库链路,否则文献池按 X-Task-Id 过滤会显示 0 条。
+    x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
 ):
     """启动知网全自动任务,后台跑、把状态推入 SSE 队列。
 
@@ -112,6 +141,19 @@ async def start_cnki(
     """
     if not req.run_id:
         raise HTTPException(status_code=422, detail="三库统一检索必须携带 run_id，不能单独运行中国知网")
+    # Q-1 修复①:启动前同步预检检索式,非法直接 422 把原因返回给前端,
+    # 不再创建「返回 running 却秒败」的僵尸任务(旧问题:任务在 adapter 的
+    # registry 注册之前被检索式校验拒绝,面板永不可见,用户点启动后毫无动静)
+    _precheck = [q.strip() for q in req.expert_queries if q.strip()]
+    if not _precheck and req.expert_query.strip():
+        _precheck = [req.expert_query.strip()]  # 与 adapter 的回退语义一致
+    for _q in _precheck:
+        try:
+            normalize_cnki_query(_q)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"知网检索式语法无效,任务未提交: {exc}"
+            )
     task_id = uuid4().hex
     queue: asyncio.Queue = asyncio.Queue()
     _task_queues[task_id] = queue
@@ -119,6 +161,8 @@ async def start_cnki(
     _CANCEL_EVENTS[task_id] = stop_ev
 
     async def _runner():
+        # 文献池隔离 ID:入库打标签与历史读取共用同一个值
+        pool_task_id = (x_task_id or "").strip() or None
         try:
             result = await run_cnki_full_auto(
                 topic=req.topic,
@@ -129,6 +173,7 @@ async def start_cnki(
                 max_pages=req.max_pages,
                 db_type=req.db_type,
                 stop_event=stop_ev,
+                pool_task_id=pool_task_id,
             )
             if result.get("status") == "succeeded":
                 # 走 aggregator:有 run_id 就走聚合,没 run_id 兼容旧调用方直接写一条
@@ -137,8 +182,10 @@ async def start_cnki(
                         aggregator_add_cnki(
                             run_id=req.run_id,
                             topic=req.topic,
-                            papers=_cnki_papers_from_pool(),
-                            task_id=task_id,
+                            papers=_cnki_papers_from_pool(pool_task_id),
+                            # v8:历史记录必须记「池 task_id」(与 papers.task_id 同源),
+                            # 不能记 SSE 内部 id(uuid4().hex),否则检索记录与池脱节
+                            task_id=pool_task_id or task_id,
                         )
                     except Exception as exc:
                         log.warning("aggregator(知网)写入失败: %s", exc)
@@ -148,9 +195,9 @@ async def start_cnki(
                         record_history(
                             topic=req.topic,
                             sources=[req.db_type],
-                            papers=_cnki_papers_from_pool(),
+                            papers=_cnki_papers_from_pool(pool_task_id),
                             failed_sources={},
-                            task_id=task_id,
+                            task_id=pool_task_id or task_id,
                         )
                     except Exception as exc:
                         log.warning("写入知网检索历史失败: %s", exc)
@@ -159,6 +206,10 @@ async def start_cnki(
         finally:
             # 任务结束(成功/失败/手动停止)后清理取消标志,避免内存泄漏
             _CANCEL_EVENTS.pop(task_id, None)
+            # P-1:TTL 后兜底回收结果/队列(即使客户端从未连 SSE 也不会泄漏)
+            asyncio.get_running_loop().call_later(
+                _RESULT_TTL_SECONDS, _reap_task, task_id
+            )
 
     if x_test_sync == "1":
         await _runner()

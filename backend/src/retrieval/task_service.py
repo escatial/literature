@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -23,6 +24,7 @@ import db.session as _db_session
 from retrieval.loop import RetrievalController, TaskCancelledError
 from retrieval.pool import PaperPool
 from retrieval.provenance import validate_paper_provenance
+from retrieval.paper_identity import build_identity_key, repair_paper_fields
 from retrieval.query_planner import plan_query_strings
 from retrieval.sources import OpenAlexSource, PubMedSource, CNKISource
 from retrieval.types import Paper
@@ -141,6 +143,68 @@ def _append_event(task_id: str, evt: dict) -> None:
         db.commit()
 
 
+def _append_events_bulk(task_id: str, evts: list[dict]) -> None:
+    """一次 session + 一次 commit 追加多条过程事件(同样截断 last 200)。
+
+    并发检索下事件产生速度远超 SQLite 单写吞吐,逐条 commit 会在写锁上
+    排队;攒批后写放大从 N 次 fsync 降到 1 次。
+    """
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).isoformat()
+    stamped = [{**evt, "ts": now_iso} for evt in evts]
+    with _db_session.SessionLocal() as db:
+        task = db.get(RetrievalTaskModel, task_id)
+        if not task:
+            return
+        events = list(task.events or [])
+        events.extend(stamped)
+        task.events = events[-200:]
+        task.updated_at = _utcnow()
+        db.commit()
+
+
+class _EventBuffer:
+    """进度事件缓冲器(线程安全)。
+
+    源级×检索式级并发后,单次翻页可瞬间产生几十条 paper_hit 事件;
+    若每条都开 SessionLocal+commit,SQLite 写锁会拖慢甚至打挂检索线程。
+    这里先攒在内存,按「条数阈值 或 距上次落库超过时间阈值」批量落库;
+    任务终态前调用 flush() 强制清空,保证过程日志完整。
+    """
+
+    def __init__(self, task_id: str, max_size: int = 20, flush_interval: float = 2.0):
+        self._task_id = task_id
+        self._max_size = max_size
+        self._interval = flush_interval
+        self._lock = threading.Lock()
+        self._buf: list[dict] = []
+        self._last_flush = time.monotonic()
+
+    def append(self, evt: dict) -> None:
+        """追加事件;达到阈值时立即落库(在调用线程内 flush,无后台定时器)。"""
+        with self._lock:
+            self._buf.append(evt)
+            need = (
+                len(self._buf) >= self._max_size
+                or time.monotonic() - self._last_flush >= self._interval
+            )
+        if need:
+            self.flush()
+
+    def flush(self) -> None:
+        """强制把缓冲中的事件批量落库。异常只告警,绝不中断任务主流程。"""
+        with self._lock:
+            pending = self._buf
+            self._buf = []
+            self._last_flush = time.monotonic()
+        if not pending:
+            return
+        try:
+            _append_events_bulk(self._task_id, pending)
+        except Exception as exc:
+            log.warning("批量落库 %d 条过程事件失败: %s", len(pending), exc)
+
+
 def create_task(
     topic: str,
     year_start: int = 2020,
@@ -191,8 +255,12 @@ def delete_task(task_id: str) -> dict:
         papers_existed = 0
         if task.papers:
             lit_ids = [p.get("lit_id") for p in task.papers if p.get("lit_id")]
+            # v8.1:只删无主行(task_id 为空,本任务早期直接写入的);
+            # 挂在前端池 task 名下的行属于检索历史管理,不随任务删除,
+            # 避免按全局 lit_id 误删其他任务的同款文献。
             rows = (db.query(PaperModel)
-                    .filter(PaperModel.lit_id.in_(lit_ids))
+                    .filter(PaperModel.lit_id.in_(lit_ids),
+                            PaperModel.task_id.is_(None))
                     .all())
             papers_existed = len(rows)
             for r in rows:
@@ -218,9 +286,18 @@ def _upsert(papers: list[Paper]) -> None:
                 str(p.source.value if hasattr(p.source, "value") else p.source),
                 p.lit_id, p.source_url,
             )
-            existing = db.get(PaperModel, p.lit_id)
-            meta = {k: v for k, v in p.to_dict().items()
-                    if k not in ("lit_id", "created_at", "selected")}
+            # v8.1:lit_id 不再是主键,按 (task_id 为空, lit_id) 查重
+            existing = (db.query(PaperModel)
+                        .filter(PaperModel.lit_id == p.lit_id,
+                                PaperModel.task_id.is_(None))
+                        .first())
+            meta = repair_paper_fields({k: v for k, v in p.to_dict().items()
+                                        if k not in ("lit_id", "created_at", "selected")})
+            meta["identity_key"] = build_identity_key(
+                source=str(meta.get("source") or ""), title=str(meta.get("title") or ""),
+                authors=list(meta.get("authors") or []), year=int(meta.get("year") or 0),
+                doi=str(meta.get("doi") or ""),
+            )
             if existing:
                 for k, v in meta.items():
                     setattr(existing, k, v)
@@ -240,6 +317,8 @@ def create_task_v2(
     year_start: int | None = None,
     year_end: int | None = None,
     run_id: str | None = None,
+    limit: int | None = None,
+    pool_task_id: str | None = None,
 ) -> RetrievalTaskModel:
     """新版任务入口。
 
@@ -249,6 +328,9 @@ def create_task_v2(
       3. run_task_v2 用 RetrievalController 翻页 + 雪球 + 回填。
 
     year_start / year_end 若提供,会覆盖 SearchIntent.filters 里的年份。
+    limit 为本次英文检索的目标文献总量(两库共享同一个池),不传则用
+    DEFAULT_LOOP 里的默认上限。
+    pool_task_id 为前端 X-Task-Id 隔离 ID,写入文献池时打标签(v7.1)。
     """
 
     selected = list(sources or ["openalex", "pubmed"])
@@ -266,18 +348,46 @@ def create_task_v2(
         db.add(task); db.commit(); db.refresh(task)
 
     if run_inline:
-        run_task_v2(task_id, selected, use_snowball, run_id=run_id)
+        run_task_v2(task_id, selected, use_snowball, run_id=run_id, limit=limit,
+                    pool_task_id=pool_task_id)
     else:
         threading.Thread(
-            target=run_task_v2, args=(task_id, selected, use_snowball, run_id), daemon=True,
+            target=run_task_v2,
+            args=(task_id, selected, use_snowball),
+            kwargs={"run_id": run_id, "limit": limit, "pool_task_id": pool_task_id},
+            daemon=True,
         ).start()
     with _db_session.SessionLocal() as db:
         return db.get(RetrievalTaskModel, task_id)
 
 
+def _warmup_dns(hosts: list[str]) -> None:
+    """并发预热 DNS 解析,规避检索线程首请求卡在 getaddrinfo。
+
+    socket.getaddrinfo 不受 httpx timeout 约束,Windows 下偶发挂起 30s+
+    会直接吃满单页 45s 超时预算(实测复现);提前预热让检索期命中
+    OS DNS 缓存。与 LLM 规划并行执行,常规耗时毫秒级。
+    """
+    import socket
+
+    def _resolve(h: str) -> None:
+        try:
+            socket.getaddrinfo(h, 443, type=socket.SOCK_STREAM)
+        except OSError as e:
+            log.warning("DNS 预热失败 %s: %s", h, e)
+
+    threads = [threading.Thread(target=_resolve, args=(h,), daemon=True) for h in hosts]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5.0)
+
+
 def run_task_v2(task_id: str, sources: list[str] | None = None,
                 use_snowball: bool = False,
-                run_id: str | None = None) -> None:
+                run_id: str | None = None,
+                limit: int | None = None,
+                pool_task_id: str | None = None) -> None:
     """Run the v2 retrieval controller."""
     task = get_task(task_id)
     if not task or task.status in TERMINAL_STATUSES:
@@ -287,6 +397,9 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
     stop = _cancel_event(task_id)
     try:
         _update(task_id, status="running", progress=5)
+
+        # 0. DNS 预热:与 LLM 规划并行,避免检索首请求卡 getaddrinfo(不受 httpx timeout 约束)
+        _warmup_dns(["api.openalex.org", "eutils.ncbi.nlm.nih.gov"])
 
         # 1. 规划:LLM 直接输出 3 库各自的 3 条检索式字符串
         try:
@@ -344,6 +457,8 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
 
         # 3. 主流程 + 雪球 + 回填(异步跑完)
         progress_events: list[dict] = []
+        # 并发下事件产生极快:先攒内存缓冲,按条数/时间批量落库,终态前 flush
+        event_buffer = _EventBuffer(task_id)
 
         def _on(evt):
             payload = {
@@ -352,11 +467,8 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                 "total": evt.total, "message": evt.message,
             }
             progress_events.append(payload)
-            # v4.1:过程日志持久化,供前端按 db 拆开展示
-            try:
-                _append_event(task_id, payload)
-            except Exception as exc:
-                log.warning("过程日志落库失败: %s", exc)
+            # v4.1:过程日志经缓冲批量持久化,避免逐条 commit 撞 SQLite 写锁
+            event_buffer.append(payload)
             mapping = {"fetching": 30, "fetching_done": 50,
                        "snowballing": 60, "snowballing_done": 80,
                        "filling": 85, "filling_done": 95,
@@ -365,10 +477,14 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
             if pct is not None:
                 _update(task_id, progress=pct)
 
+        # 目标文献总量:两库共享同一个 PaperPool,达到上限即提前收尾
+        loop_cfg = {"max_results_per_source": limit} if limit and limit > 0 else None
+
         async def _run_all():
             ctrl = RetrievalController(
                 queries_per_source=queries_by_source,
                 sources=src_objs,
+                loop_cfg=loop_cfg,
                 snow={"enabled": use_snowball, "forward_depth": 0,
                       "backward_depth": 1, "max_seeds": 100, "max_results": 500},
                 on_progress=_on,
@@ -377,25 +493,21 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
             return await ctrl.run_async()
 
         pool = asyncio.run(_run_all())
+        # 检索结束:强制清空事件缓冲,后续入库事件顺序才正确
+        event_buffer.flush()
 
         required_sources = {"openalex", "pubmed"}
         ready_sources = {source.name for source in src_objs}
-        failed_sources = {
-            event.get("source") for event in progress_events
-            if event.get("stage") == "source_failed"
-        }
         missing_sources = required_sources - ready_sources
-        if missing_sources or failed_sources:
-            detail: list[str] = []
-            if missing_sources:
-                detail.append(f"未启动: {', '.join(sorted(missing_sources))}")
-            if failed_sources:
-                detail.append(f"检索失败: {', '.join(sorted(failed_sources))}")
-            error = "三库任务失败；" + "；".join(detail) + "。请重新开始"
+        if missing_sources:
+            error = ("三库任务失败；未启动: "
+                     + ", ".join(sorted(missing_sources)) + "。请重新开始")
             _update(task_id, status="failed", progress=100,
                     total_after_filter=0, papers=[], error=error)
             _notify_task_result(task_id, False, f"任务 {task_id[:8]} {error}")
             return
+        # 单条检索式超时/翻页失败/429 属局部挫折(事件流中 fetching_source warning 可见),
+        # 不再判死整任务:成败只看池产出——池空由下方「未检索到任何文献」兜底。
 
         # 4. 入库(按来源覆盖写,确保文献池与本次检索结果一致)
         if not pool.papers:
@@ -406,9 +518,25 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                                 f"任务 {task_id[:8]} 未检索到任何文献")
             return
         # 失败源统计:成功入库数(按 source)少于预期时,记为异常源
+        def _emit_persisting(message: str, added: int = 0) -> None:
+            """入库阶段的进度事件。按源各发一条,前端按 source 分栏才能显示。"""
+            for src_name in selected:
+                _append_event(task_id, {
+                    "stage": "persisting", "source": src_name, "page": 0,
+                    "added": added, "total": len(pool.papers),
+                    "message": message,
+                })
+
+        _emit_persisting(f"开始写入文献池,共 {len(pool.papers)} 篇")
+        _update(task_id, progress=96)
         write_stats = pool_writer.upsert_with_overwrite(
-            pool.papers, sources=selected,
+            pool.papers, sources=selected, pool_task_id=pool_task_id,
         )
+        _emit_persisting(
+            f"文献池写入完成: 新增 {write_stats.get('inserted', 0)}, "
+            f"更新 {write_stats.get('updated', 0)}"
+        )
+        _update(task_id, progress=98)
         # 同步 task.papers 字段,确保 delete_task 能级联清空文献池
         try:
             with _db_session.SessionLocal() as db:
@@ -418,9 +546,12 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                     db.commit()
         except Exception as exc:
             log.warning("同步 task.papers 失败: %s", exc)
+        # v7.2:failed 按源分摊。此前把合计失败数复制给每个源,
+        # 实际只失败 10 条却显示「openalex: 10, pubmed: 10」的假象。
+        failed_by_source: dict[str, int] = write_stats.get("failed_by_source") or {}
         failed_sources = {
-            src: write_stats.get("failed", 0)
-            for src in selected if write_stats.get("failed", 0)
+            src: int(failed_by_source.get(src, 0))
+            for src in selected if int(failed_by_source.get(src, 0)) > 0
         }
         # 记录历史(仅 succeeded 后)。有 run_id 走 aggregator(合并中文那一边);
         # 没 run_id 兼容旧调用方,直接写一条历史。
@@ -430,7 +561,9 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                     run_id=run_id,
                     topic=task.topic,
                     papers=pool.papers,
-                    task_id=task_id,
+                    # v8:历史记录记「池 task_id」(与 papers.task_id 同源),
+                    # 不能记 v2 内部任务 id,否则检索记录与池脱节
+                    task_id=pool_task_id or task_id,
                     sources=selected,
                     failed_sources=failed_sources,
                 )
@@ -440,10 +573,11 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                     sources=selected,
                     papers=pool.papers,
                     failed_sources=failed_sources,
-                    task_id=task_id,
+                    task_id=pool_task_id or task_id,
                 )
         except Exception as exc:
             log.warning("写入检索历史失败: %s", exc)
+        event_buffer.flush()  # 终态落库前清空缓冲,保证过程日志完整
         _update(task_id, status="succeeded", progress=100,
                 total_before_filter=len(pool.papers),
                 total_after_filter=len(pool.papers),
@@ -456,6 +590,7 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
         )
     except TaskCancelledError:
         # 用户手动停止:进程级标志置位,Controller 主动抛错退出
+        event_buffer.flush()  # 停止前已产生的事件先落库
         try:
             _append_event(task_id, {
                 "stage": "cancelled", "source": "",
@@ -467,6 +602,7 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
         _update(task_id, status="failed", progress=100, error="用户已手动停止")
     except Exception as exc:
         log.exception("run_task_v2 失败")
+        event_buffer.flush()  # 异常路径也保证已产生的事件可见,便于排查
         _update(task_id, status="failed", progress=100, error=str(exc))
         _notify_task_result(task_id, False,
                             f"任务 {task_id[:8]} 执行异常:\n{exc}")

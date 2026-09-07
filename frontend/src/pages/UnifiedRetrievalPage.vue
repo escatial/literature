@@ -9,9 +9,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { QuestionFilled } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessageBox } from 'element-plus';
+import { toast } from '@/utils/toast';
 import { usePapersStore } from '@/stores/papers';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
+import { useLLMProvidersStore } from '@/stores/llmProviders';
+import { useSessionStore, newTimestampId } from '@/stores/session';
 import {
   queryPlan,
   createRetrievalTask,
@@ -22,7 +25,7 @@ import {
   listRetrievalHistory,
   restoreRetrievalHistory,
   deleteRetrievalHistory,
-  clearPapers,
+  listPapers,
 } from '@/api/endpoints';
 import type { RetrievalTask } from '@/api/types';
 import type { RetrievalHistory } from '@/api/endpoints';
@@ -34,6 +37,8 @@ const REQUIRED_DATABASE_LABELS = {
   openalex: 'OpenAlex',
   pubmed: 'PubMed',
 } as const;
+// v7.1:展示 LLM provider 配置状态(推荐/备用/配置保留)
+const llmProviders = useLLMProvidersStore();
 const runStarted = ref(false);
 const runFailed = ref(false);
 const runFailureMessage = ref('');
@@ -65,11 +70,11 @@ const viewHistory = async (row: RetrievalHistory) => {
     );
     const resp = await restoreRetrievalHistory(row.id);
     ustore.setTopic(row.topic);
-    ElMessage.success(`已加载历史文献 ${resp.total} 篇`);
+    toast.success(`已加载历史文献 ${resp.total} 篇`);
     router.push('/pool');
   } catch (e: any) {
     if (e !== 'cancel' && e !== 'close') {
-      ElMessage.error(`查看失败:${String(e?.message ?? e)}`);
+      toast.error(`查看失败:${String(e?.message ?? e)}`);
     }
   }
 };
@@ -85,11 +90,11 @@ const removeHistory = async (row: RetrievalHistory) => {
       { type: 'warning' },
     );
     await deleteRetrievalHistory(row.id);
-    ElMessage.success('已删除');
+    toast.success('已删除');
     await refreshHistory();
   } catch (e: any) {
     if (e !== 'cancel' && e !== 'close') {
-      ElMessage.error(`删除失败:${String(e?.message ?? e)}`);
+      toast.error(`删除失败:${String(e?.message ?? e)}`);
     }
   } finally {
     deletingId.value = null;
@@ -114,6 +119,7 @@ const sseSources = new Map<string, EventSource>();
 
 const ustore = useUnifiedRetrievalStore();
 const papersStore = usePapersStore();
+const sessionStore = useSessionStore();
 const topicInput = computed({
   get: () => ustore.topic,
   set: (value: string) => {
@@ -149,8 +155,28 @@ const totalRetrieved = computed(() => {
     : (ustore.enTasks.openalex.saved ?? 0) + (ustore.enTasks.pubmed.saved ?? 0);
   return cnki + en;
 });
-/** 需求1:成功导入文献池的文献数(本次任务,与 totalRetrieved 一致)。 */
-const importedSuccess = computed(() => totalRetrieved.value);
+/** 需求1:成功导入文献池的文献数——与文献池页面严格同口径。
+ *  修复「显示打架」:saved 口径(lit_id 去重的检索侧统计)与池内实际行数
+ *  (identity_key 二次去重 + provenance 校验淘汰)存在差值,之前 importedSuccess
+ *  直接等于 totalRetrieved,导致汇总「成功导入 300」而文献池只有 276。
+ *  现在任务完成后从池 API 取实际 total(拦截器自动带 X-Task-Id),取不到再回退 saved。 */
+const poolActualTotal = ref<number | null>(null);
+const importedSuccess = computed(() => poolActualTotal.value ?? totalRetrieved.value);
+// v7.2:补上缺失的取数实现——此前 poolActualTotal 只有「重置为 null」,
+// 从未真正赋值,importedSuccess 永远回退 saved 口径(如 590),而池子实际 569,
+// 「检索总数 vs 成功导入 vs 文献池」三个数字永远对不上。
+// 任务全部结束(isRunning true→false)时从池 API 取当前任务实际 total,
+// 拦截器自动带 X-Task-Id,与文献池页面严格同口径。
+watch(isRunning, async (running, prev) => {
+  if (prev && !running && totalRetrieved.value > 0) {
+    try {
+      const resp = await listPapers({ page: 1, page_size: 1 });
+      poolActualTotal.value = resp.total;
+    } catch {
+      /* 取失败则保持回退 saved 口径 */
+    }
+  }
+});
 /** 需求1:异常条目——任务失败或部分源失败时填这里,作为告警明细。 */
 const failureEntries = computed<Array<{ source: string; message: string }>>(() => {
   const out: Array<{ source: string; message: string }> = [];
@@ -270,10 +296,27 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
       // 过程日志只追加,不覆盖任务阶段
       if (msg.stage === 'log') {
         if (msg.msg) ustore.appendCnkiLog(db, msg.msg);
-      } else {
-        ustore.upsertCnkiTask(db, { ...initial, ...msg });
+        return;
       }
-      if (msg.stage === 'done' || msg.stage === 'error') {
+      // 真有事件进来(plan/search/fetched/done/error…)时,把 stage
+      // 推回 active(避免前一轮 onerror 把 task 标 error 后,新一轮
+      // SSE 起来时仍一直显示「失败」)。
+      const merged = { ...initial, ...msg };
+      if (msg.stage === 'search_done' && msg.ok === false) {
+        // 产品级:0 篇入库必须标为失败,否则任务停在 active →
+        // 进度条显示「0 篇 已完成」误导用户;文案不暴露内部机制
+        merged.stage = 'error';
+        merged.msg = '未获取到文献：数据源暂时不可用（可能受访问限制），请稍后重试，或适当调低目标篇数';
+        ustore.appendCnkiLog(db, `[失败] ${merged.msg}`);
+      } else if (
+        merged.stage &&
+        merged.stage !== 'done' &&
+        merged.stage !== 'error'
+      ) {
+        merged.stage = 'active';
+      }
+      ustore.upsertCnkiTask(db, merged);
+      if (merged.stage === 'done' || merged.stage === 'error') {
         es.close();
         sseSources.delete(initial.task_id);
       }
@@ -347,6 +390,7 @@ const cnkiProgress = computed<ProgressBar>(() => {
     target,
     running: task.stage !== 'done' && task.stage !== 'error',
     lastLog: logs[logs.length - 1] ?? '',
+    _stage: task.stage,
   };
 });
 
@@ -463,7 +507,10 @@ const generatePlan = async () => {
     }
     throw lastError ?? new Error('检索式生成失败');
   } catch (e) {
-    ustore.appendCnkiLog('cnki', `[错误] 检索式自动生成失败：${String(e)}`);
+    const msg = (e as Error)?.message ?? String(e);
+    ustore.appendCnkiLog('cnki', `[错误] 检索式自动生成失败：${msg}`);
+    // 显眼弹窗(不再只追加 log)。常见原因:LLM provider 不通 / 返回不合法 JSON / 超时。
+    toast.error(`检索式生成失败:${msg}`);
     return false;
   } finally {
     ustore.setPlanning(false);
@@ -472,6 +519,17 @@ const generatePlan = async () => {
 
 const scheduleAutoRetry = (topic: string) => {
   if (autoRetryTimer !== null) return;
+  // 最多自动重试 3 次(避免 LLM 持续不通时无限循环、用户看不到尽头)
+  // 每次重试间隔 5 秒;超过上限后彻底停手,要求用户手动「重新启动」。
+  const maxAutoRetries = 3;
+  ustore.autoRetryCount = (ustore.autoRetryCount || 0) + 1;
+  if (ustore.autoRetryCount > maxAutoRetries) {
+    runFailed.value = true;
+    runFailureMessage.value =
+      `已自动重试 ${maxAutoRetries} 次仍失败,请检查后端 LLM provider 配置或网络,然后点击「立即启动」重试。`;
+    toast.error(runFailureMessage.value);
+    return;
+  }
   autoRetryTimer = window.setTimeout(async () => {
     autoRetryTimer = null;
     if (ustore.topic.trim() !== topic) return;
@@ -482,16 +540,27 @@ const scheduleAutoRetry = (topic: string) => {
   }, 5000);
 };
 
+/** 用户手动点「立即启动」时清空重试计数。 */
+const resetAutoRetryCount = () => {
+  ustore.autoRetryCount = 0;
+};
+
 // ─────────────── 一键全自动 ───────────────
 const startUnifiedRetrieval = async () => {
   const topic = ustore.topic.trim();
   if (!topic) {
-    ElMessage.warning('请输入研究主题');
+    toast.warning('请输入研究主题');
     return;
   }
   runStarted.value = true;
   runFailed.value = false;
   runFailureMessage.value = '';
+  // ★ 任务完全隔离(v8):每次启动生成全新 task_id,新旧任务互不可见。
+  //   旧池数据留在旧 task 名下(检索历史可查),绝不混入本次结果。
+  //   不再依赖「启动前清空」——清空在请求乱序/多实例场景下会失效,导致跨任务混池。
+  sessionStore.newSession();
+  // 用户主动重试 → 清空「自动重试计数」,允许下一轮失败后再次自动重试 3 次。
+  resetAutoRetryCount();
   // 每次点击都从三库全量重启，不能沿用上次只选部分数据源的旧状态。
   ustore.setDbs([...REQUIRED_DATABASES]);
   ustore.clearCnkiTasks();
@@ -518,16 +587,14 @@ const startUnifiedRetrieval = async () => {
   }
 
   try {
-    // ★ 新任务语义:每次检索都是独立任务,启动前清空文献池(历史已存在检索历史中)。
-    //   这样文献池只反映「本次检索」的中英合并结果,不跨任务累积。
-    await clearPapers();
+    // v8 任务隔离:池按 task 天然隔离,无需启动前清空(旧池留在旧任务名下,互不可见)
+    poolActualTotal.value = null;
 
-    ElMessage.info('启动自动检索(知网 v4.0 + 英文 PubMed/OpenAlex)…');
+    toast.info('启动自动检索(知网 v4.0 + 英文 PubMed/OpenAlex)…');
 
-    // 本次「启动自动检索」的 runId:中文 + 英文两边共享,后端 aggregator 用它合并写一条历史
-    const runId = (typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : 'run-' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+    // 本次「启动自动检索」的 runId:中文 + 英文两边共享,后端 aggregator 用它合并写一条历史。
+    // v8.2:时间戳相关 id(t-yyyyMMddHHmmss-xxxx),各任务不同、肉眼可对账。
+    const runId = newTimestampId();
     ustore.setRunId(runId);
 
     const startCnkiTask = async () => {
@@ -585,7 +652,7 @@ const startUnifiedRetrieval = async () => {
         const msg = String(e?.message ?? e);
         runFailed.value = true;
         runFailureMessage.value = `OpenAlex / PubMed 未能同时启动，系统将在 5 秒后自动重试：${msg}`;
-        ElMessage.warning(runFailureMessage.value);
+        toast.warning(runFailureMessage.value);
         scheduleAutoRetry(topic);
       }
     };
@@ -627,9 +694,9 @@ const stopAll = async () => {
     if (englishTask.value) {
       englishTask.value = { ...englishTask.value, status: 'failed', error: '用户已手动停止' };
     }
-    ElMessage.success('已发送停止指令,正在终止所有检索任务');
+    toast.success('已发送停止指令,正在终止所有检索任务');
   } catch (e: any) {
-    ElMessage.error(`停止失败: ${String(e?.message ?? e)}`);
+    toast.error(`停止失败: ${String(e?.message ?? e)}`);
   } finally {
     stopping.value = false;
   }
@@ -640,6 +707,8 @@ onMounted(async () => {
   runStarted.value = Boolean(
     ustore.englishTaskId || Object.keys(ustore.cnkiTasks).length,
   );
+  // v7.1:加载 LLM provider 状态(后台异步,不阻塞主题输入)
+  llmProviders.refresh().catch(() => { /* 接口挂了也不挡用户 */ });
   await refreshHistory();
   // 恢复英文任务进度
   if (ustore.englishTaskId) {
@@ -676,7 +745,7 @@ onBeforeUnmount(() => {
     <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
       <el-input
         v-model="topicInput"
-        placeholder="研究主题,如:无人机协同配送应急物资"
+        placeholder="研究主题"
         style="flex: 1; min-width: 320px"
         clearable
         :disabled="isRunning"
@@ -698,6 +767,30 @@ onBeforeUnmount(() => {
       <el-button type="danger" plain :loading="stopping" :disabled="!isRunning" @click="stopAll">
         停止
       </el-button>
+    </div>
+
+    <!-- v7.1 LLM provider 状态条:展示当前默认/备用,避免用户在 LLM 不通时疑惑 -->
+    <div class="llm-providers-bar">
+      <span class="llm-providers-label">LLM:</span>
+      <el-tag
+        v-for="p in llmProviders.providers"
+        :key="p.id"
+        :type="p.is_default ? 'success' : (p.is_active_fallback ? 'warning' : 'info')"
+        :effect="p.is_default ? 'dark' : 'plain'"
+        size="small"
+      >
+        {{ p.label }}
+        <span v-if="p.is_default">·推荐</span>
+        <span v-else-if="p.is_active_fallback">·备用</span>
+        <span v-else>·配置保留</span>
+      </el-tag>
+      <el-tooltip
+        v-if="llmProviders.providers.length"
+        placement="top"
+        :content="`轮换顺序:${llmProviders.fallbackOrder.join(' → ') || '(空)'}`"
+      >
+        <span class="llm-providers-hint">ⓘ</span>
+      </el-tooltip>
     </div>
   </el-card>
 
@@ -784,19 +877,18 @@ onBeforeUnmount(() => {
         <span style="font-weight: 500">本次检索结果汇总</span>
       </div>
     </template>
+    <!-- v7.2:用户只关心最后入库多少——只展示「入库文献」一个数字,
+         与文献池页面严格同口径(任务完成后取池 API 实际 total)。
+         检索总数/拦截数等中间口径不再展示,差异全部沉淀在质量闸门内部。 -->
     <el-row :gutter="16">
-      <el-col :span="8"><div class="metric"><div class="metric-label">检索总数量</div><div class="metric-value">{{ totalRetrieved }}</div><div class="metric-sub">篇</div></div></el-col>
-      <el-col :span="8"><div class="metric"><div class="metric-label">成功导入文献池</div><div class="metric-value metric-success">{{ importedSuccess }}</div><div class="metric-sub">篇</div></div></el-col>
-      <el-col :span="8"><div class="metric"><div class="metric-label">异常条目</div><div class="metric-value" :class="hasFailureEntries ? 'metric-danger' : 'metric-muted'">{{ failureEntries.length }}</div><div class="metric-sub">条</div></div></el-col>
+      <el-col :span="24">
+        <div class="metric">
+          <div class="metric-label">入库文献</div>
+          <div class="metric-value metric-success">{{ importedSuccess }}</div>
+          <div class="metric-sub">篇</div>
+        </div>
+      </el-col>
     </el-row>
-    <el-collapse v-if="hasFailureEntries" style="margin-top: 12px">
-      <el-collapse-item title="查看异常明细" name="fail-detail">
-        <el-table :data="failureEntries" stripe size="small">
-          <el-table-column prop="source" label="数据源" width="120" />
-          <el-table-column prop="message" label="异常描述" />
-        </el-table>
-      </el-collapse-item>
-    </el-collapse>
     <el-alert v-if="hasTaskFailure" type="error" :closable="false" show-icon style="margin-top: 12px" :title="taskErrorMessage || '任务失败'" />
     <el-alert v-else-if="hasTaskWarning" type="warning" :closable="false" show-icon style="margin-top: 12px" :title="`部分源异常,已自动忽略:${taskWarningMessage}`" />
   </el-card>
@@ -826,20 +918,6 @@ onBeforeUnmount(() => {
       </el-table-column>
       <el-table-column label="检索关键词" min-width="240" prop="topic" />
       <el-table-column label="文献总数" width="100" prop="total_count" />
-      <el-table-column label="异常源" width="180">
-        <template #default="{ row }">
-          <span v-if="!Object.keys(row.failed_sources || {}).length" style="color: #67c23a">无</span>
-          <el-tag
-            v-for="(cnt, src) in row.failed_sources"
-            :key="src"
-            size="small"
-            type="danger"
-            style="margin-right: 4px"
-          >
-            {{ src }}: {{ cnt }}
-          </el-tag>
-        </template>
-      </el-table-column>
       <el-table-column label="操作" width="140">
         <template #default="{ row }">
           <el-button size="small" type="primary" link @click="viewHistory(row)">查看</el-button>
@@ -872,6 +950,26 @@ onBeforeUnmount(() => {
 .metric-danger { color: #f56c6c; }
 .metric-muted { color: #c0c4cc; }
 .metric-sub { color: #909399; font-size: 12px; margin-top: 4px; }
+
+/* v7.1 LLM provider 状态条 */
+.llm-providers-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #ebeef5;
+}
+.llm-providers-label {
+  font-size: 12px;
+  color: #909399;
+}
+.llm-providers-hint {
+  font-size: 13px;
+  color: #909399;
+  cursor: help;
+}
 </style>
 
 <style scoped>

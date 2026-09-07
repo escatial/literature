@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import unicodedata
@@ -41,6 +42,8 @@ class SectionResult:
     content: str
     citations: list[str] = field(default_factory=list)
     dropped_citations: list[str] = field(default_factory=list)
+    # 刀2:重写后引用密度仍不达标时的标记(SSE 下发给前端展示)
+    density_warning: bool = False
 
 
 def _build_papers_catalog(papers: list[Paper]) -> str:
@@ -54,15 +57,45 @@ def _build_papers_catalog(papers: list[Paper]) -> str:
     return "\n".join(lines) if lines else "(本章无可引用文献)"
 
 
-def _build_papers_catalog_alias(papers: list[Paper], alias_map: dict[str, str]) -> str:
+_GRADE_LABELS = {"high": "高相关", "medium": "中相关", "low": "低相关(仅背景)"}
+_GRADE_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def _grade_of(lit_id: str, grades: dict[str, str] | None) -> str:
+    """取文献的相关性等级;缺失时按中相关处理,不擅自升级为高相关。"""
+    if not grades:
+        return "medium"
+    return grades.get(lit_id, "medium")
+
+
+def _grade_suffix(lit_id: str, grades: dict[str, str] | None) -> str:
+    """清单行尾的相关性标注,只在有分级数据时输出。"""
+    if not grades:
+        return ""
+    return f" | 相关性: {_GRADE_LABELS[_grade_of(lit_id, grades)]}"
+
+
+def _order_by_grade(papers: list[Paper], grades: dict[str, str] | None) -> list[Paper]:
+    """高相关文献排在清单最前,引导 LLM 优先取用。"""
+    if not grades:
+        return list(papers)
+    return sorted(papers, key=lambda p: _GRADE_ORDER[_grade_of(p.lit_id, grades)])
+
+
+def _build_papers_catalog_alias(
+    papers: list[Paper],
+    alias_map: dict[str, str],
+    grades: dict[str, str] | None = None,
+) -> str:
     """带短 alias 的论文清单(给 LLM 用的版本)。"""
     lines = []
     real_to_alias = {real: alias for alias, real in alias_map.items()}
-    for p in papers:
+    for p in _order_by_grade(papers, grades):
         alias = real_to_alias.get(p.lit_id, p.lit_id)
         lines.append(
             f"- {alias} | {p.title} | {', '.join(p.authors)} | "
             f"{p.journal or 'N/A'} | {p.year or 'N/A'}"
+            f"{_grade_suffix(p.lit_id, grades)}"
         )
     return "\n".join(lines) if lines else "(本章无可引用文献)"
 
@@ -71,15 +104,17 @@ def _build_abstract_catalog(
     papers: list[Paper],
     alias_map: dict[str, str],
     max_summary_chars: int = 400,
+    grades: dict[str, str] | None = None,
 ) -> str:
     """构造带摘要的文献池, 直接供 LLM 基于摘要写作。"""
     lines = []
     real_to_alias = {real: alias for alias, real in alias_map.items()}
-    for p in papers:
+    for p in _order_by_grade(papers, grades):
         alias = real_to_alias.get(p.lit_id, p.lit_id)
         meta = (
             f"{alias} | {p.title} | {', '.join(p.authors)} | "
             f"{p.journal or 'N/A'} | {p.year or 'N/A'}"
+            f"{_grade_suffix(p.lit_id, grades)}"
         )
         if p.abstract:
             ab = p.abstract.strip()
@@ -183,11 +218,39 @@ def _build_section_role(
     )
 
 
+def _build_grade_rule(
+    papers: list[Paper],
+    alias_map: dict[str, str],
+    grades: dict[str, str] | None,
+) -> str:
+    """相关性分级的写作硬约束:高相关优先,低相关仅作背景补充。"""
+    if not grades or not alias_map:
+        return ""
+    real_to_alias = {real: alias for alias, real in alias_map.items()}
+    low = [
+        real_to_alias.get(p.lit_id, p.lit_id)
+        for p in papers
+        if _grade_of(p.lit_id, grades) == "low"
+    ]
+    rule = (
+        "\n【文献相关性分级约束(必须遵守)】\n"
+        "文献清单每条已标注相关性等级。写作时:\n"
+        "1. 正文论述与论据支撑优先取用『高相关』文献,核心结论必须由高相关文献支撑\n"
+        "2. 『中相关』文献用于补充论证与横向对比\n"
+        "3. 『低相关(仅背景)』文献只能出现在背景铺垫或研究现状概述中,"
+        "严禁作为核心论据、严禁用于支撑关键结论"
+    )
+    if low:
+        rule += "\n本章仅可作背景补充的文献: " + ", ".join(low)
+    return rule
+
+
 def _prepare_section_context(
     section: SectionSpec,
     topic: str,
     groups: list[Group],
     papers: list[Paper],
+    grades: dict[str, str] | None = None,
 ) -> tuple[str, str, set[str], dict[str, str], bool]:
     allowed = {p.lit_id for p in papers}
     is_comment = section.key == "comment"
@@ -228,16 +291,20 @@ def _prepare_section_context(
     catalog = "(本章无可引用文献)"
     if not is_comment and papers:
         if any(p.abstract and p.abstract.strip() for p in short_list):
-            catalog = _build_abstract_catalog(short_list, alias_map)
+            catalog = _build_abstract_catalog(short_list, alias_map, grades=grades)
         else:
-            catalog = _build_papers_catalog_alias(short_list, alias_map)
+            catalog = _build_papers_catalog_alias(short_list, alias_map, grades=grades)
+
+    section_role = _build_section_role(section, groups, require_citation, alias_map)
+    if not is_comment:
+        section_role += _build_grade_rule(short_list, alias_map, grades)
 
     system = render(
         "literature-review:section",
         topic=topic,
         section_key=section.key,
         section_title=section.title,
-        section_role=_build_section_role(section, groups, require_citation, alias_map),
+        section_role=section_role,
         papers_catalog=catalog,
         available_lit_ids="\n".join(sorted(alias_map.keys())) if alias_map else "(无,本节不引用任何文献)",
         humanize=True,
@@ -547,6 +614,82 @@ def _remove_model_citation_tokens(content: str) -> str:
     return CITE_RE.sub("", content or "")
 
 
+def _min_citation_target(n_papers: int) -> int:
+    """引用密度硬指标(与 prompt 承诺一致):池≥5 篇→至少 5 个不同文献;
+    不足 5 篇按比例,但至少 2 篇(n=1 时为 1)。"""
+    if n_papers <= 0:
+        return 0
+    if n_papers >= 5:
+        return 5
+    return min(n_papers, max(2, n_papers // 2 + 1))
+
+
+def _unmatched_citation_feedback(unmatched: list[str]) -> str:
+    """构造未匹配夹注(幻觉引用)的重写反馈。"""
+    items = "\n".join(f"- {q}" for q in unmatched[:8])
+    return (
+        "1. 以下作者(年份)夹注在本章文献池中不存在,属于无效引用:\n"
+        f"{items}\n"
+        "   请把它们改写为文献池中真实文献的作者与年份,"
+        "或将相应论断改为不依赖具体文献的一般性表述;\n"
+    )
+
+
+def _density_feedback(required: int, actual: int) -> str:
+    """构造引用密度不足的重写反馈。"""
+    return (
+        f"2. 本稿只引用了 {actual} 篇不同文献,低于本章至少 {required} 篇的要求。\n"
+        "   请扩充对文献池中其他文献的讨论与对比,"
+        f"确保出现至少 {required} 处不同的作者(年份)夹注;\n"
+    )
+
+
+# 整句边界判定字符(含换行,防止跨段误删)
+_SENTENCE_CHARS = "。！？!?；;\n"
+
+
+def _drop_sentences_with_quotes(content: str, unmatched: list[str]) -> str:
+    """刀1最后防线:整句删除仍含未匹配夹注的句子,不留裸作者名。
+
+    unmatched 记录的是「作者(年份)」原文;正文中的对应夹注已被剥离年份只剩
+    裸作者名,因此按作者名定位,再扩展到句边界删除整句。
+    """
+    if not content or not unmatched:
+        return content
+    spans: list[tuple[int, int]] = []
+    for quote in unmatched:
+        author = _re_inject.sub(r"[\uff08(]\s*\d{4}\s*[\uff09)]", "", quote).strip()
+        if len(author) < 2:
+            continue
+        for m in _re_inject.finditer(_re_inject.escape(author), content):
+            pos = m.start()
+            # 向前找句起点(最近句末标点之后)
+            start = 0
+            for i in range(pos - 1, -1, -1):
+                if content[i] in _SENTENCE_CHARS:
+                    start = i + 1
+                    break
+            # 向后找句终点(最近句末标点本身)
+            end = len(content)
+            for i in range(m.end(), len(content)):
+                if content[i] in _SENTENCE_CHARS:
+                    end = i + 1
+                    break
+            spans.append((start, end))
+    if not spans:
+        return content
+    # 合并重叠区间后从后往前删,避免位置偏移
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(set(spans)):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
+        content = content[:start] + content[end:]
+    return _re_inject.sub(r"\n{3,}", "\n\n", content).strip()
+
+
 def _finalize_section_result(
     section: SectionSpec,
     raw_content: str,
@@ -588,10 +731,11 @@ def write_section(
     groups: list[Group],
     papers: list[Paper],
     model: str | None = None,
+    grades: dict[str, str] | None = None,
 ) -> SectionResult:
-    """写一章。papers 是本章允许引用的全集。"""
+    """写一章。papers 是本章允许引用的全集,grades 是 lit_id -> 相关性等级。"""
     system, user, allowed, alias_map, is_comment = _prepare_section_context(
-        section, topic, groups, papers,
+        section, topic, groups, papers, grades,
     )
     raw = _invoke_section_chain(system=system, user=user, model=model)
     if not is_comment and papers:
@@ -610,10 +754,11 @@ def write_section_stream(
     groups: list[Group],
     papers: list[Paper],
     model: str | None = None,
+    grades: dict[str, str] | None = None,
 ) -> Generator[tuple[str, bool, SectionResult | None], None, None]:
     """流式写一章:逐 token 返回,最后附带最终章节结果。"""
     system, user, allowed, alias_map, is_comment = _prepare_section_context(
-        section, topic, groups, papers,
+        section, topic, groups, papers, grades,
     )
     raw_parts: list[str] = []
     for piece in messages_stream(system=system, user=user, max_tokens=8000, model=model):
@@ -624,6 +769,10 @@ def write_section_stream(
     if not is_comment and papers:
         raw = _remove_model_citation_tokens(raw)
         raw, _, unmatched = _inject_citations_by_author_year(raw, list(papers))
+        # 流式版无法隐藏地重写一轮(token 已推送前端),
+        # 只做整句删除兜底,不留裸作者名
+        if unmatched:
+            raw = _drop_sentences_with_quotes(raw, unmatched)
     result = _finalize_section_result(
         section,
         raw,
@@ -632,4 +781,11 @@ def write_section_stream(
         is_comment,
     )
     result.dropped_citations.extend(unmatched)
+    required = 0 if is_comment else _min_citation_target(len(papers))
+    if required and len(result.citations) < required:
+        result.density_warning = True
+        log.warning(
+            "章节 %s 引用密度不足(流式): %d/%d 篇",
+            section.key, len(result.citations), required,
+        )
     yield "", True, result

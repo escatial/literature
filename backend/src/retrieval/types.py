@@ -9,6 +9,7 @@ class Source(str, Enum):
     PUBMED = "pubmed"
     OPENALEX = "openalex"
     CROSSREF = "crossref"
+    GOOGLE_SCHOLAR = "google_scholar"
     USER_IMPORTED = "user_imported"  # 中文手动导入
 
 

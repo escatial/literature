@@ -64,6 +64,70 @@ class PaperListResponse(BaseModel):
     total_pages: int
 
 
+# ─── 写作导入筛选(去写作:筛选预览 + 批量勾选) ────────────────
+
+class LangExportFilter(BaseModel):
+    """单语种导出筛选(数量上限 + 年份区间)。0 = 不限。"""
+    limit: int = Field(0, ge=0, le=10000, description="导入数量上限,0=不限")
+    year_start: int = Field(0, ge=0, le=2100, description="起始年份,0=不限")
+    year_end: int = Field(0, ge=0, le=2100, description="结束年份,0=不限")
+
+
+class ExportPreviewRequest(BaseModel):
+    """「去写作」导入预览请求:中英文各自独立的数量/年份筛选。"""
+    cn: LangExportFilter = Field(default_factory=LangExportFilter)
+    cn_core_only: bool = Field(False, description="中文仅取核心期刊文献")
+    # 仅 cn_core_only=true 时生效,取代 cn.limit 作为中文的数量上限
+    cn_core_limit: int = Field(0, ge=0, le=10000, description="中文核心导入数量,0=不限")
+    en: LangExportFilter = Field(default_factory=LangExportFilter)
+
+
+class LangPoolRange(BaseModel):
+    """全池范围统计(不受筛选影响,供前端生成年份下拉选项)。"""
+    total: int
+    min_year: int
+    max_year: int
+
+
+class ExportPoolRange(BaseModel):
+    cn: LangPoolRange
+    en: LangPoolRange
+
+
+class YearDistItem(BaseModel):
+    year: int
+    cn: int = 0
+    en: int = 0
+
+
+class ExportPreviewStats(BaseModel):
+    """应用筛选(含数量截断)后的导入集合统计。"""
+    total: int
+    cn_total: int
+    cn_core: int
+    cn_non_core: int
+    en_total: int
+    truncated: bool = Field(False, description="候选数超过数量上限发生了截断")
+    year_distribution: list[YearDistItem] = Field(default_factory=list)
+    lit_ids: list[str] = Field(default_factory=list)
+
+
+class ExportPreviewResponse(BaseModel):
+    pool: ExportPoolRange
+    filtered: ExportPreviewStats
+
+
+class BatchSelectRequest(BaseModel):
+    """批量勾选文献(「去写作」导入)。mode=replace 先清空当前任务勾选再标记。"""
+    lit_ids: list[str] = Field(default_factory=list)
+    mode: str = Field("replace", pattern="^(replace|add)$")
+
+
+class BatchSelectResponse(BaseModel):
+    updated: int
+    cleared: int = 0
+
+
 # ─── 检索历史(需求4) ──────────────────────────────────────
 
 class RetrievalHistoryOut(BaseModel):

@@ -14,13 +14,18 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Iterable
+from typing import Any, Iterable
 
 from sqlalchemy import select
 
 from db.models import PaperModel
 import db.session as _db_session
 from retrieval.provenance import validate_paper_provenance
+from retrieval.paper_identity import (
+    build_identity_key,
+    repair_paper_fields,
+    validate_paper_identity,
+)
 from retrieval.types import Paper
 
 
@@ -54,26 +59,48 @@ def upsert_with_overwrite(
     papers: list[Paper],
     *,
     sources: Iterable[str],
-) -> dict[str, int]:
+    pool_task_id: str | None = None,
+) -> dict[str, Any]:
     """先按 sources 清空同源历史,再写入 papers。
 
-    返回 {"cleared": N, "inserted": N, "updated": N, "failed": N},
-    仅统计本次操作。
+    v7.1 修复:pool_task_id(前端 X-Task-Id 隔离 ID)非空时,
+    - 清空只删「同源且同 task」的历史,不跨任务误删;
+    - 写入/更新的每条 paper 都打上 task_id 标签,
+      否则文献池按 X-Task-Id 过滤时会显示 0 条。
+    pool_task_id 为 None 时保持旧行为(清全部同源,写入不带标签)。
+
+    返回 {"cleared": N, "inserted": N, "updated": N, "failed": N,
+          "failed_by_source": {source: N}},
+    仅统计本次操作。failed_by_source 供异常源按源展示,
+    避免上层把合计失败数复制给每个源(显示 openalex: 10, pubmed: 10 的假象)。
     """
     targets = _group_sources(sources)
     if not targets:
         log.warning("upsert_with_overwrite 未指定来源,拒绝写入以避免误清空")
-        return {"cleared": 0, "inserted": 0, "updated": 0, "failed": 0}
+        return {"cleared": 0, "inserted": 0, "updated": 0, "failed": 0,
+                "failed_by_source": {}}
+    if not pool_task_id:
+        # 防线:pool_task_id 为空说明前端请求没带 X-Task-Id(拦截器断链/旧构建),
+        # 写入的文献不挂任务,文献池按任务过滤会显示 0 条 —— 第一时间在日志暴露。
+        log.warning(
+            "upsert_with_overwrite: pool_task_id 为空(前端未带 X-Task-Id),"
+            "本次 %d 篇将不挂任务,文献池会显示 0 条;请检查前端构建与会话链路",
+            len(papers),
+        )
 
     cleared = 0
     inserted = 0
     updated = 0
     failed = 0
+    # 按源统计写入失败数(校验不通过/落库异常),供上层异常源展示
+    failed_by_source: dict[str, int] = defaultdict(int)
 
     with _db_session.SessionLocal() as db:
-        # 1) 清空同源历史
+        # 1) 清空同源历史(按任务隔离:只清当前 task 的同源数据)
         for src in targets:
             stmt = select(PaperModel).where(PaperModel.source == src)
+            if pool_task_id:
+                stmt = stmt.where(PaperModel.task_id == pool_task_id)
             rows = list(db.execute(stmt).scalars().all())
             for r in rows:
                 db.delete(r)
@@ -91,31 +118,51 @@ def upsert_with_overwrite(
             unique.append(p)
 
         for p in unique:
+            # source 值在 try 外解析,保证 except 分支也能按源计数
+            src_value = str(p.source.value if hasattr(p.source, "value") else p.source)
             try:
-                src_value = str(p.source.value if hasattr(p.source, "value") else p.source)
                 validate_paper_provenance(src_value, p.lit_id, p.source_url)
-                meta = {
+                meta = repair_paper_fields({
                     k: v for k, v in p.to_dict().items()
                     if k not in ("lit_id", "created_at", "selected")
-                }
-                existing = db.get(PaperModel, p.lit_id)
+                })
+                validate_paper_identity({"lit_id": p.lit_id, **meta})
+                meta["identity_key"] = build_identity_key(
+                    source=src_value, title=str(meta.get("title") or ""),
+                    authors=list(meta.get("authors") or []),
+                    year=int(meta.get("year") or 0), doi=str(meta.get("doi") or ""),
+                )
+                # v8.1:查重限定在「当前任务」内 —— 同一文献可在不同任务各存一行,
+                # 不再把其他任务的行改挂到本任务(那是导致跨任务搬家的根因)。
+                dedup_q = db.query(PaperModel).filter(
+                    PaperModel.identity_key == meta["identity_key"]
+                )
+                if pool_task_id:
+                    dedup_q = dedup_q.filter(PaperModel.task_id == pool_task_id)
+                else:
+                    dedup_q = dedup_q.filter(PaperModel.task_id.is_(None))
+                existing = dedup_q.first()
                 if existing:
                     for k, v in meta.items():
                         setattr(existing, k, v)
                     updated += 1
                 else:
-                    db.add(PaperModel(lit_id=p.lit_id, selected=True, **meta))
+                    db.add(PaperModel(
+                        lit_id=p.lit_id, selected=True, task_id=pool_task_id, **meta,
+                    ))
                     inserted += 1
             except Exception as exc:
                 log.warning("写入文献失败 lit_id=%s: %s", p.lit_id, exc)
                 failed += 1
+                failed_by_source[src_value] += 1
         db.commit()
 
     log.info(
         "upsert_with_overwrite sources=%s cleared=%d inserted=%d updated=%d failed=%d",
         targets, cleared, inserted, updated, failed,
     )
-    return {"cleared": cleared, "inserted": inserted, "updated": updated, "failed": failed}
+    return {"cleared": cleared, "inserted": inserted, "updated": updated,
+            "failed": failed, "failed_by_source": dict(failed_by_source)}
 
 
 def split_by_source(papers: list[Paper]) -> dict[str, list[Paper]]:

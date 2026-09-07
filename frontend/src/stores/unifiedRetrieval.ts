@@ -65,6 +65,8 @@ interface State {
   autoTarget: number;
   // 知网翻页上限:每页 20 条,默认 3 页=60 条(覆盖大多数 VRP 这类中等主题;更多会触验证码)
   autoMaxPages: number;
+  // 自动重试计数(LLM/启动失败时 scheduleAutoRetry 自增;用户手动重启时清零)
+  autoRetryCount: number;
 }
 
 const STORAGE_KEY = 'lit-review-unified-retrieval-v1';
@@ -91,6 +93,8 @@ const initial: State = {
   autoTarget: 300,
   // 知网翻页上限:20 页 × 20 条/页 = 400 条;None/0 视为"翻到知网无结果为止"
   autoMaxPages: 20,
+  // 自动重试计数器(用户手动重启时由前端 resetAutoRetryCount 清零)
+  autoRetryCount: 0,
 };
 
 function loadFromStorage(): Partial<State> {

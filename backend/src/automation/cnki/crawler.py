@@ -32,6 +32,24 @@ from .cjy_client import (
     CjyFatalError,
     RecognizeResult,
 )
+# 产品级改造子系统：分层重试/断路器/告警(resilience)、指纹(fingerprint)、
+# 代理池(proxy_pool)、动态并发池(scheduler)、任务监控(monitor)
+from . import fingerprint as _fingerprint
+from . import monitor as _monitor
+from . import proxy_pool as _proxy_pool
+from . import scheduler as _scheduler
+from .resilience import (
+    AlertManager,
+    CircuitBreaker,
+    CircuitOpenError,
+    ErrorClass,
+    RetryPolicy,
+    classify_exception,
+    get_alert_manager,
+    get_breaker,
+    register_exception_classifier,
+    resilient_call,
+)
 
 # ========================== 路径（嵌入后全部绝对化）==========================
 # 本模块目录: backend/src/automation/cnki
@@ -68,6 +86,8 @@ DEFAULT_CONFIG = {
         "timeout": 20,
         # 翻页 token：会话绑定，可能随 cookie 失效而变化（运行时优先从高级检索页提取）
         "turnpage": "8Kf6r96aVUubfe4hUZXU-w%21%21",
+        # 浏览器指纹随机化（会话级）：关闭则全程用上面的固定指纹
+        "fingerprint": {"enabled": True, "pool": []},
     },
     "search": {
         "default_field": "SU",
@@ -85,9 +105,47 @@ DEFAULT_CONFIG = {
         "CROSSDB": ["YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R", "WD0FTY92"],
     },
     "runtime": {
-        "delay_seconds": 1.0,
+        # 产品级:2 秒基础请求间隔,背靠背快请求是触发知网限流的典型诱因
+        "delay_seconds": 2.0,
         "retry_times": 3,
+        # GB/T 导出 API 单篇重试次数(指数退避 2/4/8s),耗尽才抛 APIFailed
+        "gbt_api_retries": 4,
         "progress_bar_width": 30,
+        # 动态并发池边界(adapter 抓详情用;池在区间内按负载自适应)
+        "min_workers": 1,
+        "max_workers": 6,
+    },
+    # ---------- 代理 IP 池（反爬应对）----------
+    # mode: off=直连(默认,行为与旧版一致) / on=全走代理 / failover=直连失败自动切代理
+    # 池来源:本配置 pool 列表 + 环境变量 CNKI_PROXY_LIST(逗号分隔),自动去重合并
+    "proxy": {
+        "mode": "off",
+        "pool": [],
+        "check_url": "https://kns.cnki.net/kns8s/AdvSearch",
+        "check_timeout": 8.0,
+        "check_interval": 300.0,
+        "cooldown": 600.0,
+        "score_threshold": 0.0,
+    },
+    # ---------- 稳定性（分层重试 + 断路器 + 告警）----------
+    "resilience": {
+        # HTTP 层断路器:连续失败达阈值熔断,冷却后半开探测
+        "breaker": {
+            "failure_threshold": 5,
+            "recovery_timeout": 60.0,
+        },
+        # 分层重试:TRANSIENT 短退避快速重试;RATE_LIMITED 长退避跨限流窗口;
+        # BLOCKED/FATAL 不重试(语义上重试无意义,交上层处置)
+        "retry": {
+            "transient_retries": 3,
+            "rate_limited_retries": 2,
+            "transient_backoff": [1.0, 2.0, 4.0],
+            "rate_limited_backoff": [15.0, 45.0],
+            "jitter": 0.2,
+        },
+        # 告警推送:CNKI_ALERT_WEBHOOK_URL 环境变量指向接收端(企业微信/钉钉/自建);
+        # cooldown 秒内同类告警节流合并(count 累加)
+        "alert_cooldown": 300.0,
     },
     "paths": {
         "cookies_file": "cookies.json",
@@ -210,6 +268,8 @@ def init() -> None:
 
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG = get_env_override(load_config())
+    # 自适应限速基准跟随配置(热重载时同步重置)
+    throttle_init(CONFIG["runtime"]["delay_seconds"])
 
     # 运行时文件全部落到包内 data/ 目录，绝对路径，与工作目录解耦
     for key, name in (
@@ -282,8 +342,51 @@ def init() -> None:
     # 全场景验证码调度器（滑块 / 英数 / 点选 自动降级）
     dispatcher = CaptchaDispatcher(cj)
 
-    # 翻页 token：会话绑定，运行时优先从高级检索页提取，提取失败用配置兜底
-    _turnpage = CONFIG["http"].get("turnpage", "")
+    # 翻页 token：会话绑定。优先读上次运行落盘的新鲜值(data/turnpage.txt)，
+    # 其次 config.yaml 兜底；运行中经 refresh_turnpage 刷新并回写落盘。
+    # 教训：只靠 config 写死值，进程重启后旧令牌失效 → 知网报"查询对象结构错误"
+    _turnpage = _load_turnpage()
+
+    # ---------- 产品级子系统（零网络副作用，测试导入安全）----------
+    # 1) 浏览器指纹：会话级随机挑选（UA↔sec-ch-ua 严格配对），全程一致
+    fp = _fingerprint.init_fingerprint(CONFIG["http"])
+    fp.apply_to(s)  # 覆盖上面按 config 写死的同名字头，其余头保留
+    print(f"[指纹] 本次会话: {fp.name} ({fp.user_agent[:60]}…)")
+
+    # 2) 代理池：mode=off 时不启动巡检线程，行为与旧版直连一致
+    _proxy_pool.init_proxy_pool(CONFIG.get("proxy") or {})
+
+    # 3) 动态并发池：边界来自 runtime 段，运行中按负载自适应
+    _scheduler.configure_pool(CONFIG["runtime"])
+
+    # 4) 告警中心：冷却期来自 resilience 段
+    _alert_manager = get_alert_manager()
+    _alert_manager.cooldown = float(
+        CONFIG.get("resilience", {}).get("alert_cooldown", 300.0)
+    )
+
+    # 5) 知网业务异常 → 错误层级映射（仅注册一次；幂等）
+    register_exception_classifier(_classify_cnki_exception)
+
+
+def _classify_cnki_exception(exc: BaseException):
+    """知网业务异常 → resilience 错误层级（分类钩子，返回 None 交内置规则）。
+
+    - ServerBusy 空壳      → RATE_LIMITED（限流窗口分钟级，长退避才有意义）
+    - Cookie 失效          → BLOCKED（重试无意义：换 cookie/代理是上层的事）
+    - 超级鹰余额不足/改版  → FATAL（人工介入，重试纯烧钱/烧时间）
+    - GB/T 单篇缺失        → FATAL（结构问题，重试不会变好）
+    - GB/T API 故障        → RATE_LIMITED（多为限流/抖动）
+    """
+    if isinstance(exc, CnkiServerBusyError):
+        return ErrorClass.RATE_LIMITED
+    if isinstance(exc, CnkiCookieError):
+        return ErrorClass.BLOCKED
+    if isinstance(exc, (CnkiCaptchaBalanceError, CnkiRevisionError, CnkiGBTCitationMissing)):
+        return ErrorClass.FATAL
+    if isinstance(exc, CnkiGBTCitationAPIFailed):
+        return ErrorClass.RATE_LIMITED
+    return None
 
 
 def extract_turnpage(html: str) -> str:
@@ -292,9 +395,149 @@ def extract_turnpage(html: str) -> str:
     return m.group(1) if m else ""
 
 
+def _turnpage_file():
+    """turnpage 落盘路径：data/turnpage.txt（运行期间提取的新鲜令牌）"""
+    return _DATA_DIR / "turnpage.txt"
+
+
+def _load_turnpage() -> str:
+    """turnpage 加载：data/turnpage.txt（上次运行提取的新鲜值）优先，config.yaml 兜底"""
+    try:
+        val = _turnpage_file().read_text("utf-8").strip()
+        if val:
+            return val
+    except OSError:
+        pass
+    return CONFIG["http"].get("turnpage", "")
+
+
+def refresh_turnpage(reason: str = "") -> bool:
+    """GET 高级检索页重新提取 turnpage 会话令牌并落盘。
+
+    turnpage 是会话绑定令牌：进程重启后模块变量回退到 config.yaml 写死的旧值，
+    旧值失效时知网返回 value="查询对象结构错误！"（会被误判为限流空壳白等退避）。
+    提取成功 → 更新模块变量 + 落盘 data/turnpage.txt，下次 init() 直接可用。
+    """
+    global _turnpage
+    try:
+        resp = session.get(CONFIG["endpoints"]["adv_search"], timeout=CONFIG["http"]["timeout"])
+        extracted = extract_turnpage(resp.text)
+    except Exception as e:
+        print(f"[警告] turnpage 刷新失败({reason}): {e}")
+        return False
+    if not extracted:
+        print(f"[警告] turnpage 刷新失败({reason}): 高级检索页未提取到令牌（页面可能改版）")
+        return False
+    if extracted != _turnpage:
+        print(f"[turnpage] 令牌已刷新({reason})")
+        debug_log(f"[turnpage] 令牌已刷新({reason})")
+    _turnpage = extracted
+    try:
+        _turnpage_file().write_text(extracted, "utf-8")
+    except OSError:
+        pass
+    return True
+
+
 def sleep_jitter(base_seconds: float):
     """带随机抖动的休眠（±20%），降低请求节奏的机器特征，缓解风控"""
     time.sleep(max(base_seconds * random.uniform(0.8, 1.2), 0))
+
+
+# ========================== 自适应限速 ==========================
+# 风控信号(验证码/限流空壳/安全验证)→ 间隔倍增;连续成功 → 逐步回落到基准。
+# 目标:请求节奏跟随知网风控强度自适应,而不是拿固定 delay 硬撞限流窗口。
+#
+# v9.4 预防性节拍冷却:知网限流风控基于滑动窗口请求频率累积,连续高频翻页
+# (生产实测约第 10 页)即触发"请稍后重试"空壳。每连续完成 N 页主动长歇一次,
+# 在限流窗口成型前打断累积 —— 预防优于事后退避(退避再好也是已中招)。
+_PACE_COOLDOWN_EVERY_PAGES = 8
+_PACE_COOLDOWN_SECONDS = 40.0
+_throttle_lock = threading.Lock()
+_throttle = {
+    "base": 2.0,        # 基准间隔(config runtime.delay_seconds)
+    "current": 2.0,     # 当前生效间隔
+    "good_streak": 0,   # 连续成功计数(用于回落)
+    "max_delay": 30.0,  # 间隔上限,避免限速失控拖死任务
+}
+
+
+def throttle_init(base: float) -> None:
+    """按配置基准初始化限速状态(init 与 main(--delay 覆盖)时调用)。"""
+    with _throttle_lock:
+        _throttle["base"] = max(float(base), 0.5)
+        _throttle["current"] = _throttle["base"]
+        _throttle["good_streak"] = 0
+
+
+def throttle_hit(reason: str = "", heavy: bool = False) -> None:
+    """风控信号:生效间隔倍增(常规信号 ×1.8;分钟级限流空壳 heavy ×2.5),封顶 30s。
+
+    heavy 语义:知网限流窗口为分钟级(见 SERVER_BUSY_BACKOFF_SECONDS 注),
+    常规 ×1.8 的抬升追不上窗口成型速度,限流空壳必须更重地拉开间隔。
+    线程安全:adapter 以 3 线程并发抓详情页,共享同一份限速状态。
+    产品级联动:同一步风控信号同步喂给动态并发池(立即收缩并发)与
+    任务计数器(面板展示验证码/风控命中次数),三套自愈机制协同。
+    """
+    with _throttle_lock:
+        old = _throttle["current"]
+        _throttle["current"] = min(old * (2.5 if heavy else 1.8), _throttle["max_delay"])
+        _throttle["good_streak"] = 0
+        grew = _throttle["current"] > old * 1.01
+    if grew:
+        debug_log(f"[限速] {reason},请求间隔 {old:.1f}s → {_throttle['current']:.1f}s")
+    # 风控信号外送（失败静默，不影响主流程）
+    try:
+        pool = _scheduler.get_pool()
+        if pool is not None:
+            pool.record_risk_signal()
+    except Exception:
+        pass
+    _task_incr("captcha_hits")
+
+
+def throttle_ok() -> None:
+    """单篇/单页抓取成功:连续 8 次后间隔 ×0.9 缓慢回落到基准。
+
+    v9.4:5 次 ×0.85 → 8 次 ×0.9 —— 限流窗口为分钟级,回落过快会在
+    窗口尚未滑出时重新加速,再次撞窗出现空壳;保守回落优先压低复发率。
+    """
+    with _throttle_lock:
+        _throttle["good_streak"] += 1
+        if _throttle["good_streak"] < 8 or _throttle["current"] <= _throttle["base"]:
+            return
+        old = _throttle["current"]
+        _throttle["current"] = max(_throttle["base"], old * 0.9)
+    debug_log(f"[限速] 连续成功,请求间隔 {old:.1f}s → {_throttle['current']:.1f}s")
+
+
+def effective_delay() -> float:
+    """当前生效的请求间隔(所有请求间 sleep 应使用该值而非固定配置)。"""
+    with _throttle_lock:
+        return _throttle["current"]
+
+
+def throttle_base() -> float:
+    """基准请求间隔(最终报告用它判断本次风控强度)。"""
+    with _throttle_lock:
+        return _throttle["base"]
+
+
+# v9.2:知网 2026-08-31 起对 pageSize 做参数校验(只认 10/20/50 白名单),
+# 余量收缩产生的 pageSize=5 等值会被拒:"参数校验;字段【pageSize】校验失败"空壳,
+# 且空壳文案与限流文案重叠,曾导致误判限流白烧退避 → 0 篇入库。
+# 修复:向上对齐到白名单最小可用值(多抓的部分由 fetch_all_list 末尾截断兜底)。
+_PAGE_SIZE_WHITELIST = (10, 20, 50)
+
+
+def _normalize_page_size(size: int) -> int:
+    """把任意请求页大小对齐到知网 pageSize 白名单(10/20/50)。"""
+    if size in _PAGE_SIZE_WHITELIST:
+        return size
+    for s in _PAGE_SIZE_WHITELIST:
+        if s >= size:
+            return s
+    return _PAGE_SIZE_WHITELIST[-1]
 
 
 # ========================== 过程日志回调（嵌入后用于实时推送前端）==========================
@@ -308,14 +551,196 @@ def set_log_callback(cb):
 
 
 def emit_log(msg: str):
-    """过程日志：有回调则转发给调用方，同时始终打印到 stdout（CLI 兼容）。"""
+    """过程日志：有回调则转发给调用方，同时始终打印到 stdout（CLI 兼容）。
+
+    产品级增强：当前线程绑定了任务 ID（见 set_current_task）时，同步写入
+    monitor 注册表的每任务环形日志——全链路日志监控的数据源之一。
+    """
     cb = getattr(_log_local, "callback", None)
     if cb:
         try:
             cb(msg)
         except Exception:
             pass
+    task_id = getattr(_log_local, "task_id", None)
+    if task_id:
+        try:
+            _monitor.get_registry().append_log(task_id, msg)
+        except Exception:
+            pass
     print(msg)
+
+
+def debug_log(msg: str):
+    """内部诊断日志（v9.5 产品级分级）：只落 stdout，不进 SSE/环形日志。
+
+    判据：含实现机制细节（限速数值、令牌、签名、坐标、dump 文件名、
+    异常类名等）的消息对终端用户无行动价值，一律走本函数——
+    用户面板只见产品级文案，排障细节留在服务器控制台。
+    """
+    print(msg)
+
+
+# ---- 当前线程绑定的任务 ID（adapter 在任务线程入口设置，日志/计数归账用）----
+def set_current_task(task_id: str | None) -> None:
+    """绑定/解绑当前线程的任务 ID（任务线程入口调用；结束时传 None）。"""
+    _log_local.task_id = task_id
+
+
+def current_task_id() -> str | None:
+    """当前线程绑定的任务 ID（未绑定为 None）。"""
+    return getattr(_log_local, "task_id", None)
+
+
+def _task_incr(counter: str, n: int = 1) -> None:
+    """向当前线程的任务记账一条计数（未绑定任务则忽略）。"""
+    task_id = current_task_id()
+    if task_id:
+        try:
+            _monitor.get_registry().incr(task_id, counter, n)
+        except Exception:
+            pass
+
+
+# ========================== 统一请求入口（断路器 + 分层重试 + 代理 failover）==========================
+def _build_retry_policy() -> RetryPolicy:
+    """从 CONFIG 组装分层重试策略（init/热重载后生效）。"""
+    rc = (CONFIG.get("resilience") or {}).get("retry") or {}
+    return RetryPolicy(
+        max_retries={
+            ErrorClass.TRANSIENT: int(rc.get("transient_retries", 3)),
+            ErrorClass.RATE_LIMITED: int(rc.get("rate_limited_retries", 2)),
+            ErrorClass.BLOCKED: 0,
+            ErrorClass.FATAL: 0,
+        },
+        backoff_table={
+            ErrorClass.TRANSIENT: [float(x) for x in rc.get("transient_backoff", [1.0, 2.0, 4.0])],
+            ErrorClass.RATE_LIMITED: [float(x) for x in rc.get("rate_limited_backoff", [15.0, 45.0])],
+        },
+        jitter=float(rc.get("jitter", 0.2)),
+    )
+
+
+def _pick_proxies(attempt: int) -> dict | None:
+    """按代理模式决定本次请求的 proxies 参数。
+
+    - off      永远直连（默认，测试与既有部署零影响）
+    - on       每次都走池内最优代理
+    - failover 首试(attempt==0)直连；重试改走代理——直连被限流时自动切换出口
+    """
+    mode = _proxy_pool.proxy_mode(CONFIG.get("proxy") or {})
+    if mode == "off":
+        return None
+    pool = _proxy_pool.get_proxy_pool()
+    if pool is None:
+        return None
+    if mode == "failover" and attempt == 0:
+        return None
+    url = pool.get_proxy()
+    if url:
+        _task_incr("proxy_switches")
+        return {"http": url, "https": url}
+    return None
+
+
+def safe_request(method: str, url: str, *, headers: dict | None = None,
+                 data=None, timeout: float | None = None,
+                 raise_for_status: bool = False, retries: bool = True,
+                 breaker_name: str = "http", op_name: str = "HTTP"):
+    """统一请求入口：断路器 → 分层重试 → 代理 failover → 全链路记账。
+
+    与 adapter 层 urllib3 Retry(3 次瞬断重试)的分工：
+    - urllib3 处理毫秒级瞬断（连接池内重试，对外透明）；
+    - 本入口处理会话级故障（超时/限流），重试时重建请求并可切换代理出口。
+
+    :param raise_for_status: True 时非 2xx 触发 HTTPError 参与分层
+        （429/503→RATE_LIMITED 长退避；其余 5xx→TRANSIENT；4xx→FATAL）；
+        False 时状态码交调用方处置（列表/详情页的空壳语义在 HTML 里）
+    :param retries: False 时禁用本层重试（仍保留断路器/记账/告警/代理），
+        供自带重试封装的调用方（如 GB/T with_retry）避免双重退避叠加
+    :raises CircuitOpenError: 断路器熔断中（调用方按请求失败处置）
+    :raises requests.RequestException: 分层重试耗尽后原样上抛
+    """
+    timeout = timeout if timeout is not None else CONFIG["http"]["timeout"]
+    breaker_cfg = (CONFIG.get("resilience") or {}).get("breaker") or {}
+    breaker = get_breaker(
+        breaker_name,
+        failure_threshold=int(breaker_cfg.get("failure_threshold", 5)),
+        recovery_timeout=float(breaker_cfg.get("recovery_timeout", 60.0)),
+    )
+    # retries=False → 全层级零重试（失败立即上抛，重试语义交调用方）
+    policy = _build_retry_policy() if retries else RetryPolicy(
+        max_retries={c: 0 for c in ErrorClass},
+    )
+    alert = get_alert_manager()
+
+    def _on_retry(error_class: ErrorClass, attempt: int, exc: BaseException, wait: float):
+        # 每次重试：任务记账 + 负载记账 + 换代理出口（failover 语义）+ 过程日志
+        _task_incr("retries")
+        pool = _scheduler.get_pool()
+        if pool is not None:
+            pool.record_failure()
+        debug_log(
+            f"[重试] {op_name} 第{attempt}次失败({error_class.value}: "
+            f"{type(exc).__name__})，退避 {wait:.0f}s 后重试"
+        )
+
+    def _on_give_up(exc: BaseException, error_class: ErrorClass):
+        _task_incr("requests_failed")
+        alert.alert(
+            title=f"{op_name} 重试耗尽",
+            level="critical" if error_class in (ErrorClass.BLOCKED, ErrorClass.FATAL)
+            else "warning",
+            detail=f"{method.upper()} {url[:120]} → {type(exc).__name__}: {exc}",
+        )
+
+    def _do():
+        resp = session.request(
+            method, url, headers=headers, data=data, timeout=timeout,
+            proxies=_pick_proxies(_do.attempt),
+        )
+        if raise_for_status:
+            # 非 2xx 抛 HTTPError → classify_exception 分层:
+            # 429/503→RATE_LIMITED(长退避) / 其余 5xx→TRANSIENT / 4xx→FATAL
+            resp.raise_for_status()
+        return resp
+
+    _do.attempt = 0
+
+    def _bump_attempt(_cls, attempt, _exc, _wait):
+        _do.attempt = attempt  # 重试时换代理出口（failover 语义）
+
+    try:
+        resp = resilient_call(
+            _do, policy=policy, breaker=breaker, sleep_fn=sleep_jitter,
+            on_retry=_on_retry, on_give_up=_on_give_up, op_name=op_name,
+        )
+    except CircuitOpenError as exc:
+        # 熔断期间的请求直接失败：记账 + 告警（节流），不向知网发无效流量
+        _task_incr("breaker_trips")
+        alert.alert(title=f"断路器熔断({breaker_name})", level="critical", detail=str(exc))
+        raise
+    else:
+        # 成功：负载记账（延迟驱动动态并发池）+ 断路器成功计数已在 resilient_call 内
+        _task_incr("requests_total")
+        pool = _scheduler.get_pool()
+        if pool is not None:
+            try:
+                latency = resp.elapsed.total_seconds()
+            except Exception:
+                latency = 0.0
+            pool.record_success(latency)
+        return resp
+
+
+def http_get(url: str, **kw):
+    """GET 的 safe_request 封装（详情页/首页等用）。"""
+    return safe_request("GET", url, op_name=kw.pop("op_name", "GET"), **kw)
+
+
+def http_post(url: str, **kw):
+    """POST 的 safe_request 封装（检索/导出接口用）。"""
+    return safe_request("POST", url, op_name=kw.pop("op_name", "POST"), **kw)
 
 
 # ========================== 签名算法 ==========================
@@ -428,7 +853,7 @@ def build_expert_query(
       - QGroup[0].Items 放 Expert 节点（Field=EXPERT, Operator=0）
       - SearchType=4（高级检索为 1）
     示例检索式：
-      SU=('卡车' + '车辆') * '无人机' * '协同' * ('配送' + '运输') * ('应急' + '救灾' + '救援') * '物资'
+      SU=('主题词A' + '主题词B') * '主题词C' * ('主题词D' + '主题词E')
     """
     resource = resource or CONFIG["search"]["default_resource"]
     resource_map = CONFIG["resource_map"]
@@ -503,6 +928,20 @@ def save_b64_image(b64_str: str, path: str):
 
 
 # ========================== 验证码流程 ==========================
+def _cjy_fatal_msg(e) -> str:
+    """超级鹰致命错误 → 面向用户的中文指引(前端错误横幅直接展示)。"""
+    no = getattr(e, "err_no", None)
+    if no in (-1005, -10052):
+        return "超级鹰题分不足，自动重试无意义——请登录超级鹰后台充值后重试（任务已停止）"
+    if no in (-1001, -1002, -10023):
+        return "超级鹰账号/密码错误或软件 ID 配置有误——请检查打码账号配置（任务已停止）"
+    if no in (-10071, -10072):
+        return "超级鹰识别错误率过高被平台限制——请稍后重试或联系超级鹰客服（任务已停止）"
+    if no == -1013:
+        return "超级鹰提示本机 IP 受限——请检查超级鹰 IP 白名单设置或更换网络（任务已停止）"
+    return f"超级鹰账号异常（{e}）——请登录超级鹰后台检查账户状态（任务已停止）"
+
+
 def recognize_slider(info):
     back_path = CONFIG["paths"]["captcha_back_image"]
     save_b64_image(info["backImage"], back_path)
@@ -512,13 +951,17 @@ def recognize_slider(info):
         im = f.read()
     # 调度器自动降级：9902(两图形块) → 9900(缺口定位) → 9602(水平拼图)
     # min_points=2：9900 只返回 1 个缺口坐标，不满足则继续降级 9602，避免链条在此中断
-    result = dispatcher.recognize(im, "slider", require="points", min_points=2)
+    try:
+        result = dispatcher.recognize(im, "slider", require="points", min_points=2)
+    except CjyFatalError as e:
+        # 余额/账号/IP 受限类:重试只会继续失败,映射为闸口异常交前端告知
+        raise CnkiCaptchaBalanceError(_cjy_fatal_msg(e)) from e
     pts = result.points
     if len(pts) < 2:
         raise RuntimeError(f"滑块识别结果不足两个坐标: {result.pic_str!r}")
     (x1, y1), (x2, y2) = pts[0], pts[1]
     print(f"[识别] 类型={result.codetype} 中心点 ({x1},{y1}) ({x2},{y2}) 距离={abs(x2 - x1)}")
-    emit_log(f"[识别] 滑块验证码识别成功: 中心点 ({x1},{y1}) ({x2},{y2})")
+    debug_log(f"[识别] 滑块验证码识别成功: 中心点 ({x1},{y1}) ({x2},{y2})")
     return x1, y1, x2, y2, result.pic_id
 
 
@@ -557,10 +1000,14 @@ def solve_vericode(html: str) -> str:
 
 def _recognize_alnum(im: bytes) -> str:
     """英数验证码统一识别（1005 主选，失败降级 1902/1004）"""
-    result = dispatcher.recognize(im, "alnum", require="text")
+    try:
+        result = dispatcher.recognize(im, "alnum", require="text")
+    except CjyFatalError as e:
+        # 余额/账号/IP 受限类:重试无意义,映射为闸口异常交前端告知
+        raise CnkiCaptchaBalanceError(_cjy_fatal_msg(e)) from e
     text = result.text
     print(f"[识别] 类型={result.codetype} 英数验证码={text!r}")
-    emit_log(f"[识别] 英数验证码识别成功: {text!r}")
+    debug_log(f"[识别] 英数验证码识别成功: {text!r}")
     return text
 
 
@@ -653,6 +1100,11 @@ def trigger_captcha(query_json: str) -> str:
         "&language=&uniplatform=&CurPage=1"
     )
     client_id = session.cookies.get("Ecp_ClientId", "")
+    if not client_id:
+        # 签名前置自检:Ecp_ClientId 是签名串的客户端 ID 源,缺失时签名必然被拒,
+        # 症状为"每页都解析 0 条"——在此提前点破,避免误判为知网改版/限流
+        print("[签名] 警告: session 缺少 Ecp_ClientId,签名头不完整,请求大概率被知网拒绝")
+        debug_log("[签名] 警告: session 缺少 Ecp_ClientId(签名客户端 ID),请求大概率被拒")
     sign = make_signature(CONFIG["endpoints"]["search"], client_id)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -666,11 +1118,11 @@ def trigger_captcha(query_json: str) -> str:
                         headers=headers, timeout=CONFIG["http"]["timeout"])
     body = resp.content.decode("utf-8", errors="ignore")
     print(f"[触发] 状态={resp.status_code}，body 前300={body[:300]}")
-    emit_log(f"[触发] 提交滑块验证码: HTTP {resp.status_code}")
+    debug_log(f"[触发] 提交滑块验证码: HTTP {resp.status_code}")
 
     if "verify/home" not in body:
         print("[触发] 未触发验证码")
-        emit_log("[触发] 未触发验证码，直接放行")
+        debug_log("[触发] 未触发验证码，直接放行")
         return ""
 
     m = re.search(r"verify/home\?([^\"'<>\s]+)", body)
@@ -729,6 +1181,11 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
         body_str += f"&captchaVerification={captcha_verification}"
 
     client_id = session.cookies.get("Ecp_ClientId", "")
+    if not client_id:
+        # 签名前置自检:Ecp_ClientId 是签名串的客户端 ID 源,缺失时签名必然被拒,
+        # 症状为"每页都解析 0 条"——在此提前点破,避免误判为知网改版/限流
+        print("[签名] 警告: session 缺少 Ecp_ClientId,签名头不完整,请求大概率被知网拒绝")
+        debug_log("[签名] 警告: session 缺少 Ecp_ClientId(签名客户端 ID),请求大概率被拒")
     sign = make_signature(CONFIG["endpoints"]["search"], client_id)
     headers = {
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
@@ -738,9 +1195,19 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
         **sign,
         "ClientID": client_id,
     }
-    resp = session.post(CONFIG["endpoints"]["search"], data=body_str,
-                        headers=headers, timeout=CONFIG["http"]["timeout"])
-    return resp.content.decode("utf-8", errors="ignore")
+    # 核心列表请求走统一入口：断路器→分层重试→代理 failover→全链路记账
+    # (200 空壳不抛异常，仍由下方限流退避逻辑处置——两层各司其职)
+    resp = http_post(CONFIG["endpoints"]["search"], data=body_str,
+                     headers=headers, timeout=CONFIG["http"]["timeout"])
+    html = resp.content.decode("utf-8", errors="ignore")
+    # 插桩:限流空壳现场取证 —— 记录 HTTP 状态码/响应长度/页码,
+    # 样本落盘(debug_list_*.html,内容 md5 去重,上限 10 份),
+    # 便于事后分析知网限流时到底返回了什么(拦截页/错误体/正常壳)
+    if "请稍后重试" in html:
+        print(f"[诊断] search_grid 空壳现场: HTTP {resp.status_code}, "
+              f"长度 {len(html)}, pageNum={page_num}, pageSize={page_size}, boolSearch={bool_search}")
+        _dump_debug_list_html(html, f"busy{page_num}")
+    return html
 
 
 def parse_list(html: str):
@@ -780,29 +1247,53 @@ def is_captcha_required(html: str) -> bool:
     )
 
 
+def _dump_debug_list_html(html: str, page: int) -> None:
+    """列表页异常(无数据/解析0条)时落盘 HTML,便于离线分析知网实际返回了什么。
+
+    v7.2:此前只有详情页失败会落盘(debug_abstract_*.html),列表页失败
+    无任何现场留存,知网返回拦截页/空壳页时无法事后定位。文件名取
+    html 内容 md5 前 8 位,相同内容自然去重;最多保留 10 个防堆积。
+    """
+    try:
+        debug_base = Path(CONFIG["paths"]["debug_abstract_html"])
+        tag = md5((html or "").encode("utf-8")).hexdigest()[:8]
+        dump_path = debug_base.with_name(f"debug_list_{tag}_p{page}.html")
+        if (not dump_path.exists()
+                and len(list(debug_base.parent.glob("debug_list_*.html"))) < 10):
+            dump_path.write_text(html or "", encoding="utf-8")
+            print(f"[调试] 列表页已落盘: {dump_path}")
+            debug_log(f"[调试] 列表页已落盘: {dump_path.name}")
+    except Exception:
+        pass  # 落盘失败不影响主流程
+
+
 def fetch_all_list(query_json: str, max_count: int | None = None,
-                   force_captcha: bool = False, delay: float = None) -> list:
+                   force_captcha: bool = False) -> list:
     """列表翻页抓取。
 
     max_count:
       - None  → 翻到知网没有更多结果为止(自然结束);
       - 正整数 → 抓到指定条数即停(防失控)。
     验证码:触发后无限重试直到通过(用户已配超级鹰),不再中途放弃。
+    翻页间隔走自适应限速(throttle):风控信号倍增、连续成功回落。
     """
     if max_count is None or max_count <= 0:
         max_count = 10_000_000  # 实际不会触达:知网会在无数据时返回"暂无数据"
     all_items = []
     captcha_verification = ""
-    # --delay 同样作用于列表翻页间隔（默认取配置值）
-    delay = delay if delay is not None else CONFIG["runtime"]["delay_seconds"]
     # 关键：boolSearch=true 时服务端必然触发验证码检查（对第2页+）；
     # 一旦验证码通过，后续重搜/翻页必须用 boolSearch=false 才能拿到数据页
     bool_search = "true"
+    # v9:cookie 自动续期每条式子只允许一次;续期后再遇登录墙=程序手段已穷尽
+    login_fix_attempts = 0
+    # v9.1:turnpage 结构错误自愈每条式子只允许一次(刷新后仍被拒=令牌机制疑似改版)
+    struct_fix_attempted = False
 
     page = 1
     while len(all_items) < max_count:
         need = max_count - len(all_items)
-        cur_size = min(CONFIG["search"]["page_size"], need)
+        # v9.2:余量向上对齐 pageSize 白名单(10/20/50),避免发出 pageSize=5 触发参数校验空壳
+        cur_size = _normalize_page_size(min(CONFIG["search"]["page_size"], need))
 
         if force_captcha and page == 1:
             captcha_verification = trigger_captcha(query_json)
@@ -813,17 +1304,26 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                            bool_search=bool_search)
         if is_captcha_required(html):
             # 分流：英数验证码(vericodeForm) 走 1005，滑块验证码(verify/home) 走 9902
+            throttle_hit("列表页触发验证码")
             if "vericodeForm" in html or "请输入验证码" in html:
                 print(f"[列表] 第{page}页触发英数验证码，走超级鹰 1005 识别...")
-                emit_log(f"[列表] 第{page}页触发英数验证码，调用超级鹰识别中...")
-                # 无限重试,直到通过或外部抛错(网络层)
+                emit_log(f"[列表] 第{page}页检测到安全验证，正在自动处理…")
+                # v9:连续 6 次失败熔断 —— 防止余额耗尽/服务异常时无限烧题分
+                alnum_fail = 0
                 while True:
                     code = ""
                     try:
                         code = solve_vericode(html)
+                    except CnkiCaptchaBalanceError:
+                        raise  # 余额/账号闸口:立即停止,不烧重试
                     except Exception as e:
-                        print(f"[警告] 英数识别失败: {e},重新拉取页面再试")
-                        emit_log(f"[警告] 英数识别失败: {e},重新拉取页面再试")
+                        alnum_fail += 1
+                        if alnum_fail >= 6:
+                            raise CnkiCaptchaBalanceError(
+                                f"英数验证码连续 {alnum_fail} 次识别失败（最后错误: {e}）——请检查超级鹰余额与服务状态"
+                            )
+                        print(f"[警告] 英数识别失败: {e},重新拉取页面再试({alnum_fail}/6)")
+                        emit_log(f"[列表] 第{page}页安全验证处理中，正在自动重试…({alnum_fail}/6)")
                         sleep_jitter(1)
                         html = search_grid(query_json, page_num=page, page_size=cur_size,
                                            captcha_verification=captcha_verification,
@@ -831,93 +1331,277 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                         continue
                     if code:
                         break
+                    alnum_fail += 1
+                    if alnum_fail >= 6:
+                        raise CnkiCaptchaBalanceError(
+                            f"英数验证码连续 {alnum_fail} 次识别为空——请检查超级鹰余额与服务状态"
+                        )
                     print("[警告] 英数识别返回空,重新拉取页面再试")
-                    emit_log("[警告] 英数识别返回空,重新拉取页面再试")
+                    emit_log(f"[列表] 第{page}页安全验证处理中，正在自动重试…")
                     sleep_jitter(1)
                     html = search_grid(query_json, page_num=page, page_size=cur_size,
                                        captcha_verification=captcha_verification,
                                        bool_search=bool_search)
                 # 提交到 checkcode 接口,通过后必须用 boolSearch=false 重搜当前页
                 if not submit_vericode(code):
-                    print(f"[警告] 英数验证码校验未通过,重新识别...")
-                    emit_log("[警告] 英数验证码校验未通过,重新识别...")
+                    alnum_fail += 1
+                    if alnum_fail >= 6:
+                        raise CnkiCaptchaBalanceError(
+                            f"英数验证码连续 {alnum_fail} 次校验未通过——请检查超级鹰余额与服务状态"
+                        )
+                    print(f"[警告] 英数验证码校验未通过,重新识别({alnum_fail}/6)...")
+                    emit_log(f"[列表] 第{page}页安全验证处理中，正在自动重试…")
                     continue  # 回到 while True 顶部,重新 solve_vericode
-                emit_log(f"[列表] 第{page}页英数验证码已通过")
+                emit_log(f"[列表] 第{page}页安全验证已通过，继续获取数据")
                 bool_search = "false"
                 html = search_grid(query_json, page_num=page, page_size=cur_size,
                                    bool_search=bool_search)
             else:
                 print(f"[列表] 第{page}页触发滑块验证码，走超级鹰 9902 识别...")
-                emit_log(f"[列表] 第{page}页触发滑块验证码，调用超级鹰识别中...")
-                # 无限重试,直到触发流程返回 captcha_verification(通过)
+                emit_log(f"[列表] 第{page}页检测到安全验证，正在自动处理…")
+                # v9:连续 6 次失败熔断 —— 防止余额耗尽/服务异常时无限烧题分
+                slider_fail = 0
                 while True:
                     try:
                         captcha_verification = trigger_captcha(query_json)
+                    except CnkiCaptchaBalanceError:
+                        raise  # 余额/账号闸口:立即停止,不烧重试
                     except Exception as e:
-                        print(f"[警告] 滑块触发失败: {e},稍后重试")
-                        emit_log(f"[警告] 滑块触发失败: {e},稍后重试")
+                        slider_fail += 1
+                        if slider_fail >= 6:
+                            raise CnkiCaptchaBalanceError(
+                                f"滑块验证码连续 {slider_fail} 次处理失败（最后错误: {e}）——请检查超级鹰余额与服务状态"
+                            )
+                        print(f"[警告] 滑块触发失败: {e},稍后重试({slider_fail}/6)")
+                        emit_log(f"[警告] 滑块触发失败: {e},稍后重试({slider_fail}/6)")
                         sleep_jitter(1)
                         continue
                     if captcha_verification:
                         break
+                    slider_fail += 1
+                    if slider_fail >= 6:
+                        raise CnkiCaptchaBalanceError(
+                            f"滑块验证码连续 {slider_fail} 次未通过——请检查超级鹰余额与服务状态"
+                        )
                     print("[警告] 滑块触发返回空,稍后重试")
-                    emit_log("[警告] 滑块触发返回空,稍后重试")
+                    emit_log(f"[列表] 第{page}页安全验证处理中，正在自动重试…")
                     sleep_jitter(1)
-                emit_log(f"[列表] 第{page}页滑块验证码已通过")
+                emit_log(f"[列表] 第{page}页安全验证已通过，继续获取数据")
                 bool_search = "false"
                 html = search_grid(query_json, page_num=page, page_size=cur_size,
                                    captcha_verification=captcha_verification,
                                    bool_search=bool_search)
         preview = html[:300].replace("\n", " ")
         print(f"[列表] 第{page}页 预览: {preview}")
-        if "抱歉，暂无数据" in html or "no-content" in html:
+        if "查询对象结构错误" in html:
+            # v9.1:value="查询对象结构错误！" —— 知网拒绝请求结构,根因是会话绑定的
+            # turnpage 令牌为空/过期(进程重启后模块变量回退 config 写死旧值)。
+            # 页面文案含"请稍后重试",若放行到下方空壳分支会被误判为限流:退避重试
+            # 必然同样失败(令牌不刷新) → 白等 3 分钟 × 每条式子 → 全部失败 0 篇入库。
+            # 处置:刷新令牌后重拉本页(每条式子仅一次);仍被拒 = 令牌机制疑似改版,
+            # 上抛 CnkiRevisionError 交前端横幅,勿静默烧完清单。
+            _dump_debug_list_html(html, f"struct{page}")
+            if struct_fix_attempted:
+                raise CnkiRevisionError(
+                    "知网报'查询对象结构错误'：刷新 turnpage 令牌后仍被拒绝，检索式或接口结构疑似改版——请反馈开发者更新"
+                )
+            struct_fix_attempted = True
+            print(f"[列表] 第{page}页 知网报'查询对象结构错误':turnpage 令牌疑似失效,刷新后重拉")
+            debug_log(f"[列表] 第{page}页 查询对象结构错误,刷新 turnpage 令牌后重拉")
+            if not refresh_turnpage("结构错误自愈"):
+                raise CnkiRevisionError(
+                    "知网报'查询对象结构错误'且 turnpage 令牌刷新失败（高级检索页未提取到令牌）——知网可能改版，请反馈开发者更新"
+                )
+            html = search_grid(query_json, page_num=page, page_size=cur_size,
+                               captcha_verification=captcha_verification,
+                               bool_search=bool_search)
+            # 重拉后落回下方正常分支流程(若仍结构错误,由上方 struct_fix_attempted 分支终止)
+        if "起始游标越界" in html:
+            # v8.6:空壳 value 属性回显 "start:21,size:20,total:1" —— 请求的起始游标
+            # 超过结果总数,即已翻过末页。这是确定性信号而非服务端异常:
+            # 重试必然同样失败,保留已抓条目正常结束翻页。
+            print(f"[列表] 第{page}页 起始游标越界(已过末页)，停止翻页")
+            debug_log(f"[列表] 第{page}页 已过末页(游标越界)，停止翻页")
+            break
+        if "参数校验" in html:
+            # v9.2:知网新接口参数校验空壳(value 属性回显"参数校验;字段【xx】校验失败"),
+            # 页面通用文案含"请稍后重试",与限流空壳重叠——但参数错误重试无意义,
+            # 前置识别直接抛改版错,避免伪装成限流白烧退避。
+            m = re.search(r'value="([^"]*)"', html)
+            detail = m.group(1) if m else "未知参数校验失败"
+            _dump_debug_list_html(html, page)
+            raise CnkiRevisionError(
+                f"知网参数校验失败(第{page}页): {detail} —— 接口参数约束变更,请反馈开发者更新"
+            )
+        if "请稍后重试" in html:
+            # v8.5:"抱歉,暂无数据,请稍后重试"是知网服务端异常/限流的空壳响应,
+            # 不是真零结果(正常零结果页无"请稍后重试"字样):带退避重试,
+            # 仍空壳则抛错交由调用方处置 —— 继续烧完式子只会条条中招。
+            throttle_hit("服务端限流空壳", heavy=True)
+            # 插桩:空壳现场限速状态 —— 间隔偏小=典型频率风控;已抓条数多=越翻越易中招
+            print(f"[诊断] 第{page}页 空壳现场: 当前请求间隔 {effective_delay():.1f}s, "
+                  f"已累计 {len(all_items)} 条, 样本见 debug_list_*busy*.html")
+            debug_log(f"[列表] 第{page}页 空壳现场诊断: 请求间隔 {effective_delay():.1f}s, 已抓 {len(all_items)} 条")
+            for attempt, wait in enumerate(SERVER_BUSY_BACKOFF_SECONDS, start=1):
+                print(f"[列表] 第{page}页 服务端异常空壳(请稍后重试),退避 {wait:.1f}s 后重试({attempt}/{SERVER_BUSY_RETRIES})")
+                emit_log(f"[列表] 数据源暂时繁忙，正在自动重试(第 {attempt}/{SERVER_BUSY_RETRIES} 次)，已获取的数据不会丢失")
+                sleep_jitter(wait)
+                html = search_grid(query_json, page_num=page, page_size=cur_size,
+                                   captcha_verification=captcha_verification,
+                                   bool_search=bool_search)
+                if "请稍后重试" not in html:
+                    break
+            else:
+                raise CnkiServerBusyError(
+                    f"第{page}页连续 {SERVER_BUSY_RETRIES} 次未返回有效数据(数据源繁忙)"
+                )
+            # 重拉成功:落回下方正常解析流程(若变成拦截页,由解析 0 条分支分类处理)
+        elif "抱歉，暂无数据" in html or "no-content" in html:
             block = classify_block_page(html)
             if block == "login":
-                print("[提示] 疑似 cookie 失效（返回登录页），请在配置页刷新 cookie")
-                emit_log("[提示] 疑似 cookie 失效（返回登录页），请刷新 cookies.json")
+                # v9:cookie 失效先自动续期(游客态重访首页即可种回 KNS2COOKIE),续期后重拉本页
+                if not (login_fix_attempts < 1 and refresh_cookies("列表页返回登录页")):
+                    raise CnkiCookieError(
+                        "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
+                    )
+                login_fix_attempts = 1
+                html = search_grid(query_json, page_num=page, page_size=cur_size,
+                                   captcha_verification=captcha_verification,
+                                   bool_search=bool_search)
+                if "抱歉，暂无数据" in html or "no-content" in html:
+                    if classify_block_page(html) == "login":
+                        raise CnkiCookieError(
+                            "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
+                        )
+                    print(f"[列表] 第{page}页无数据，停止翻页")
+                    emit_log(f"[列表] 第{page}页未检索到更多数据，获取完成")
+                    break
+                # 续期生效:落回下方 parse_list 正常流程
             elif block == "security":
                 print("[提示] 疑似触发安全验证（风控），请降低请求频率或稍后重试")
-                emit_log("[提示] 疑似触发安全验证（风控），请降低请求频率或稍后重试")
+                emit_log(f"[列表] 第{page}页检测到访问限制，已停止获取，稍后可重试")
+                break
             else:
                 print(f"[列表] 第{page}页无数据，停止翻页")
-                emit_log(f"[列表] 第{page}页无数据，停止翻页(已穷尽知网结果)")
-            break
+                emit_log(f"[列表] 第{page}页未检索到更多数据，获取完成")
+                # v7.2:知网声称"无数据"也可能是拦截页伪装,落盘留证
+                _dump_debug_list_html(html, page)
+                break
 
         items = parse_list(html)
         if not items:
             block = classify_block_page(html)
             print(f"[列表] 第{page}页 解析 0 条, block={block}, head={html[:200]!r}")
             if block == "security":
+                throttle_hit("列表页安全验证")
                 print("[提示] 疑似触发安全验证（风控），请降低请求频率或稍后重试")
-                emit_log(f"[列表] 第{page}页 疑似触发安全验证（风控），停止翻页")
+                emit_log(f"[列表] 第{page}页检测到访问限制，已停止获取，稍后可重试")
                 break
-            if block == "login":
-                print("[提示] 疑似 cookie 失效（返回登录页），请刷新 cookies.json")
-                emit_log(f"[列表] 第{page}页 疑似 cookie 失效（返回登录页），停止翻页")
-                break
-            # 非风控：可能是偶发空响应/半加载页面，重拉一次再判定
-            emit_log(f"[列表] 第{page}页 解析 0 条(block={block})，1s 后重拉一次…")
-            sleep_jitter(1)
-            html = search_grid(query_json, page_num=page, page_size=cur_size,
-                               captcha_verification=captcha_verification,
-                               bool_search=bool_search)
-            items = parse_list(html)
-            if not items:
-                print(f"[列表] 第{page}页 重试后仍 0 条，停止")
-                emit_log(f"[列表] 第{page}页 重试后仍 0 条，停止翻页")
-                break
+            elif block == "login":
+                # v9:cookie 失效先自动续期,续期后重拉本页(每条式子限 1 次)
+                if not (login_fix_attempts < 1 and refresh_cookies("列表解析返回登录页")):
+                    raise CnkiCookieError(
+                        "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
+                    )
+                login_fix_attempts = 1
+                html = search_grid(query_json, page_num=page, page_size=cur_size,
+                                   captcha_verification=captcha_verification,
+                                   bool_search=bool_search)
+                items = parse_list(html)
+                if not items:
+                    if classify_block_page(html) == "login":
+                        raise CnkiCookieError(
+                            "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
+                        )
+                    print(f"[列表] 第{page}页 续期后仍解析 0 条，停止")
+                    emit_log(f"[列表] 第{page}页数据暂时不可获取，已停止本组获取")
+                    _dump_debug_list_html(html, page)
+                    break
+                # 续期生效:items 非空,跳过重拉直接落回下方 extend
+            else:
+                # 非风控：可能是偶发空响应/半加载页面，重拉一次再判定
+                debug_log(f"[列表] 第{page}页 解析 0 条(block={block})，1s 后重拉一次…")
+                sleep_jitter(1)
+                html = search_grid(query_json, page_num=page, page_size=cur_size,
+                                   captcha_verification=captcha_verification,
+                                   bool_search=bool_search)
+                items = parse_list(html)
+                if not items:
+                    print(f"[列表] 第{page}页 重试后仍 0 条，停止")
+                    emit_log(f"[列表] 第{page}页数据暂时不可获取，已停止本组获取")
+                    # v7.2:解析0条且非已知拦截特征,落盘留证供离线分析
+                    _dump_debug_list_html(html, page)
+                    if page == 1:
+                        # v9:真零结果早被"暂无数据"分支拦截;首页重拉仍解析不出
+                        # → 列表模板失配(知网改版),上抛交前端告知,勿静默空结束。
+                        # v9.3:签名排查提示落服务器控制台(print),用户可见文案保持产品级
+                        print("[诊断] 首页解析连续 0 条且非已知拦截:优先排查签名机制"
+                              "(当前签名仅覆盖 URL query,知网开启 body 签名校验症状一致)")
+                        raise CnkiRevisionError(
+                            "数据获取遇到异常：数据源返回的内容暂时无法解析"
+                            "（数据源结构可能已更新），任务已停止。"
+                            "现场样本已自动保存，请联系技术支持反馈此问题"
+                        )
+                    break
         all_items.extend(items)
         print(f"[列表] 第{page}页 抓到 {len(items)} 条，累计 {len(all_items)}")
-        emit_log(f"[列表] 第{page}页 抓到 {len(items)} 条，累计 {len(all_items)}")
+        emit_log(f"[列表] 已获取 {len(items)} 条，累计 {len(all_items)} 条")
         if len(all_items) >= max_count:
+            break
+        if len(items) < cur_size:
+            # v8.6:本页不满页 = 已是末页,不再请求下一页
+            # (否则知网对越界游标返回"起始游标越界"异常空壳)
             break
         page += 1
         # 验证码通过后翻页用 boolSearch=false 不再触发
         if bool_search == "true":
             bool_search = "false"
-        sleep_jitter(delay)
+        # v9.4 预防性节拍冷却:每连续完成 8 页(page-1 为已完成页数)主动长歇一次,
+        # 打断知网滑动窗口的频率累积,在限流空壳出现前预防 —— 生产实测第 10 页
+        # 高频翻页必中招,节拍冷却把它消解在成型之前。
+        if (page - 1) % _PACE_COOLDOWN_EVERY_PAGES == 0:
+            emit_log(
+                f"[节拍] 已连续获取 {_PACE_COOLDOWN_EVERY_PAGES} 页，"
+                f"休息 {_PACE_COOLDOWN_SECONDS:.0f}s 后继续，保障获取稳定"
+            )
+            sleep_jitter(_PACE_COOLDOWN_SECONDS)
+        # 使用自适应限速的当前延迟(风控时增大,连续成功后回落)
+        sleep_jitter(effective_delay())
 
     return all_items[:max_count]
+
+
+class CnkiServerBusyError(Exception):
+    """知网服务端异常空壳("抱歉,暂无数据,请稍后重试")。
+
+    正常零结果页没有"请稍后重试"字样;该空壳是限流/风控的兜底响应,
+    退避重试仍空壳时抛出,交由调用方处置(换式子/中止并提示)。
+    """
+    pass
+
+
+class CnkiCookieError(Exception):
+    """cookie 失效且自动续期无效(知网强制登录/IP 受限)——前端横幅告知。"""
+
+    code = "cookie_expired"
+
+
+class CnkiCaptchaBalanceError(Exception):
+    """超级鹰题分不足/账号异常——需人工充值,自动重试无意义——前端横幅告知。"""
+
+    code = "captcha_balance"
+
+
+class CnkiRevisionError(Exception):
+    """知网页面结构改版,既有模板/接口全部失配——需人工逆向——前端横幅告知。"""
+
+    code = "cnki_revision"
+
+
+# 服务端异常空壳的退避表(秒):知网限流窗口为分钟级,短退避基本无效,
+# 按 15/45/120 秒逐级拉长(总等待 3 分钟,跨过单个限流窗口)
+SERVER_BUSY_BACKOFF_SECONDS = [15, 45, 120]
+SERVER_BUSY_RETRIES = len(SERVER_BUSY_BACKOFF_SECONDS)
 
 
 class CnkiGBTCitationError(Exception):
@@ -992,8 +1676,13 @@ def _fetch_gbt_citation(html: str) -> str:
         "X-Requested-With": "XMLHttpStream",
     }
     try:
-        resp = session.post(export_url, data=data, headers=headers, timeout=CONFIG["http"]["timeout"])
-        resp.raise_for_status()
+        # GB/T 走统一入口但禁用本层重试(retries=False)：断路器/代理 failover/
+        # 全链路记账全部保留；重试节奏仍由外层 fetch_gbt_citation_with_retry
+        # 的 2/4/8s 指数退避控制——两层叠加会把单篇等待拖到分钟级
+        resp = http_post(export_url, data=data, headers=headers,
+                         timeout=CONFIG["http"]["timeout"],
+                         raise_for_status=True, retries=False,
+                         op_name="GBT引文")
     except Exception as exc:
         raise CnkiGBTCitationAPIFailed(
             f"知网 GB/T 7714 导出 API 请求失败 "
@@ -1005,6 +1694,13 @@ def _fetch_gbt_citation(html: str) -> str:
         raise CnkiGBTCitationAPIFailed(
             f"知网 GB/T 7714 导出 API 返回非 JSON: {exc!r}"
         ) from exc
+    # 合法 JSON 但非对象(如纯字符串/数组)→ 归类 APIFailed 进入重试,
+    # 而不是让 j.get() 抛未分类 AttributeError 打穿重试封装
+    if not isinstance(j, dict):
+        raise CnkiGBTCitationAPIFailed(
+            f"知网 GB/T 7714 导出 API 返回非对象 JSON: {type(j).__name__}, "
+            f"body={str(j)[:120]!r}"
+        )
     if j.get("code") != 1 or not isinstance(j.get("data"), list):
         raise CnkiGBTCitationAPIFailed(
             f"知网 GB/T 7714 导出 API 拒绝请求: code={j.get('code')}, msg={j.get('msg')!r}"
@@ -1016,9 +1712,9 @@ def _fetch_gbt_citation(html: str) -> str:
             continue
         for v in d.get("value", []):
             clean = _re_gbt.sub(r"<br\s*/?>", "\n", v)
-            clean = _re_gbt.sub(r"<(?!\\s*br\\s*/?>)[^>]+>", "", clean)
-            clean = _re_gbt.sub(r"^\\s*\\$\\[\\d+\\]", "", clean).strip()
-            clean = _re_gbt.sub(r"^\\s*\\[\\d+\\]", "", clean).strip()
+            clean = _re_gbt.sub(r"<(?!\s*br\s*/?>)[^>]+>", "", clean)
+            clean = _re_gbt.sub(r"^\s*\$\[\d+\]", "", clean).strip()
+            clean = _re_gbt.sub(r"^\s*\[\d+\]", "", clean).strip()
             parts.append(clean)
     if not parts:
         # 极个别:导出 API 返回 data 但没有 GB/T 7714-2025 条目
@@ -1029,20 +1725,71 @@ def _fetch_gbt_citation(html: str) -> str:
     return "\n".join(parts).strip()
 
 
+def fetch_gbt_citation_with_retry(html: str) -> str:
+    """GB/T 7714 导出 API 的指数退避重试封装。
+
+    分类处置(用户要求"不允许任何意外"——失败必须闭环,不能中止/静默丢):
+      - CnkiGBTCitationMissing(单篇详情页结构问题):重试同一篇不会变好,直接透传
+      - CnkiGBTCitationAPIFailed(API 故障/限流/cookie 抖动):按 2/4/8s 指数退避
+        重试,每次失败抬升自适应限速;重试耗尽才抛给调用方
+    """
+    retries = int(CONFIG["runtime"].get("gbt_api_retries", 4))
+    for attempt in range(retries):
+        try:
+            return _fetch_gbt_citation(html)
+        except CnkiGBTCitationMissing:
+            # 单篇结构缺失,重试无意义:透传给调用方按单篇跳过
+            raise
+        except CnkiGBTCitationAPIFailed as e:
+            if attempt >= retries - 1:
+                # 重试耗尽:仍抛 APIFailed,由上层(主流程/adapter)决策
+                raise
+            wait = 2.0 * (2 ** attempt)  # 2/4/8s 指数退避
+            throttle_hit("GB/T 导出 API 失败")
+            print(f"[引文] GB/T 导出失败({attempt + 1}/{retries}): {e}")
+            print(f"[引文] 退避 {wait:.0f}s 后重试…")
+            debug_log(f"[引文] GB/T 导出 API 失败，退避 {wait:.0f}s 重试({attempt + 1}/{retries})")
+            sleep_jitter(wait)
+    # 防御性兜底(理论上上面必然 return 或 raise)
+    raise CnkiGBTCitationAPIFailed("GB/T 导出重试耗尽")
+
+
 def fetch_abstract(detail_url: str) -> dict:
-    resp = session.get(detail_url, timeout=CONFIG["http"]["timeout"])
+    # 详情页走统一入口(断路器/分层重试/代理 failover)；页面级风控语义
+    # (security/login/JSON 空壳)由下方既有自愈逻辑处置
+    resp = http_get(detail_url, timeout=CONFIG["http"]["timeout"], op_name="详情页")
     resp.encoding = "utf-8"
     text = resp.text
 
-    # 详情页被拦：登录页=cookie 失效；安全验证页=风控（降低频率/稍后重试）
-    block = classify_block_page(text)
-    if block == "security":
-        raise RuntimeError("详情页触发安全验证（风控），请降低请求频率或稍后重试（delay 调大）")
-    if block == "login":
-        raise RuntimeError("详情页返回登录页，cookie 可能已过期（请刷新 cookie）")
+    # 详情页被拦:安全验证页=风控 → 抬升限速+退避后重拉一次,仍拦截才抛
+    if classify_block_page(text) == "security":
+        throttle_hit("详情页安全验证")
+        print("[摘要] 详情页触发安全验证（风控），退避 8s 后重试…")
+        emit_log("[详情] 该文献访问受限，正在自动重试…")
+        sleep_jitter(8)
+        resp = http_get(detail_url, timeout=CONFIG["http"]["timeout"], op_name="详情页")
+        resp.encoding = "utf-8"
+        text = resp.text
+        if classify_block_page(text) == "security":
+            throttle_hit("详情页连续 2 次安全验证")
+            raise RuntimeError("详情页连续 2 次触发安全验证（风控），请降低请求频率或稍后重试（delay 调大）")
+    # 登录页=cookie 失效:v9 先自动续期(游客态重访首页即可种回 KNS2COOKIE),续期后重拉
+    if classify_block_page(text) == "login":
+        if not refresh_cookies("详情页返回登录页"):
+            raise CnkiCookieError(
+                "知网返回登录页，cookie 自动续期无效（可能要求登录或本机 IP 受限）——请检查本机网络后重试"
+            )
+        resp = http_get(detail_url, timeout=CONFIG["http"]["timeout"], op_name="详情页")
+        resp.encoding = "utf-8"
+        text = resp.text
+        if classify_block_page(text) == "login":
+            raise CnkiCookieError(
+                "知网返回登录页，cookie 自动续期无效（可能要求登录或本机 IP 受限）——请检查本机网络后重试"
+            )
 
-    # 反爬/异常时返回 JSON：补齐全部字段键，避免 CSV 缺列
+    # 反爬/异常时返回 JSON：抬升限速,补齐全部字段键,避免 CSV 缺列
     if text.startswith("{") or text.startswith("["):
+        throttle_hit("详情页返回 JSON 空壳")
         try:
             data = resp.json()
         except Exception:
@@ -1065,10 +1812,39 @@ def fetch_abstract(detail_url: str) -> dict:
             pass
         raise RuntimeError(f"_parse_detail 失败: {e!r}")
 
-    # GB/T 7714-2025 引文:失败时按异常类型(Missing 单篇跳过 / APIFailed 整次停)raise,
-    # 不在 try/except 块里 — 让异常直接传播到调用方(adapter)。
-    gbt = _fetch_gbt_citation(text)
+    global _empty_abstract_streak
+    # 三代模板选择器都没取到摘要:落盘页面样本取证(同 URL 只存一份,总量上限 10 份)
+    if not (parsed.get("abstract") or "").strip():
+        try:
+            debug_base = Path(CONFIG["paths"]["debug_abstract_html"])
+            url_tag = md5(detail_url.encode("utf-8")).hexdigest()[:8]
+            dump_path = debug_base.with_name(f"debug_abstract_{url_tag}.html")
+            if (not dump_path.exists()
+                    and len(list(debug_base.parent.glob("debug_abstract_*.html"))) < 10):
+                dump_path.write_text(text, encoding="utf-8")
+                debug_log(f"[摘要] 摘要为空,已保存页面样本 {dump_path.name}(详情页模板可能又改版)")
+        except Exception:
+            pass
+        # v9:连续空摘要哨兵 —— 单篇偶发空可跳过;连续 30 篇空 = 详情页模板改版,
+        # 自动处置已穷尽,上抛交前端横幅告知,勿静默烧完整个清单
+        with _empty_abstract_lock:
+            _empty_abstract_streak += 1
+            streak = _empty_abstract_streak
+        if streak >= 30:
+            raise CnkiRevisionError(
+                f"连续 {streak} 篇摘要解析为空（详情页模板疑似改版），样本已落盘——请反馈开发者更新解析模板"
+            )
+    else:
+        # 本篇摘要解析成功:哨兵计数清零
+        with _empty_abstract_lock:
+            _empty_abstract_streak = 0
+
+    # GB/T 7714-2025 引文:走指数退避重试封装(Missing=单篇结构问题透传 /
+    # APIFailed=退避重试耗尽才传播),不再一遇 API 抖动就中止整次检索
+    gbt = fetch_gbt_citation_with_retry(text)
     parsed["gbt_citation"] = gbt
+    # 本篇详情页全流程成功:自适应限速可回落
+    throttle_ok()
     return parsed
 
     # 下面的死代码保留以防 _fetch_gbt_citation 之外的旧 fall-back 路径(实际不会执行)
@@ -1124,6 +1900,11 @@ def _parse_detail(text: str, detail_url: str) -> dict:
         '//input[@id="abstract_text"]/@value',
         '//span[@class="abstract-text"]/text()',
         '//span[contains(@class,"abstract-text")]/text()',
+        # kcms2 新模板:摘要容器为 div#ChDivSummary / div.abstract-text(老选择器全部落空的根因)
+        '//div[@id="ChDivSummary"]',
+        '//div[contains(@class,"abstract-text")]',
+        # 最终兜底:meta description 通常是摘要(可能截断)
+        '//meta[@name="description"]/@content',
     ])
 
     kws_raw = tree.xpath('//p[@class="keywords"]/a/text()')
@@ -1205,8 +1986,18 @@ def save_results(results: list, output: str):
 
 
 def save_failed(failed_items: list, path: str):
-    """保存失败清单（供 --retry-failed 补抓），空清单不写盘"""
+    """保存失败清单（供 --retry-failed 补抓）。
+
+    空清单时删除旧文件:防止上一次运行遗留的陈旧清单误导后续补抓
+    (陈旧清单里的 URL 可能已在新一轮全量抓取中成功,重抓纯属浪费)。
+    """
     if not failed_items:
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                print(f"[保存] 失败清单已清空，删除旧文件 {path}")
+        except Exception:
+            pass
         return
     with open(path, "w", encoding="utf-8") as f:
         json.dump(failed_items, f, ensure_ascii=False, indent=2)
@@ -1231,43 +2022,176 @@ def load_existing_results(output: str) -> tuple:
         return [], set()
 
 
+def _normalize_loaded_rows(rows: list) -> list:
+    """CSV 读回的行,列表字段(authors 等)是 "a | b" 串;写回前归一化回 list。
+
+    否则 save_results 对 CSV 再做一次 " | ".join 会按字符拆分字符串。
+    """
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        for field in ("authors", "orgs", "keywords", "funds"):
+            v = r.get(field)
+            if isinstance(v, str):
+                r[field] = [x.strip() for x in v.split(" | ") if x.strip()]
+    return rows
+
+
+# ========================== 完整性校验与自动补抓闭环 ==========================
+# 记录不完整(摘要/引文为空)时的最大补抓次数:
+# 个别文献类型本身无摘要,限次收录防死循环
+EMPTY_ABSTRACT_MAX_ATTEMPTS = 2
+# 补抓闭环连续零进展轮次的熔断阈值:
+# cookie 过期/打码余额耗尽属人工故障,自动空转只会烧超级鹰余额
+FILL_LOOP_ZERO_PROGRESS_LIMIT = 3
+# 补抓轮次间隔(秒):按轮次线性递增,封顶 300s,给风控窗口留恢复时间
+FILL_LOOP_BASE_INTERVAL = 30.0
+FILL_LOOP_MAX_INTERVAL = 300.0
+
+
+def _record_complete(record: dict) -> bool:
+    """记录完整性校验:gbt_citation 与 abstract 必须同时非空。
+
+    任一为空即判定不完整 → 该 URL 进补抓队列(不允许静默丢数据)。
+    """
+    return bool((record.get("gbt_citation") or "").strip()) and \
+        bool((record.get("abstract") or "").strip())
+
+
+def auto_fill_loop(failed_path: str, output: str, force: bool = True) -> dict:
+    """失败清单自动补抓闭环:循环补抓直到清单清空或触发熔断。
+
+    确定性保障(对应"不允许任何意外"的最终一致性要求):
+      - 每轮结束立即落盘(结果合并写回 + 剩余清单写回),任意时刻中断不丢进度
+      - 连续 FILL_LOOP_ZERO_PROGRESS_LIMIT 轮零进展即熔断——
+        cookie 过期/打码余额耗尽是人工故障,继续空转只会烧余额
+      - 记录仍不完整时限量补抓 EMPTY_ABSTRACT_MAX_ATTEMPTS 次,
+        超限标记 abstract_missing 收录(可见、可查,绝不静默丢弃)
+
+    返回 {"recovered", "remaining", "rounds", "circuit_break"}
+    """
+    stats = {"recovered": 0, "remaining": 0, "rounds": 0, "circuit_break": False}
+    if not force:
+        return stats
+    remaining: list = []
+    zero_streak = 0
+    round_no = 0
+    while True:
+        # 读清单(文件不存在或为空即闭环完成)
+        try:
+            with open(failed_path, encoding="utf-8") as f:
+                failed = json.load(f)
+        except FileNotFoundError:
+            failed = []
+        except Exception as e:
+            print(f"[补抓] 读取失败清单出错: {e}，终止闭环(清单保留待人工处理)")
+            emit_log("[补抓] 补全记录读取异常，自动补全已暂停，已获取的数据不受影响")
+            stats["remaining"] = -1
+            return stats
+        if not failed:
+            print("[补抓] 失败清单已清空，闭环完成")
+            stats["rounds"] = round_no
+            break
+        round_no += 1
+        wait = min(FILL_LOOP_BASE_INTERVAL * round_no, FILL_LOOP_MAX_INTERVAL)
+        if round_no > 1:
+            print(f"[补抓] 第 {round_no} 轮:剩余 {len(failed)} 条，{wait:.0f}s 后开始")
+            emit_log(f"[补全] 第 {round_no} 轮：剩余 {len(failed)} 条待补全")
+            sleep_jitter(wait)
+        print(f"[补抓] 第 {round_no} 轮开始:共 {len(failed)} 条待补")
+        emit_log(f"[补全] 第 {round_no} 轮开始：共 {len(failed)} 条待补全")
+
+        recovered_this_round = 0
+        remaining = []
+        new_results = []
+        for item in failed:
+            url = item.get("url") if isinstance(item, dict) else str(item)
+            if not url:
+                continue
+            try:
+                d = fetch_abstract(url)
+            except Exception as e:
+                # 仍失败:更新错误信息留清单,下一轮再试
+                if isinstance(item, dict):
+                    item["error"] = str(e)
+                else:
+                    item = {"url": url, "error": str(e)}
+                remaining.append(item)
+                print(f"[补抓] 仍失败 {url[:70]}: {e}")
+                sleep_jitter(effective_delay())
+                continue
+            if _record_complete(d):
+                new_results.append(d)
+                recovered_this_round += 1
+                print(f"[补抓] 成功 {url[:70]}")
+            else:
+                # 仍不完整:限量补抓,超限标记收录(可见,不静默丢)
+                attempts = int(item.get("attempts", 0)) + 1
+                if attempts >= EMPTY_ABSTRACT_MAX_ATTEMPTS:
+                    d["abstract_missing"] = True
+                    new_results.append(d)
+                    recovered_this_round += 1
+                    print(f"[补抓] 补抓 {attempts} 次仍不完整，标记 abstract_missing 收录 {url[:60]}")
+                    emit_log("[补全] 该文献摘要暂时无法获取，已收录其余信息")
+                else:
+                    item = dict(item) if isinstance(item, dict) else {}
+                    item["url"] = url
+                    item["kind"] = "empty_abstract"
+                    item["attempts"] = attempts
+                    item.pop("error", None)
+                    remaining.append(item)
+                    print(f"[补抓] 记录不完整(第 {attempts} 次)，留清单再补 {url[:70]}")
+            sleep_jitter(effective_delay())
+
+        # 本轮落盘:结果合并写回(绝不覆盖已有数据) + 剩余清单写回
+        if new_results:
+            existing, _ = load_existing_results(output)
+            existing = _normalize_loaded_rows(existing)
+            existing.extend(new_results)
+            save_results(existing, output)
+        save_failed(remaining, failed_path)
+        stats["rounds"] = round_no
+        stats["recovered"] += recovered_this_round
+        print(f"[补抓] 第 {round_no} 轮结束:恢复 {recovered_this_round} 条，剩余 {len(remaining)} 条")
+        emit_log(f"[补全] 第 {round_no} 轮完成：补全 {recovered_this_round} 条，剩余 {len(remaining)} 条")
+        if not remaining:
+            break
+        # 零进展熔断:连续 N 轮无一恢复,继续空转只会烧打码余额
+        if recovered_this_round == 0:
+            zero_streak += 1
+            if zero_streak >= FILL_LOOP_ZERO_PROGRESS_LIMIT:
+                print(f"[补抓] 连续 {zero_streak} 轮零进展，熔断闭环(请检查 cookie / 超级鹰余额 / 风控状态)")
+                emit_log("[补全] 连续多轮无进展，已停止自动补全，已获取的数据不受影响")
+                stats["circuit_break"] = True
+                break
+        else:
+            zero_streak = 0
+    stats["remaining"] = len(remaining)
+    return stats
+
+
 def cmd_retry_failed(failed_path: str, output: str) -> bool:
-    """读取失败清单，逐条重抓摘要：成功则保存并移出清单，失败保留"""
+    """读取失败清单补抓:复用 auto_fill_loop,结果合并写回。
+
+    v9.0 修复:旧版 save_results(results, output) 是覆盖写,
+    会把主流程已抓到的数据整个冲掉——改为合并写回。
+    """
     try:
         with open(failed_path, encoding="utf-8") as f:
             failed = json.load(f)
+    except FileNotFoundError:
+        print("[重试] 失败清单不存在（此前已全部恢复），无需补抓")
+        return False
     except Exception as e:
         print(f"[错误] 读取失败清单 {failed_path} 失败: {e}")
         return False
     if not failed:
         print("[重试] 失败清单为空，无需补抓")
         return False
-
-    remaining = []
-    results = []
-    delay = CONFIG["runtime"]["delay_seconds"]
-    for item in failed:
-        url = item.get("url") if isinstance(item, dict) else str(item)
-        if not url:
-            remaining.append(item)
-            continue
-        try:
-            d = fetch_abstract(url)
-            results.append(d)
-            print(f"[重试] 成功 {url[:70]}")
-        except Exception as e:
-            if isinstance(item, dict):
-                item["error"] = str(e)
-            else:
-                item = {"url": str(item), "error": str(e)}
-            remaining.append(item)
-            print(f"[重试] 仍失败 {url[:70]}: {e}")
-        sleep_jitter(delay)
-
-    save_results(results, output)
-    save_failed(remaining, failed_path)
-    print(f"[重试] 本轮成功 {len(results)} 条，剩余失败 {len(remaining)} 条")
-    return True
+    stats = auto_fill_loop(failed_path, output, force=True)
+    print(f"[重试] 补抓闭环结束:恢复 {stats['recovered']} 条，剩余 {stats['remaining']} 条"
+          f"（共 {stats['rounds']} 轮{',已熔断' if stats['circuit_break'] else ''}）")
+    return stats["recovered"] > 0 or stats["remaining"] == 0
 
 
 # ========================== CLI 工具 ==========================
@@ -1413,6 +2337,54 @@ def classify_block_page(text: str) -> str:
     return ""
 
 
+# cookie 自动续期节流:3 线程并发下 10s 内只允许真正刷新一次
+_cookie_refresh_lock = threading.Lock()
+_cookie_refresh_ts = 0.0
+
+# v9:连续空摘要哨兵状态(详情页模板改版检测,3 线程并发安全)
+_empty_abstract_streak = 0
+_empty_abstract_lock = threading.Lock()
+
+
+def refresh_cookies(reason: str = "") -> bool:
+    """cookie 过期自动续期(游客态程序可解,无需人工)。
+
+    原理:KNS2COOKIE 由知网在访问首页时以 Set-Cookie 下发,过期后重新
+    访问首页/高级检索页即可续期。保留旧 cookie 中服务端未重种的字段
+    (如 Ecp_ClientId 客户端指纹),避免签名一致性漂移。
+    10s 节流防止 3 线程并发重复刷新。返回 True 表示续期后验证可用。
+    """
+    global _cookie_refresh_ts
+    with _cookie_refresh_lock:
+        if time.time() - _cookie_refresh_ts < 10:
+            # 刚有线程刷新过:直接用当前 session 复验(续期已由它完成)
+            return check_cookies()
+        _cookie_refresh_ts = time.time()
+    print(f"[cookies] 检测到 cookie 失效({reason or '未知原因'})，自动续期中…")
+    emit_log("[登录] 检测到登录状态已过期，正在自动恢复…")
+    base = CONFIG["endpoints"]["base"]
+    search_url = CONFIG["endpoints"].get("search") or base
+    try:
+        session.get(base, timeout=CONFIG["http"]["timeout"])
+        session.get(search_url, timeout=CONFIG["http"]["timeout"])
+    except Exception as e:
+        print(f"[cookies] 自动续期请求失败: {e}")
+        debug_log(f"[cookies] 自动续期请求失败: {e}")
+        return False
+    new_cookies = session.cookies.get_dict()
+    if not new_cookies.get("KNS2COOKIE"):
+        # 服务端未种新 KNS2COOKIE(可能 IP 受限):合并旧值再验证一次
+        session.cookies.update({k: v for k, v in COOKIES.items() if k not in new_cookies})
+    if check_cookies():
+        save_cookies(session.cookies.get_dict(), CONFIG["paths"]["cookies_file"])
+        print("[cookies] cookie 已自动续期")
+        emit_log("[登录] 登录状态已恢复，任务继续")
+        return True
+    print("[cookies] 自动续期后校验仍失败（知网可能强制登录/IP 受限）")
+    emit_log("[登录] 自动恢复未成功，任务即将停止。请检查网络后重试；如持续出现请联系技术支持")
+    return False
+
+
 def check_cookies() -> bool:
     """
     启动时校验 cookie（跨设备使用，每次运行前都应确认本机 cookie 有效）：
@@ -1444,6 +2416,9 @@ def check_cookies() -> bool:
             return True
         if "AdvSearch" in resp.text[:2000] or "高级检索" in resp.text[:2000] or "检索" in resp.text[:2000]:
             print("[cookies] 校验通过，会话有效")
+            # v9.1:预热顺手刷新 turnpage 会话令牌并落盘 —— 保证首搜就带有效令牌，
+            # 避免重启后旧令牌触发"查询对象结构错误"被误判为限流
+            refresh_turnpage("cookie 预检")
             return True
         print("[警告] cookie 状态无法确认（页面特征异常），将继续运行尝试")
         return True
@@ -1456,7 +2431,7 @@ def check_cookies() -> bool:
 def main():
     parser = argparse.ArgumentParser(description="中国知网列表/摘要爬虫（参数全部外置）")
     parser.add_argument("--keyword", "-k", default="", help="检索关键词（--keyword / --expert / --keywords-file 三者必填其一）")
-    parser.add_argument("--expert", "-e", default="", help="专业检索式，如 SU=('卡车'+'车辆')*'无人机'*'协同'（优先于 --keyword）")
+    parser.add_argument("--expert", "-e", default="", help="专业检索式，如 SU=('主题词A'+'主题词B')*'主题词C'（优先于 --keyword）")
     parser.add_argument("--field", "-f", help=f"SU=主题 TI=题名 KY=关键词 AU=作者（默认 {CONFIG['search']['default_field']}）")
     parser.add_argument("--operator", "-op", help=f"TOPRANK=模糊 EQ=精确（默认 {CONFIG['search']['default_operator']}）")
     parser.add_argument("--resource", "-r", help=f"CAPJ=期刊 CAPM=博硕 等（默认 {CONFIG['search']['default_resource']}）")
@@ -1470,6 +2445,8 @@ def main():
                         help="补抓失败清单（默认 config paths.failed_file 即 failed.json）")
     parser.add_argument("--force-captcha", action="store_true", help="强制走滑块验证流程")
     parser.add_argument("--delay", type=float, help=f"请求间隔秒数（默认 {CONFIG['runtime']['delay_seconds']}）")
+    parser.add_argument("--no-auto-retry", action="store_true",
+                        help="关闭主流程末尾的失败清单自动补抓闭环（默认开启）")
     parser.add_argument("--setup-cookies", action="store_true", help="重新录入 cookie（退出爬虫流程）")
     args = parser.parse_args()
 
@@ -1481,9 +2458,25 @@ def main():
     if not check_cookies():
         sys.exit(3)
 
+    # 超级鹰余额预警:余额耗尽=验证码必然过不去(人工故障,必须提前暴露而非中途炸)
+    try:
+        _score = cj.get_score()
+        if isinstance(_score, dict) and _score.get("err_no") == 0:
+            _tifen = int(_score.get("tifen") or 0)
+            print(f"[余额] 超级鹰题分余额: {_tifen}")
+            if _tifen < 200:
+                print("[警告] 超级鹰余额低于 200，验证码识别可能中途失败，请尽快充值！")
+                emit_log(f"[警告] 验证码识别服务（超级鹰）余额不足：{_tifen}，请尽快充值，否则部分文献可能无法获取")
+        else:
+            print(f"[警告] 超级鹰余额查询失败: {_score}（不阻塞主流程）")
+    except Exception as e:
+        print(f"[警告] 超级鹰余额查询异常: {e}（不阻塞主流程）")
+
     # 补抓模式：只重抓失败清单里的详情页，不重新检索
     if args.retry_failed:
-        sys.exit(0 if cmd_retry_failed(args.retry_failed, args.output) else 1)
+        # retry 模式也走规范化输出路径,保证补抓结果与已有输出可合并
+        _retry_output = args.output or f"{CONFIG['paths']['default_output_prefix']}_{int(time.time())}.json"
+        sys.exit(0 if cmd_retry_failed(args.retry_failed, _retry_output) else 1)
 
     # 命令行覆盖配置（仅本次运行生效）
     kw_default = (args.keyword or "").strip()
@@ -1520,15 +2513,18 @@ def main():
     dup_count = 0
     failed_items = []
     failed_path = args.retry_failed or CONFIG["paths"].get("failed_file", "failed.json")
+    # 输出路径规范化:不指定时固定为带时间戳的文件,全流程复用同一文件
+    # (否则增量保存/补抓合并各自生成不同时间戳文件,闭环合并会失效)
+    output_path = args.output or f"{CONFIG['paths']['default_output_prefix']}_{int(time.time())}.json"
     overall_start = time.time()
 
     # 断点续传：加载已有输出文件，跳过已抓详情页
     if args.resume:
-        prev_results, prev_urls = load_existing_results(args.output)
+        prev_results, prev_urls = load_existing_results(output_path)
         all_results = list(prev_results)
         seen_urls = set(prev_urls)
         if prev_results:
-            print(f"[续传] 已从 {args.output} 载入 {len(prev_results)} 条，跳过已抓 URL")
+            print(f"[续传] 已从 {output_path} 载入 {len(prev_results)} 条，跳过已抓 URL")
 
     for idx, (kw, field, operator) in enumerate(keyword_list, 1):
         if kw.upper() == "EXPERT":
@@ -1544,12 +2540,15 @@ def main():
                 resource=resource_default, extra=extra,
             )
 
-        items = fetch_all_list(
-            query_json=query_json,
-            max_count=max_default,
-            force_captcha=args.force_captcha,
-            delay=delay_default,
-        )
+        try:
+            items = fetch_all_list(
+                query_json=query_json,
+                max_count=max_default,
+                force_captcha=args.force_captcha,
+            )
+        except CnkiServerBusyError as exc:
+            print(f"\n[中止] {exc}\n建议:降低请求频率(--delay)或稍后重试,必要时刷新 cookies.json")
+            sys.exit(1)
         new_items = [it for it in items if it["url"] not in seen_urls]
         dup_in_page = len(items) - len(new_items)
         dup_count += dup_in_page
@@ -1563,38 +2562,76 @@ def main():
 
         progress = ProgressBar(total=len(new_items), title=f"[{kw[:15]:<15}] 摘要进度")
         for it in new_items:
+            ok = False
             try:
                 d = fetch_abstract(it["url"])
-                all_results.append(d)
-                progress.update(success=True)
+                # 完整性校验:摘要与引文必须同时非空,否则进补抓队列(不静默丢)
+                if _record_complete(d):
+                    all_results.append(d)
+                    ok = True
+                else:
+                    print(f"\n[摘要] 记录不完整(摘要/引文为空) {it['url'][:60]}，进入补抓队列")
+                    emit_log("[补全] 该文献信息暂不完整，已加入自动补全队列")
+                    failed_items.append({
+                        "url": it["url"], "keyword": kw,
+                        "kind": "empty_abstract", "attempts": 1,
+                    })
             except Exception as e:
                 print(f"\n[摘要] 失败 {it.get('url','')[:60]}: {e}")
                 failed_items.append({"url": it["url"], "error": str(e), "keyword": kw})
-                progress.update(success=False)
-            sleep_jitter(delay_default)
+            progress.update(success=ok)
+            # 自适应限速:风控后自动放大,连续成功后回落
+            sleep_jitter(effective_delay())
         progress.finish()
 
         # 每个关键词完成后增量写盘，中断/异常时不丢已抓数据
         try:
-            save_results(all_results, args.output)
+            save_results(all_results, output_path)
             save_failed(failed_items, failed_path)
         except Exception as e:
             print(f"[警告] 保存结果失败: {e}")
 
     # 全部结束后兜底保存
     try:
-        save_results(all_results, args.output)
+        save_results(all_results, output_path)
         save_failed(failed_items, failed_path)
     except Exception as e:
         print(f"[警告] 最终保存失败: {e}")
 
+    # ---------- 确定性闭环:失败清单自动补抓(--no-auto-retry 可关闭) ----------
+    fill_stats = {"recovered": 0, "remaining": 0, "rounds": 0, "circuit_break": False}
+    if failed_items and not args.no_auto_retry:
+        print(f"\n[闭环] 有 {len(failed_items)} 条失败记录，启动自动补抓闭环…")
+        emit_log(f"[补全] 自动补全已启动：待补全 {len(failed_items)} 条")
+        fill_stats = auto_fill_loop(failed_path, output_path, force=True)
+        if fill_stats["recovered"] > 0:
+            # 补抓结果已由闭环合并落盘,重载内存副本以获得准确的最终统计
+            loaded, _ = load_existing_results(output_path)
+            all_results = _normalize_loaded_rows(loaded)
+    elif args.no_auto_retry and failed_items:
+        print(f"[闭环] 已按 --no-auto-retry 跳过自动补抓"
+              f"（{len(failed_items)} 条失败留待手动: --retry-failed {failed_path}）")
+
+    # ---------- 最终报告 ----------
+    abstract_missing = sum(1 for r in all_results if isinstance(r, dict) and r.get("abstract_missing"))
     elapsed_total = time.time() - overall_start
     avg_speed = len(all_results) / elapsed_total if elapsed_total > 0 else 0
     print(f"\n{'=' * 70}")
     print(f"=== 全部完成，共 {len(all_results)} 条 ===")
     if dup_count > 0:
         print(f"=== 跨关键词去重跳过 {dup_count} 条重复 ===")
+    if abstract_missing > 0:
+        print(f"=== 其中 {abstract_missing} 条摘要不完整（已标记 abstract_missing 收录） ===")
+    if fill_stats["remaining"] > 0:
+        print(f"=== 仍有 {fill_stats['remaining']} 条未恢复，清单: {failed_path} ===")
+        print(f"=== 修复 cookie/余额后运行: --retry-failed {failed_path} -o {output_path} ===")
+    if fill_stats["circuit_break"]:
+        print("=== 补抓因连续零进展熔断：请检查 cookie / 超级鹰余额 / 风控状态后手动补抓 ===")
     print(f"=== 总耗时 {elapsed_total:.1f}s，平均 {avg_speed:.2f} 条/s ===")
+    cur_delay = effective_delay()
+    if cur_delay > throttle_base() * 1.5:
+        print(f"=== 提示:本次因风控信号自适应限速已升至 {cur_delay:.1f}s"
+              f"（基准 {throttle_base():.1f}s），建议调大 config 的 delay_seconds ===")
     print(f"{'=' * 70}")
 
 
