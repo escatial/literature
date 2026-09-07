@@ -167,6 +167,59 @@ def _salvage_groups_json(raw: str) -> list[dict] | None:
     return None  # 未闭合(输出被截断),无法抢救
 
 
+def _salvage_truncated_groups(raw: str) -> list[dict] | None:
+    """从「未闭合」(输出被截断)的 JSON 里抢救已完整写出的分组对象。
+
+    大池子(300+ 篇)时输出可能在中途被 max_tokens 截断:
+        {"groups": [{"name": "A", "ids": [1, 2]}, {"name": "B", "ids":
+    此时最后半个对象作废,前面完整的分组对象仍然有效。缺组的文献由
+    _reassign_orphans 按标题相似度归组 —— 截断不再等于整体失败。
+    """
+    marker = raw.find('"groups"')
+    if marker == -1:
+        return None
+    arr_start = raw.find("[", marker)
+    if arr_start == -1:
+        return None
+    items: list[dict] = []
+    i, n = arr_start + 1, len(raw)
+    while i < n:
+        while i < n and raw[i] in " \t\r\n,":
+            i += 1
+        if i >= n or raw[i] != "{":
+            break
+        depth, in_str, esc, j = 0, False, False, i
+        while j < n:
+            ch = raw[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            j += 1
+        if j >= n:
+            break  # 最后一个对象未闭合,丢弃
+        try:
+            obj = _json.loads(raw[i : j + 1])
+        except Exception:
+            obj = None
+        if isinstance(obj, dict):
+            items.append(obj)
+        i = j + 1
+    return items or None
+
+
 def _parse_group_response(raw: str) -> list[dict]:
     data = parse_llm_json(raw)
     if isinstance(data, dict) and "groups" in data:
@@ -175,6 +228,10 @@ def _parse_group_response(raw: str) -> list[dict]:
     salvaged = _salvage_groups_json(raw)
     if salvaged:
         return salvaged
+    # 输出被 max_tokens 截断(JSON 未闭合):抢救已完整写出的分组
+    truncated = _salvage_truncated_groups(raw)
+    if truncated:
+        return truncated
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
     return []
@@ -252,12 +309,47 @@ def _reassign_orphans(papers: list[Paper], rest: list[str], groups: list[Group])
         best.lit_ids.append(p.lit_id)
 
 
+def _output_token_budget(papers: list[Paper]) -> int:
+    """分类输出的 max_tokens 预算,随池子规模缩放。
+
+    历史教训:固定 5000 时,300+ 篇池子(每个 lit_id 是 lit_cnki_+16 位十六进制
+    ≈ 10-18 token)的回显需求即达 4000-6000 token,JSON 必然被截断。
+    编号协议下每篇仅 ~4 token,仍按池子规模放大并设 32k 硬顶
+    (各 provider 输出上限不一,过大值会被 API 拒绝)。
+    """
+    return min(32000, max(5000, 1500 + 6 * len(papers)))
+
+
+def _map_group_items(items: list[dict], index_of: dict[str, str]) -> list[dict]:
+    """把模型输出的文献编号(int/str)映射回 lit_id。
+
+    编号协议:模型只回显行首编号(1,2,3...),不抄 lit_id 原文 ——
+    25 字符十六进制串 vs 1-2 位数字,输出体积差一个数量级。
+    兼容模型仍按旧格式回 lit_id 的情形(原样保留,由 valid_ids 过滤)。
+    """
+    mapped: list[dict] = []
+    for item in items:
+        raw_ids: list = item.get("ids") or item.get("lit_ids") or []
+        out: list[str] = []
+        for v in raw_ids:
+            key = str(v).strip().lstrip("#")
+            lid = index_of.get(key)
+            if lid:
+                out.append(lid)
+            elif isinstance(v, str) and v.startswith("lit_"):
+                out.append(v)
+        mapped.append({**item, "lit_ids": out})
+    return mapped
+
+
 def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
     """主题分类:LLM 将文献归入若干主题。
 
     强约束(代码层兜底):
       - 组数下限见 _min_groups(≥30 篇至少 4 组,9~29 篇至少 3 组);
       - 三次调用逐级升级:常规(0.3) → 显式返工(0.7) → 极简输入(0.7);
+      - 输出用「编号协议」(模型只回显行首编号,不抄 lit_id),大池子不再截断;
+      - 输出万一仍被截断,抢救已完整的分组,缺组文献按标题相似度归入;
       - 组名不合格的组剔除,其文献按标题相似度归入最相近的合格组;
       - LLM 彻底失败时,单组全量确定性兜底(组名 = 清洗后的主题名)。
     """
@@ -266,12 +358,15 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
 
     # 分组依据:标题 + 摘要节选。同主题文献标题高度相似,
     # 区分「方法流派/应用情境/机制要素」的信息主要在摘要里。
+    # 行首给短编号,模型输出只回显编号 —— 大池子时输出体积可控。
+    index_of = {str(i + 1): p.lit_id for i, p in enumerate(papers)}
     catalog = "\n".join(
-        f"- {p.lit_id} | {p.title} | {p.year or 'N/A'} | 摘要:{(p.abstract or '').strip()[:120]}..."
-        for p in papers
+        f"- #{i + 1} | {p.title} | {p.year or 'N/A'} | 摘要:{(p.abstract or '').strip()[:120]}..."
+        for i, p in enumerate(papers)
     )
     valid_ids = {p.lit_id for p in papers}
     min_groups = _min_groups(len(papers))
+    token_budget = _output_token_budget(papers)
 
     def _ask(attempt: int) -> list[Group]:
         """attempt 1=常规;2=显式返工(升温+强制组数);3=极简输入兜底。"""
@@ -288,15 +383,16 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
         output_discipline = (
             "\n\n## 输出纪律(最高优先级)\n"
             "禁止输出分析过程、逐篇归属说明、Markdown 列表或任何解释文字;"
+            "ids 里只写文献清单行首的编号数字,严禁抄写 lit_id 原文;"
             "你的全部输出必须是一个以 { 开头、以 } 结尾的 JSON 对象,格式:\n"
-            '{"groups": [{"name": "<组名>", "lit_ids": ["<lit_id>", ...]}]}'
+            '{"groups": [{"name": "<组名>", "ids": [1, 2, 3]}]}'
         )
         if attempt >= 3:
             # 第三道防线:极简输入 + 一句话指令。
             # 输入只剩编号+标题,模型没有「逐篇分析」的发挥空间;
-            # 输出纯 JSON 仅几百 token,物理上不可能截断。
+            # 输出只含编号数字,体积比 lit_id 小一个数量级。
             catalog_min = "\n".join(
-                f"{p.lit_id} {p.title[:60]}" for p in papers
+                f"#{i + 1} {p.title[:60]}" for i, p in enumerate(papers)
             )
             system = (
                 "你是文献计量助手。把文献按研究主题分成 3-5 组。"
@@ -305,8 +401,8 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
             user = (
                 f'主题「{topic}」的文献如下(每行:编号 标题)。'
                 f"按研究主题分为 {min_groups}-5 组,组名为 4-10 字中文学术名词短语,"
-                '每篇文献恰属一组。只输出:\n'
-                '{"groups": [{"name": "<组名>", "lit_ids": ["<编号>"]}]}'
+                '每篇文献恰属一组,ids 只写行首编号数字。只输出:\n'
+                '{"groups": [{"name": "<组名>", "ids": [1, 2, 3]}]}'
                 f"\n\n{catalog_min}"
             )
         else:
@@ -330,7 +426,7 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
             user = f"研究主题:{topic}{rework}{output_discipline}"
         try:
             raw = messages_create(
-                system=system, user=user, max_tokens=5000,
+                system=system, user=user, max_tokens=token_budget,
                 temperature=0.3 if attempt == 1 else 0.7,
                 response_format={"type": "json_object"},
             )
@@ -338,6 +434,7 @@ def classify_by_theme(papers: list[Paper], topic: str) -> list[Group]:
         except Exception as exc:
             logger.warning("主题分类 LLM 调用失败: %s", exc)
             return []
+        items = _map_group_items(items, index_of)
         groups, _ = _build_groups(items, valid_ids)
         return groups
 

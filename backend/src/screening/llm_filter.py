@@ -161,9 +161,12 @@ def _normalize_chunk_decisions(
     设计原则:
       - 上游已经按 lit_id 去重,故 batch 内必无重复 paper 实例。
       - LLM 必须为 batch 中每个 lit_id 返回决策,字段类型必须正确。
-      - 缺失 / 未知 lit_id / 字段类型错误 raise ScreeningError,
+      - 缺失 lit_id / 非法 JSON raise ScreeningError,
         由上游 _screen_chunk_with_fallback 拆分重试或终止流程。
       - LLM 同批重复输出同一 lit_id 是常见抖动:保留第一条即可,不终止。
+      - v9.7:LLM 抄错/幻觉出 batch 之外的 lit_id(25 字符十六进制串,
+        抄错一位很常见)同样是模型抖动 —— 丢弃该条并告警,不再终止。
+        真正漏掉的 lit_id 由下方 missing_ids 校验兜底(拆半重试)。
     """
     expected_ids = {p.lit_id for p in batch}
     seen_ids: set[str] = set()
@@ -176,10 +179,10 @@ def _normalize_chunk_decisions(
         if not lit_id:
             raise ScreeningError("筛选结果 lit_id 为空")
         if lit_id not in expected_ids:
-            # batch 已去重,LLM 不应输出 batch 之外的 lit_id
-            raise ScreeningError(
-                f"筛选结果包含未知 lit_id: {lit_id}(不在本批中)"
-            )
+            # batch 已去重,LLM 输出 batch 之外的 lit_id 属于幻觉/抄错:
+            # 丢弃该条决策;若因此漏掉真实 lit_id,missing_ids 分支拆半重试
+            log.warning("筛选结果包含未知 lit_id,已丢弃: %s(不在本批中)", lit_id)
+            continue
         if lit_id in seen_ids:
             # 重复输出属于模型抖动,保留第一条决策,避免整批终止
             log.warning("筛选结果重复 lit_id: %s(保留第一条决策)", lit_id)

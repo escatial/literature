@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import urllib.request
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Generator
@@ -302,6 +303,10 @@ def _retrieve_chinese_papers(topic: str, target_count: int) -> list[Paper]:
         from src.automation.cnki_adapter import run_cnki_full_auto
     from retrieval.query_planner import plan_query_strings
 
+    # v9.7:给本次补充一个专属 pool_task_id,落库与回读都按它隔离。
+    # 此前不传 → 落库 task_id=None、回读捞全库 cnki 行,历史任务/别次
+    # 补充的中文文献会混进本次写作输入(数据跨任务泄漏)。
+    supplement_task_id = f"cnki-supplement-{uuid.uuid4().hex[:12]}"
     try:
         planned = plan_query_strings(topic)
         queue = __import__("asyncio").Queue()
@@ -313,6 +318,7 @@ def _retrieve_chinese_papers(topic: str, target_count: int) -> list[Paper]:
                 target_count=min(target_count, 500),
                 max_pages=10,
                 queue=queue,
+                pool_task_id=supplement_task_id,
             )
         )
     except Exception as exc:
@@ -326,7 +332,7 @@ def _retrieve_chinese_papers(topic: str, target_count: int) -> list[Paper]:
             result.get("error") or result.get("reason") or "saved=0",
         )
         return []
-    return _cnki_papers_from_pool()
+    return _cnki_papers_from_pool(supplement_task_id)
 
 
 def _apply_relevance_quota(
@@ -676,7 +682,7 @@ def _run_post_write_qa(
     try:
         from qa.hooks import run_post_write_qa
         from qa.runner import QARunner
-        from qa.rules import QARuleSet, default_rule_set
+        from qa.rules import QARuleSet, QuotaThresholds, default_rule_set
         from llm.client import (
             get_fallback_order,
             get_provider_health,
@@ -692,10 +698,26 @@ def _run_post_write_qa(
         # 允许通过 env json 覆盖示例:{ "required_pass_rate": 0.95 }
         try:
             overrides = json.loads(rule_overrides)
-            ruleset = QARuleSet(**{**ruleset.to_dict(), **overrides})
+            merged = {**ruleset.to_dict(), **overrides}
+            # to_dict()/asdict 会把嵌套的 quota 转成 plain dict;
+            # 不还原的话 check_literature_quota 访问 thresholds.total_min
+            # 抛 AttributeError → 该项被 runner 记为 SKIPPED(静默失效)
+            if isinstance(merged.get("quota"), dict):
+                merged["quota"] = QuotaThresholds(**merged["quota"])
+            ruleset = QARuleSet(**merged)
         except Exception as exc:  # noqa: BLE001
             log.warning("解析 WRITING_QA_RULESET_OVERRIDES 失败,使用默认: %s", exc)
             ruleset = default_rule_set
+
+    def _soft_on_fail(summary) -> None:  # noqa: ANN001
+        # v9.7:QA FAIL 不再报废整篇综述。此时正文/参考文献已全部生成,
+        # 抛错只会丢掉全部 LLM 成本,且 raise 路径连核查报告都不返回,
+        # 用户只能看到一句笼统的"未通过"。改为:照常返回 payload,
+        # overall/issues 经 qa_done 事件与 complete.qa_report 交付前端,
+        # 由用户决定是否采纳;真正的失败信息一处不丢。
+        log.warning("QA 核查未通过(软门禁,不阻断输出): %s",
+                    ", ".join(r.name for r in summary.results
+                              if r.status == "fail"))
 
     return run_post_write_qa(
         runner=QARunner(ruleset),
@@ -703,7 +725,7 @@ def _run_post_write_qa(
         sections=sections,
         reference_list=reference_list,
         grades=grade_map,
-        on_fail=None,  # 由 orchestrator 顶层转成 SSE/raise
+        on_fail=_soft_on_fail,
     )
 
 
@@ -959,10 +981,9 @@ def generate_review_stream(
                     reference_list=ref,
                     grade_map=grade_map,
                 )
-            except ValueError as exc:
-                qa_failure = str(exc)
             except Exception as exc:  # noqa: BLE001
-                qa_failure = f"核查流程异常: {exc}"
+                # 核查子系统崩溃也不销毁已成文的综述:正文/参考文献均已交付
+                qa_failure = f"核查流程异常(不影响已生成内容): {exc}"
 
             if qa_payload is not None:
                 overall = qa_payload.get("summary", {}).get("overall", "pass")
@@ -984,18 +1005,18 @@ def generate_review_stream(
                     "llm_active_order": list(select_providers(None)),
                     "llm_health": get_provider_health(),
                 })
-            if qa_failure:
-                yield _sse_event("qa_failed", {"message": qa_failure})
-
-        if qa_failure:
-            # 与现有错误协议一致:error 事件终止流
-            yield _sse_event("error", {"message": qa_failure})
-            return
+                if overall == "fail":
+                    # v9.7 软门禁:FAIL 交付报告与正文,不再以 error 终止流。
+                    # 详情见 qa_done.issues 与 complete.qa_report,前端汇总展示。
+                    yield _sse_event("qa_failed", {
+                        "message": "全流程质量核查未通过,报告如下;综述仍已生成,请结合报告人工复核。",
+                    })
 
         yield _sse_event("complete", {
             "screened_out_ids": screened_out,
             "dropped_citations": all_dropped,
             "qa_report": qa_payload,
+            "qa_error": qa_failure,
         })
 
     except ValueError as e:

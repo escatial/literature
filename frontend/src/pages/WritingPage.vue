@@ -123,6 +123,36 @@ const phaseLabel = computed(() => {
 const liveChars = computed(() => stream.value.currentSection?.content.length ?? 0);
 const livePreview = computed(() => stream.value.currentSection?.content ?? '');
 
+// ============ QA 软门禁报告展示(v9.7:FAIL 不再终止流,报告在此汇总) ============
+
+interface QaIssueRow {
+  code: string;
+  severity: string;
+  message: string;
+  path?: string;
+  lit_id?: string | null;
+}
+
+const qaOverallType = computed(() => {
+  const overall = stream.value.qaResult?.overall;
+  if (overall === 'pass') return 'success';
+  if (overall === 'fail') return 'error';
+  return 'warning';
+});
+
+const qaFailedIssues = computed<QaIssueRow[]>(() => {
+  const issues = (stream.value.qaResult?.issues ?? []) as unknown as QaIssueRow[];
+  return issues.filter((i) => i?.severity === 'fail');
+});
+
+const qaWarnIssues = computed<QaIssueRow[]>(() => {
+  const issues = (stream.value.qaResult?.issues ?? []) as unknown as QaIssueRow[];
+  return issues.filter((i) => i?.severity === 'warn');
+});
+
+const qaStatusTagType = (status: string) =>
+  status === 'pass' ? 'success' : status === 'fail' ? 'danger' : status === 'warn' ? 'warning' : 'info';
+
 // ============ 两阶段·阶段1:先划分主题,用户确认后才能写正文 ============
 
 const start = async () => {
@@ -546,6 +576,70 @@ const downloadMd = () => {
       <el-divider />
       <h3 style="margin: 0 0 8px">参考文献</h3>
       <pre style="white-space: pre-wrap; font-family: inherit; line-height: 1.8; color: #303133">{{ stream.referenceList || '(等待生成...)' }}</pre>
+    </el-card>
+
+    <!-- v9.7 软门禁:核查未通过不再报废综述,报告在此醒目展示供人工复核 -->
+    <el-card v-if="stream.qaResult && stream.phase === 'complete'" style="margin-top: 16px">
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center">
+          <span>全流程质量核查报告</span>
+          <span style="font-size: 12px; color: #909399">
+            通过率 {{ Math.round((stream.qaResult.pass_rate ?? 0) * 100) }}%
+          </span>
+        </div>
+      </template>
+      <el-alert
+        :type="qaOverallType"
+        :closable="false"
+        show-icon
+        :title="stream.qaResult.overall === 'pass'
+          ? '四项核查全部通过'
+          : stream.qaResult.overall === 'fail'
+            ? '核查未通过 — 综述仍已生成,请结合下列问题人工复核'
+            : '核查存在警告,建议复核'"
+      />
+      <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px">
+        <el-tag
+          v-for="c in stream.qaResult.checks"
+          :key="c.check_id"
+          :type="qaStatusTagType(c.status)"
+          effect="plain"
+        >
+          {{ c.name }}:{{ c.status === 'pass' ? '通过' : c.status === 'fail' ? `${c.fail_count} 项不通过` : c.status === 'warn' ? `${c.warn_count} 项警告` : '跳过' }}
+        </el-tag>
+      </div>
+      <el-collapse v-if="qaFailedIssues.length || qaWarnIssues.length" style="margin-top: 10px">
+        <el-collapse-item
+          v-if="qaFailedIssues.length"
+          :title="`不通过的问题(${qaFailedIssues.length},点击展开)`"
+        >
+          <div
+            v-for="(issue, i) in qaFailedIssues.slice(0, 30)"
+            :key="i"
+            style="font-size: 13px; color: #f56c6c; line-height: 1.8"
+          >
+            [{{ issue.code }}] {{ issue.message }}{{ issue.path ? `(${issue.path})` : '' }}
+          </div>
+          <div v-if="qaFailedIssues.length > 30" style="font-size: 12px; color: #909399">
+            其余 {{ qaFailedIssues.length - 30 }} 条从略,完整报告见归档记录。
+          </div>
+        </el-collapse-item>
+        <el-collapse-item
+          v-if="qaWarnIssues.length"
+          :title="`警告(${qaWarnIssues.length},点击展开)`"
+        >
+          <div
+            v-for="(issue, i) in qaWarnIssues.slice(0, 30)"
+            :key="i"
+            style="font-size: 13px; color: #e6a23c; line-height: 1.8"
+          >
+            [{{ issue.code }}] {{ issue.message }}{{ issue.path ? `(${issue.path})` : '' }}
+          </div>
+          <div v-if="qaWarnIssues.length > 30" style="font-size: 12px; color: #909399">
+            其余 {{ qaWarnIssues.length - 30 }} 条从略。
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
 
     <el-empty v-else-if="!running" description="尚未生成综述" style="margin-top: 32px" />

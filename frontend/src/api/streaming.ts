@@ -129,7 +129,21 @@ async function consumeWritingSSE(
   });
 
   if (!resp.ok || !resp.body) {
-    throw new Error(`HTTP ${resp.status}`);
+    // v9.7:读出响应体里的错误详情(后端全局异常处理器返回 {"detail": "..."}),
+    // 此前只显示"HTTP 500",真实原因对用户完全不可见
+    let detail = '';
+    try {
+      const text = await resp.text();
+      try {
+        detail = JSON.parse(text)?.detail ?? text;
+      } catch {
+        detail = text;
+      }
+    } catch {
+      /* body 不可读时保持空 */
+    }
+    detail = String(detail).slice(0, 300);
+    throw new Error(`HTTP ${resp.status}${detail ? `：${detail}` : ''}`);
   }
 
   const reader = resp.body.getReader();
@@ -361,6 +375,10 @@ async function consumeWritingSSE(
               issues: evt.data.issues ?? [],
             };
             state.detail = `质量核查完成:${evt.data.overall ?? 'unknown'}`;
+            break;
+          case 'qa_failed':
+            // v9.7 软门禁:FAIL 只告警不终止流,详情在 qaResult(qa_done 已置位)
+            state.detail = evt.data.message ?? '质量核查未通过';
             break;
           case 'complete':
             state.phase = 'complete';

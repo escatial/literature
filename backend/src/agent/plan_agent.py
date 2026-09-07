@@ -37,7 +37,7 @@ SYSTEM_PROMPT = """你是「文献主题划分质检员」。初版分组由另�
 工作方式:
 - 先用 inspect_group 抽查你觉得可疑的分组(最多查 3 组),基于真实文献判断。
 - 然后必须调用 submit_final_groups 提交终版:认可初版就原样提交;不合理就修正(改组名/移动文献/拆分合并)。
-- 约束:只能使用池内 lit_id;修正后文献总量不得低于初版的 90%;组数满足下限(≥30 篇至少 4 组,9~29 篇至少 3 组);每组组名必须像章节标题,不允许「其他/杂项/近年来」这类无信息量名称。
+- 约束:ids 里只填文献编号(初版分组行中给出的整数),严禁抄写 lit_id 原文 —— 大文献池时回显 lit_id 会超出输出上限导致提交被截断;修正后文献总量不得低于初版的 90%;组数满足下限(≥30 篇至少 4 组,9~29 篇至少 3 组);每组组名必须像章节标题,不允许「其他/杂项/近年来」这类无信息量名称。
 """
 
 
@@ -51,12 +51,18 @@ def _validate_submission(
     raw_groups: list[dict],
     papers: list[Paper],
     initial_groups: list[Group],
+    lid_of_idx: dict[str, str] | None = None,
 ) -> tuple[list[Group] | None, str]:
-    """校验 LLM 提交的终版分组。合法返回 (groups, ""),非法返回 (None, 原因)。"""
+    """校验 LLM 提交的终版分组。合法返回 (groups, ""),非法返回 (None, 原因)。
+
+    编号协议:ids 里是文献编号(int/str),经 lid_of_idx 映射回 lit_id;
+    模型偶发仍回显 lit_id 原文时原样接受(旧格式兼容)。
+    """
     if not isinstance(raw_groups, list) or not raw_groups:
         return None, "groups 不能为空"
 
     known = {p.lit_id for p in papers}
+    lid_of_idx = lid_of_idx or {}
     initial_cover = {lid for g in initial_groups for lid in g.lit_ids}
 
     final: list[Group] = []
@@ -65,16 +71,19 @@ def _validate_submission(
         if not isinstance(item, dict):
             return None, "groups 元素必须是对象"
         name = str(item.get("name", "")).strip()
-        lit_ids = item.get("lit_ids", [])
+        raw_ids = item.get("ids") if item.get("ids") is not None else item.get("lit_ids", [])
         if not name:
             return None, "存在空组名"
-        if not isinstance(lit_ids, list):
-            return None, f"分组「{name}」的 lit_ids 必须是数组"
+        if not isinstance(raw_ids, list):
+            return None, f"分组「{name}」的 ids 必须是数组"
         clean_ids: list[str] = []
-        for lid in lit_ids:
-            lid = str(lid)
-            if lid not in known or lid in seen:
-                continue  # 池外/重复 lit_id 静默丢弃
+        for v in raw_ids:
+            lid = lid_of_idx.get(str(v).strip().lstrip("#"))
+            if lid is None:
+                sv = str(v)
+                lid = sv if sv in known else None
+            if lid is None or lid in seen:
+                continue  # 池外/重复编号静默丢弃
             seen.add(lid)
             clean_ids.append(lid)
         if clean_ids:
@@ -150,13 +159,13 @@ TOOLS_SCHEMA = [
                             "type": "object",
                             "properties": {
                                 "name": {"type": "string", "description": "主题组名"},
-                                "lit_ids": {
+                                "ids": {
                                     "type": "array",
-                                    "items": {"type": "string"},
-                                    "description": "该组包含的文献 lit_id 列表",
+                                    "items": {"type": "integer"},
+                                    "description": "该组包含的文献编号列表(初版分组行中的整数,不要抄 lit_id 原文)",
                                 },
                             },
-                            "required": ["name", "lit_ids"],
+                            "required": ["name", "ids"],
                         },
                     },
                     "note": {"type": "string", "description": "一句话说明质检结论或修正思路"},
@@ -182,6 +191,10 @@ def classify_agent_stream(
     final_groups = initial_groups
     try:
         by_name = {g.name: g for g in initial_groups}
+        # 编号协议:初始分组按「文献编号」序列化给模型,提交也只回显编号 ——
+        # 338 篇池子回显 lit_id 需 4000+ token,必然超过工具调用的输出上限
+        idx_of_lid = {p.lit_id: i + 1 for i, p in enumerate(papers)}
+        lid_of_idx = {str(v): k for k, v in idx_of_lid.items()}
         yield ("phase", {"message": f"AI 质检:检查 {len(initial_groups)} 个主题分组的合理性..."})
 
         msgs: list[dict] = [
@@ -190,18 +203,22 @@ def classify_agent_stream(
                 "role": "user",
                 "content": (
                     f"研究主题:{topic}\n文献总量:{len(papers)} 篇\n"
-                    f"初版分组({len(initial_groups)} 组):\n"
+                    f"初版分组({len(initial_groups)} 组,编号=文献编号):\n"
                     + "\n".join(
-                        f"- {g.name}: {len(g.lit_ids)} 篇" for g in initial_groups
+                        f"- {g.name}: {len(g.lit_ids)} 篇 "
+                        + ",".join(str(idx_of_lid[lid]) for lid in g.lit_ids if lid in idx_of_lid)
+                        for g in initial_groups
                     )
                 ),
             },
         ]
 
+        # 工具调用输出预算:提交终版要回显全部编号(数字,~4 token/篇),按池子规模缩放
+        token_budget = min(32000, max(2500, 1500 + 6 * len(papers)))
         for round_no in range(1, MAX_AGENT_ROUNDS + 1):
             meta["rounds"] = round_no
             msg = messages_create_with_tools(
-                msgs, TOOLS_SCHEMA, max_tokens=2500, temperature=0.2,
+                msgs, TOOLS_SCHEMA, max_tokens=token_budget, temperature=0.2,
             )
             tool_calls = getattr(msg, "tool_calls", None) or []
             if not tool_calls:
@@ -255,6 +272,7 @@ def classify_agent_stream(
                 elif name == "submit_final_groups":
                     groups, reason = _validate_submission(
                         args.get("groups", []), papers, initial_groups,
+                        lid_of_idx=lid_of_idx,
                     )
                     if groups is None:
                         result = {"error": reason, "hint": "请修正后重新调用 submit_final_groups"}
