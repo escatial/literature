@@ -114,15 +114,40 @@ class StateMachine:
         return all(s in passed for s in prev_stages)
 
     def record(self, *, stage: str, status: str, detail: dict | None = None) -> TaskStageModel:
-        """落库一条 task_stage(允许幂等覆盖同一阶段最近一次状态)。"""
+        """落库一条 task_stage(允许幂等覆盖同一阶段最近一次状态)。
+
+        v9.6:实现真正的幂等——同一 (task_id, stage) 存在未终态(status 不在
+        pass/fail/skipped)的行时就地覆盖;否则插入新行保留历史。此前只插不
+        覆盖,崩溃重跑后 current_stage 查询会停留在旧阶段。
+        """
+        now = datetime.now(timezone.utc)
+        exited = now if status in ("pass", "fail", "skipped") else None
         with SessionLocal() as db:
+            row = (
+                db.query(TaskStageModel)
+                .filter(
+                    TaskStageModel.task_id == self.task_id,
+                    TaskStageModel.stage == stage,
+                    TaskStageModel.status.notin_(("pass", "fail", "skipped")),
+                )
+                .order_by(TaskStageModel.entered_at.desc())
+                .first()
+            )
+            if row is not None:
+                row.status = status
+                row.detail = detail
+                row.entered_at = now
+                row.exited_at = exited
+                db.commit()
+                db.refresh(row)
+                return row
             row = TaskStageModel(
                 task_id=self.task_id,
                 stage=stage,
                 status=status,
                 detail=detail,
-                entered_at=datetime.now(timezone.utc),
-                exited_at=datetime.now(timezone.utc) if status in ("pass", "fail", "skipped") else None,
+                entered_at=now,
+                exited_at=exited,
             )
             db.add(row)
             db.commit()

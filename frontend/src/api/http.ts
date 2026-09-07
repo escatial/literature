@@ -50,12 +50,15 @@ http.interceptors.response.use(
       toast.error(
         `无法连接后端 (${getBackendHint(backendOrigin)})。请确认已执行: cd backend && python -m uvicorn main:app --reload`,
       );
-      return Promise.reject(new Error('ERR_NETWORK'));
+      return Promise.reject(err);
     }
     const detail = err.response?.data?.detail ?? err.message ?? '网络错误';
     if (status >= 500) {
       toast.error(`服务器错误: ${detail}`);
     }
-    return Promise.reject(new Error(detail));
+    // v9.6:不再把 AxiosError 换成普通 Error——原对象保留 status/response,
+    // 调用方可区分 404(任务不存在)与瞬时抖动;detail 写回 message 保住既有文案
+    err.message = detail;
+    return Promise.reject(err);
   },
 );

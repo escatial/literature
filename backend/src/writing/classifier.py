@@ -106,9 +106,15 @@ def _groups_acceptable(groups: list[Group]) -> bool:
 
 
 def classify_by_locale(papers: list[Paper]) -> list[Group]:
-    """国内外分类:中文导入(USER_IMPORTED)为国内,其余为国外。"""
-    domestic = [p.lit_id for p in papers if p.source == Source.USER_IMPORTED]
-    foreign = [p.lit_id for p in papers if p.source != Source.USER_IMPORTED]
+    """国内外分类:中文源(CNKI / 中文手动导入)为国内,其余为国外。
+
+    v9.6:此前只有 USER_IMPORTED 算国内,CNKI 中文文献全部落入「国外研究」
+    章节——与 orchestrator/qa 模块「CNKI 算中文源」的事实标准(_CHINESE_SOURCES)
+    直接矛盾。
+    """
+    chinese = {Source.CNKI, Source.USER_IMPORTED}
+    domestic = [p.lit_id for p in papers if p.source in chinese]
+    foreign = [p.lit_id for p in papers if p.source not in chinese]
     groups: list[Group] = []
     if domestic:
         groups.append(Group(name=LOCALE_GROUP_DOMESTIC, lit_ids=domestic))

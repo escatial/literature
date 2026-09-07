@@ -1,3 +1,10 @@
+<script lang="ts">
+// v9.6:SSE 订阅注册表必须放模块级——放 <script setup> 会随组件实例重建,
+// 「启动检索 → 切走再切回」后 Map 清空导致同一 task_id 重复订阅;后端每任务
+// 单队列,消息随机分流给两个 EventSource,收不到 done 的连接被服务端关闭后
+// 触发 onerror,任务被误标失败
+const sseSources = new Map<string, EventSource>();
+</script>
 <script setup lang="ts">
 /** v4.0 统一检索页
  *
@@ -47,6 +54,8 @@ let autoRetryTimer: number | null = null;
 // 英文任务进度
 const englishTask = ref<RetrievalTask | null>(null);
 let pollTimer: number | null = null;
+// v9.6:轮询连续失败计数(单次失败不清任务引用,见 refreshProgress)
+let pollFailStreak = 0;
 
 // 需求4:历史检索(最多 5 条)
 const history = ref<RetrievalHistory[]>([]);
@@ -114,8 +123,7 @@ const cnkiTasks = computed((): typeof ustore.cnkiTasks => {
   const task = ustore.cnkiTasks.cnki;
   return task ? { cnki: task } : {};
 });
-// 用于解除 SSE 订阅时 keep EventSource 引用
-const sseSources = new Map<string, EventSource>();
+// (sseSources 已移到模块级 <script> 块,见文件头——组件重建后去重仍生效)
 
 const ustore = useUnifiedRetrievalStore();
 const papersStore = usePapersStore();
@@ -301,7 +309,10 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
       // 真有事件进来(plan/search/fetched/done/error…)时,把 stage
       // 推回 active(避免前一轮 onerror 把 task 标 error 后,新一轮
       // SSE 起来时仍一直显示「失败」)。
-      const merged = { ...initial, ...msg };
+      // v9.6:merge 基于 store 当前值而非订阅时刻的 initial 快照——
+      // 后端不带 saved 的事件(尤其 error)此前会把已入库计数清零显示
+      const cur = ustore.cnkiTasks[db];
+      const merged = { ...(cur || initial), ...msg };
       if (msg.stage === 'search_done' && msg.ok === false) {
         // 产品级:0 篇入库必须标为失败,否则任务停在 active →
         // 进度条显示「0 篇 已完成」误导用户;文案不暴露内部机制
@@ -324,12 +335,25 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
       /* noop */
     }
   });
+  // v9.6:onerror 不再无条件标失败——
+  // 1) readyState=CONNECTING 表示浏览器正在自动重连(如代理 idle 断流),
+  //    判死会让仍在跑的任务被误标;只有 CLOSED 才判失败;
+  // 2) 任务已到终态(done/error)时不覆盖。
   es.onerror = () => {
+    const prev = ustore.cnkiTasks[db];
+    if (prev && (prev.stage === 'done' || prev.stage === 'error')) {
+      es.close();
+      sseSources.delete(initial.task_id);
+      return;
+    }
+    if (es.readyState === EventSource.CONNECTING) {
+      return; // 等浏览器自动重连,不断流不判死
+    }
     runFailed.value = true;
     runFailureMessage.value = '中国知网检索连接中断，本次三库任务失败，请重新开始';
     ustore.appendCnkiLog(db, `[错误] ${runFailureMessage.value}`);
     ustore.upsertCnkiTask(db, {
-      ...initial,
+      ...(prev || initial),
       stage: 'error',
       msg: runFailureMessage.value,
     });
@@ -451,13 +475,20 @@ const refreshProgress = async () => {
   if (englishTask.value?.task_id) {
     try {
       const t = await getRetrievalTask(englishTask.value.task_id);
+      pollFailStreak = 0;
       englishTask.value = t;
       // v4.1:把后端事件同步到 store,按 db 拆分 OpenAlex / PubMed 过程日志
       if (t.events && t.events.length) {
         ustore.ingestEnEvents(t.task_id, t.events);
       }
     } catch {
-      englishTask.value = null;
+      // v9.6:单次轮询失败不清任务引用——置 null 后本函数再也不发请求,
+      // 但下方停止条件永远不满足(僵尸轮询 2s 空转),停止按钮也随引用丢失失效。
+      // 改记连续失败次数,连续 5 次(约 10s)才在控制台告警;引用保留可继续停止。
+      pollFailStreak += 1;
+      if (pollFailStreak === 5) {
+        console.warn('[检索] 任务状态轮询连续失败,网络可能不稳定,仍在重试…');
+      }
     }
   }
   // 知网 SSE 自然结束,无需轮询
@@ -721,7 +752,11 @@ onMounted(async () => {
       }
       startProgressPolling();
     } catch {
-      englishTask.value = null;
+      // v9.6:恢复失败不放弃——占住 task_id 让轮询接手自动重试
+      // (englishTask 仅缺 status/events,refreshProgress 首次成功即整包覆盖)
+      console.warn('[检索] 恢复英文任务状态失败,交由轮询自动重试');
+      englishTask.value = { task_id: ustore.englishTaskId } as RetrievalTask;
+      startProgressPolling();
     }
   }
   // 恢复未完结的知网任务 SSE(切 tab 后回来)

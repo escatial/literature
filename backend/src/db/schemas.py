@@ -138,6 +138,8 @@ class RetrievalHistoryOut(BaseModel):
     failed_sources: dict[str, int] = Field(default_factory=dict)
     papers_snapshot: list[dict] = Field(default_factory=list)
     task_id: str | None = None
+    # v9.6:补透出 run_id——聚合检索历史的标识,前端据此合并/关联同一次检索
+    run_id: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

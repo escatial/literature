@@ -192,21 +192,29 @@ class OpenAlexSource:
         boolean = (getattr(intent, "boolean_template", "") or "").strip() or ""
         return self._build_query_from_string(boolean)
 
-    def build_sub_query(self, query_string: str) -> dict:
+    # v9.6:year_start/year_end 贯通——任务级年份窗口此前被静默替换为「近 5 年」
+    def build_sub_query(self, query_string: str, year_start: int | None = None,
+                        year_end: int | None = None) -> dict:
         """把 LLM 直接输出的检索式字符串透传给 OpenAlex。
 
         query_string: LLM 直接输出的完整 OpenAlex 检索式,如
           ("Understanding by Design" OR UbD) AND "math teaching"
+        year_start/year_end: 任务级发表年份窗口;单边缺省时
+          另一边回退默认(end=当前年,start=当年-DEFAULT_YEAR_BACK)。
         """
-        return self._build_query_from_string(query_string)
+        return self._build_query_from_string(boolean=query_string,
+                                             year_start=year_start, year_end=year_end)
 
-    def _build_query_from_string(self, boolean: str) -> dict:
+    def _build_query_from_string(self, boolean: str, year_start: int | None = None,
+                                 year_end: int | None = None) -> dict:
         """把布尔主体 + 默认 filter 组装成 OpenAlex 请求参数。"""
         import datetime as _dt
 
         year = _dt.datetime.now().year
+        ys = int(year_start) if year_start else year - DEFAULT_YEAR_BACK
+        ye = int(year_end) if year_end else year
         filter_parts = [
-            f"publication_year:{year - DEFAULT_YEAR_BACK}-{year}",
+            f"publication_year:{ys}-{ye}",
             f"type:{'|'.join(DEFAULT_TYPES)}",
             f"language:{'|'.join(DEFAULT_LANGUAGE)}",
         ]

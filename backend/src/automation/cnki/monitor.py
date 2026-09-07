@@ -106,6 +106,9 @@ class TaskRegistry:
 
         内存修复(P-2):_order 是 maxlen 有界 deque,满员自动挤出最老 id;
         _tasks 必须同步删除被挤出的条目,否则 dict 无界增长(内存泄漏)。
+        v9.6:满员时优先逐出最老的「已完成」任务——此前无条件逐出队首,
+        运行中任务被挤出后进度/终态全部静默丢失;若全员仍未完成,退化逐出
+        队首最老,保证 dict/deque 守恒(P-2 契约)、注册表绝不无界膨胀。
         """
         with self._lock:
             state = TaskState(task_id=task_id, query=query, params=dict(params or {}))
@@ -113,7 +116,14 @@ class TaskRegistry:
             if task_id not in self._order:
                 evicted: str | None = None
                 if len(self._order) == self._order.maxlen:
-                    evicted = self._order[0]
+                    for old_id in self._order:
+                        old = self._tasks.get(old_id)
+                        if old is None or old.status not in ("queued", "running"):
+                            evicted = old_id
+                            break
+                    if evicted is None:
+                        # 全员 queued/running:退化逐出队首最老,守恒优先
+                        evicted = self._order[0]
                 self._order.append(task_id)
                 if evicted is not None and evicted != task_id:
                     self._tasks.pop(evicted, None)

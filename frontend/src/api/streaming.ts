@@ -10,6 +10,7 @@ export type StreamPhase =
   | 'await_confirm'
   | 'writing'
   | 'reference'
+  | 'qa'
   | 'complete'
   | 'error';
 
@@ -75,27 +76,43 @@ export interface StreamState {
   elapsedSeconds: number;
   waitingSeconds: number;
   currentSection: { key: string; title: string; content: string } | null;
+  /** QA 阶段进度(qa_started 置位,前端可展示「核查中」状态) */
+  qaProgress: { checks: string[] } | null;
+  /** QA 核查结果(qa_done 置位) */
+  qaResult: {
+    overall: string;
+    pass_rate: number;
+    checks: { check_id: string; name: string; status: string; fail_count: number; warn_count: number }[];
+    issues: unknown[];
+  } | null;
   detail: string | null;
   error: string | null;
 }
 
-const initialState: StreamState = {
-  phase: 'idle',
-  relevanceReport: null,
-  plan: null,
-  sections: [],
-  groups: [],
-  referenceList: '',
-  screenedOutIds: [],
-  droppedCitations: [],
-  progress: null,
-  screeningProgress: null,
-  elapsedSeconds: 0,
-  waitingSeconds: 0,
-  currentSection: null,
-  detail: null,
-  error: null,
-};
+// v9.6:改为工厂函数——此前模块级单例 + {...initialState} 浅拷贝,sections/
+// droppedCitations 等数组仍是共享引用,section_done 就地 push 会污染单例,
+// 第二次写作串入上一次章节、droppedCitations 跨会话累积并随 saveReview 持久化
+function createInitialState(): StreamState {
+  return {
+    phase: 'idle',
+    relevanceReport: null,
+    plan: null,
+    sections: [],
+    groups: [],
+    referenceList: '',
+    screenedOutIds: [],
+    droppedCitations: [],
+    progress: null,
+    screeningProgress: null,
+    elapsedSeconds: 0,
+    waitingSeconds: 0,
+    currentSection: null,
+    qaProgress: null,
+    qaResult: null,
+    detail: null,
+    error: null,
+  };
+}
 
 /** 公共 SSE 消费循环:两个阶段共用同一套事件处理与心跳计时 */
 async function consumeWritingSSE(
@@ -118,7 +135,7 @@ async function consumeWritingSSE(
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let state: StreamState = { ...initialState };
+  let state: StreamState = createInitialState();
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
   const ticker = window.setInterval(() => {
@@ -330,6 +347,21 @@ async function consumeWritingSSE(
             state.referenceList = evt.data.reference_list ?? '';
             state.detail = '参考文献列表已生成，正在收尾...';
             break;
+          case 'qa_started':
+            // v9.6:此前无此分支,QA 阶段(可能持续数十秒)前端毫无进度反馈
+            state.phase = 'qa';
+            state.qaProgress = { checks: evt.data.checks ?? [] };
+            state.detail = `正在执行全流程质量核查(${(evt.data.checks ?? []).length} 项)...`;
+            break;
+          case 'qa_done':
+            state.qaResult = {
+              overall: evt.data.overall ?? 'unknown',
+              pass_rate: evt.data.pass_rate ?? 0,
+              checks: evt.data.checks ?? [],
+              issues: evt.data.issues ?? [],
+            };
+            state.detail = `质量核查完成:${evt.data.overall ?? 'unknown'}`;
+            break;
           case 'complete':
             state.phase = 'complete';
             state.detail = '综述生成完成。';
@@ -354,7 +386,7 @@ export async function planWritingStream(
   onUpdate: (s: StreamState) => void,
   signal?: AbortSignal,
 ): Promise<StreamState> {
-  onUpdate(initialState);
+  onUpdate(createInitialState());
 
   const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefined;
   const state = await consumeWritingSSE(getWritingPlanStreamURL(backendOrigin), req, onUpdate, signal);
@@ -374,7 +406,7 @@ export async function generateWritingStream(
   onUpdate: (s: StreamState) => void,
   signal?: AbortSignal,
 ): Promise<WritingResponse> {
-  onUpdate(initialState);
+  onUpdate(createInitialState());
 
   const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefined;
   const state = await consumeWritingSSE(getWritingStreamURL(backendOrigin), req, onUpdate, signal);

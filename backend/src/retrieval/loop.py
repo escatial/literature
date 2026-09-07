@@ -81,13 +81,17 @@ class RetrievalController:
                  on_progress: "callable | None" = None,
                  stop_event: "threading.Event | None" = None,
                  pool: PaperPool | None = None,
-                 queries_per_source: dict[str, list[str]] | None = None):
+                 queries_per_source: dict[str, list[str]] | None = None,
+                 year_start: int | None = None,
+                 year_end: int | None = None):
         """构造检索控制器。
 
         两种 queries 传法(互斥):
         - queries (list[str]): 所有源共用一套检索式;
         - queries_per_source (dict[str, list[str]]): 按源 name 分发,
           例 {"openalex": [...], "pubmed": [...]}; 源名不在 dict 里则用 [].
+        year_start/year_end: 任务级发表年份窗口,透传给支持该参数的源
+          (openalex/pubmed); 缺省时各源用自己的默认窗口。
         """
         if queries is None and queries_per_source is None:
             raise ValueError("必须传 queries 或 queries_per_source")
@@ -101,6 +105,9 @@ class RetrievalController:
         self.pool = pool or PaperPool()
         self.on_progress = on_progress or (lambda e: None)
         self.stop_event = stop_event
+        # v9.6:任务级年份窗口(#9 此前 API 收了但查询构造被硬编码「近 5 年」)
+        self.year_start = year_start
+        self.year_end = year_end
 
     def _raise_if_stopped(self) -> None:
         if self.stop_event is not None and self.stop_event.is_set():
@@ -200,7 +207,10 @@ class RetrievalController:
         if len(self.pool) >= self.loop_cfg["max_results_per_source"]:
             return
         try:
-            query = src.build_sub_query(query_string)
+            # v9.6:透传任务级年份窗口(#9);不支持该参数的源按鸭子类型忽略
+            query = src.build_sub_query(query_string,
+                                        year_start=self.year_start,
+                                        year_end=self.year_end)
         except Exception as e:
             self._emit("fetching_source", source=src.name,
                        message=f"第 {qi + 1}/{len(queries_for_src)} 条检索式构建失败,已跳过: {e}")

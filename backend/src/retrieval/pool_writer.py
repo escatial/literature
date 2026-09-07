@@ -94,6 +94,9 @@ def upsert_with_overwrite(
     failed = 0
     # 按源统计写入失败数(校验不通过/落库异常),供上层异常源展示
     failed_by_source: dict[str, int] = defaultdict(int)
+    # v9.6:按丢弃原因分类计数——此前只有逐条 warning,任务报告数与实际入库数
+    # 不一致时(如无摘要文献被 validate_paper_identity 拒收)用户无从知道差在哪
+    failed_reasons: dict[str, int] = defaultdict(int)
 
     with _db_session.SessionLocal() as db:
         # 1) 清空同源历史(按任务隔离:只清当前 task 的同源数据)
@@ -117,6 +120,10 @@ def upsert_with_overwrite(
             seen.add(p.lit_id)
             unique.append(p)
 
+        # v9.6:autoflush=False 下 db.query 查不到本批 pending insert,
+        # 同批重复 identity_key 会误走插入分支,靠唯一索引兜底失败即整批
+        # 回滚(当次检索全丢)。改用本批内存索引先行判重。
+        batch_identity: dict[str, PaperModel] = {}
         for p in unique:
             # source 值在 try 外解析,保证 except 分支也能按源计数
             src_value = str(p.source.value if hasattr(p.source, "value") else p.source)
@@ -134,35 +141,44 @@ def upsert_with_overwrite(
                 )
                 # v8.1:查重限定在「当前任务」内 —— 同一文献可在不同任务各存一行,
                 # 不再把其他任务的行改挂到本任务(那是导致跨任务搬家的根因)。
-                dedup_q = db.query(PaperModel).filter(
-                    PaperModel.identity_key == meta["identity_key"]
-                )
-                if pool_task_id:
-                    dedup_q = dedup_q.filter(PaperModel.task_id == pool_task_id)
-                else:
-                    dedup_q = dedup_q.filter(PaperModel.task_id.is_(None))
-                existing = dedup_q.first()
-                if existing:
+                # v9.6:先查本批内存索引,miss 再查库(避免 autoflush 盲区)
+                existing = batch_identity.get(meta["identity_key"])
+                if existing is None:
+                    dedup_q = db.query(PaperModel).filter(
+                        PaperModel.identity_key == meta["identity_key"]
+                    )
+                    if pool_task_id:
+                        dedup_q = dedup_q.filter(PaperModel.task_id == pool_task_id)
+                    else:
+                        dedup_q = dedup_q.filter(PaperModel.task_id.is_(None))
+                    existing = dedup_q.first()
+                if existing is not None:
                     for k, v in meta.items():
                         setattr(existing, k, v)
+                    batch_identity[meta["identity_key"]] = existing
                     updated += 1
                 else:
-                    db.add(PaperModel(
+                    new_row = PaperModel(
                         lit_id=p.lit_id, selected=True, task_id=pool_task_id, **meta,
-                    ))
+                    )
+                    db.add(new_row)
+                    batch_identity[meta["identity_key"]] = new_row
                     inserted += 1
             except Exception as exc:
                 log.warning("写入文献失败 lit_id=%s: %s", p.lit_id, exc)
                 failed += 1
                 failed_by_source[src_value] += 1
+                reason = str(exc).split("，")[0].split(",")[0][:40]
+                failed_reasons[reason] += 1
         db.commit()
 
     log.info(
-        "upsert_with_overwrite sources=%s cleared=%d inserted=%d updated=%d failed=%d",
-        targets, cleared, inserted, updated, failed,
+        "upsert_with_overwrite sources=%s cleared=%d inserted=%d updated=%d failed=%d reasons=%s",
+        targets, cleared, inserted, updated, failed, dict(failed_reasons),
     )
     return {"cleared": cleared, "inserted": inserted, "updated": updated,
-            "failed": failed, "failed_by_source": dict(failed_by_source)}
+            "failed": failed, "failed_by_source": dict(failed_by_source),
+            "failed_reasons": dict(failed_reasons)}
 
 
 def split_by_source(papers: list[Paper]) -> dict[str, list[Paper]]:

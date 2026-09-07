@@ -85,31 +85,17 @@ _FALLBACK_TRIGGERS = (
 def _normalize_env_once() -> None:
     """进程启动时执行一次 .env 兜底。
 
-    背景:uvicorn --reload 时,reload 子进程继承主进程的 os.environ,不会再重新
-    load_dotenv。如果 .env 写了 LLM_FALLBACK_ORDER=deepseek,gpt,minimax 之类
-    的"非 minimax 优先"顺序,reload 后旧 env 还在 → 前端 tooltip 看到的轮换
-    顺序仍然是旧的。
-
-    兜底策略:
-      1. 强制 LLM_PROVIDER=minimax(忽略 env 残留,锁定默认)
-      2. 强制清空 LLM_FALLBACK_ORDER(走 DEFAULT_FALLBACK_ORDER = ("minimax",))
-      3. 若用户主动要启用降级,在 main.py 之外显式设 env 即可;
-         这里只是兜底,正常用户不应被这一行影响。
+    v9.6:仅在 LLM_PROVIDER 未设置时补默认 minimax;不再改写用户显式配置。
+    此前会强制 LLM_PROVIDER=minimax 并清空 LLM_FALLBACK_ORDER,导致 .env 里
+    配置的多 provider 降级永远失效(与 get_fallback_order 的 docstring 矛盾)。
     """
     provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
-    fb = os.environ.get("LLM_FALLBACK_ORDER", "").strip()
-    if provider != "minimax":
-        log.warning(
-            "LLM_PROVIDER=%r 被强制改为 minimax(避免其他 provider 抢占默认)",
-            provider,
-        )
+    if not provider:
+        # v9.6:仅在未设置时补默认值;此前无条件强制改写 LLM_PROVIDER 并清空
+        # LLM_FALLBACK_ORDER,.env 里配置的多 provider 降级永远失效(死功能,
+        # 与 get_fallback_order 的 docstring 直接矛盾)
+        log.info("LLM_PROVIDER 未设置,使用默认 minimax")
         os.environ["LLM_PROVIDER"] = "minimax"
-    if fb:
-        log.warning(
-            "LLM_FALLBACK_ORDER=%r 被强制清空(默认仅 minimax;需降级时改成 minimax,deepseek)",
-            fb,
-        )
-        os.environ["LLM_FALLBACK_ORDER"] = ""
 
 
 _normalize_env_once()
@@ -407,6 +393,10 @@ def messages_stream(
             return
         except Exception as exc:  # noqa: BLE001
             last_err = exc
+            # v9.6:本 provider 已产出文本后流中断,切换 provider 会从头重流,
+            # 消费方拼出「前半段+全文」重复正文——直接抛出按失败处理
+            if yielded_any:
+                raise
             if _is_retryable_error(exc):
                 log.warning("LLM provider %s 流式失败,准备切换下一级: %s", pid, exc)
                 fallback_used.append(pid)
@@ -505,7 +495,11 @@ def _stream_with_resolved(
         if not emitted_any and reasoning_buffer.strip():
             # 兜底:等价于 _strip_think 的「剥完为空 → 正文必在 think 内」
             yield re.sub(r"</?think>", "", reasoning_buffer).strip()
-        _record_provider_status(resolved.id, success=emitted_any or True, error=None)
+        # v9.6:success 此前为 emitted_any or True 恒真,provider 健康面板永远显示
+        # 成功——改为「有正文输出或 reasoning 兜底产出」才算成功
+        _record_provider_status(
+            resolved.id, success=emitted_any or bool(reasoning_buffer.strip()), error=None
+        )
     except Exception as exc:
         # 流式尚未产出 token 即失败,把错误写入健康态并向上抛
         if not emitted_any:

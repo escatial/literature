@@ -593,19 +593,23 @@ def _inject_citations_by_author_year(content, papers):
             if lit_id not in cited_ids:
                 cited_ids.append(lit_id)
 
-    for position in sorted(insertions, reverse=True):
-        anchors = "".join(f"[{lit_id}]" for lit_id in insertions[position])
-        content = content[:position] + anchors + content[position:]
-
-    # 剥离未命中夹注的"（年份）"部分,保留作者名(如"张欣欣(2016)" -> "张欣欣"),
-    # 避免正文残留无法追溯到参考文献的伪引用。从后往前替换,避免位置偏移。
+    # v9.6:插入与剥离统一基于「原始 content」的偏移,从后往前一次性应用。
+    # 此前先插入锚点再按原偏移剥离,插入使文本右移后 content[start:end]
+    # 切的是错误区段——正文被随机截断,下游整句删除也基于错误文本。
+    edits: list[tuple[int, int, str]] = []  # (start, end, replacement)
+    for position, lit_ids in insertions.items():
+        anchors = "".join(f"[{lit_id}]" for lit_id in lit_ids)
+        edits.append((position, position, anchors))
     dropped_unmatched: list[str] = []
     for start, end in reversed(unmatched_spans):
         segment = content[start:end]
         dropped_unmatched.append(segment)
+        # 剥离未命中夹注的"（年份）"部分,保留作者名(如"张欣欣(2016)" -> "张欣欣"),
+        # 避免正文残留无法追溯到参考文献的伪引用
         stripped = _re_inject.sub(r"[\uff08(]\s*\d{4}\s*[\uff09)]", "", segment).strip()
-        if stripped:
-            content = content[:start] + stripped + content[end:]
+        edits.append((start, end, stripped))
+    for start, end, replacement in sorted(edits, key=lambda e: (e[0], e[1]), reverse=True):
+        content = content[:start] + replacement + content[end:]
     return content, cited_ids, dropped_unmatched
 
 

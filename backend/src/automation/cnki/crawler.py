@@ -241,6 +241,34 @@ def get_env_override(cfg: dict) -> dict:
                 except ValueError:
                     print(f"[警告] {env_name}={val!r} 无法转为浮点数，已忽略")
                     merged[section][key] = default_val
+            elif isinstance(default_val, (list, tuple)):
+                # v9.6:列表按 JSON 或逗号分隔解析——此前整串塞入,
+                # CNKI_PROXY_POOL="http://a,http://b" 会按字符逐个入池
+                try:
+                    parsed = json.loads(val)
+                    ok = isinstance(parsed, list)
+                except ValueError:
+                    ok = False
+                if ok:
+                    merged[section][key] = [str(x) for x in parsed]
+                else:
+                    items = [x.strip() for x in val.split(",") if x.strip()]
+                    if items:
+                        merged[section][key] = items
+                    else:
+                        print(f"[警告] {env_name}={val!r} 无法解析为列表,已忽略")
+                        merged[section][key] = default_val
+            elif isinstance(default_val, dict):
+                # v9.6:字典按 JSON 解析——此前整串塞入(如 CNKI_HTTP_FINGERPRINT)
+                # 会让 crawler.init() 在导入期拿到字符串而崩溃
+                try:
+                    parsed = json.loads(val)
+                    if not isinstance(parsed, dict):
+                        raise ValueError("not a JSON object")
+                    merged[section][key] = parsed
+                except ValueError as e:
+                    print(f"[警告] {env_name}={val!r} 无法解析为 JSON 对象({e}),已忽略")
+                    merged[section][key] = default_val
     return merged
 
 
@@ -677,6 +705,9 @@ def safe_request(method: str, url: str, *, headers: dict | None = None,
     def _on_retry(error_class: ErrorClass, attempt: int, exc: BaseException, wait: float):
         # 每次重试：任务记账 + 负载记账 + 换代理出口（failover 语义）+ 过程日志
         _task_incr("retries")
+        # v9.6:把重试次数同步到 _do.attempt——此前 _bump_attempt 定义了却从未
+        # 传入 resilient_call,attempt 恒 0,failover 模式下重试永远直连不切代理
+        _do.attempt = attempt
         pool = _scheduler.get_pool()
         if pool is not None:
             pool.record_failure()
@@ -705,10 +736,7 @@ def safe_request(method: str, url: str, *, headers: dict | None = None,
             resp.raise_for_status()
         return resp
 
-    _do.attempt = 0
-
-    def _bump_attempt(_cls, attempt, _exc, _wait):
-        _do.attempt = attempt  # 重试时换代理出口（failover 语义）
+    _do.attempt = 0  # 首试直连(failover 语义),重试时由 _on_retry 递增换代理
 
     try:
         resp = resilient_call(
@@ -971,7 +999,8 @@ def solve_vericode(html: str) -> str:
     从页面中提取验证码图片 → 超级鹰 1005 识别 → 返回识别文本。
     """
     # 1) 优先取 <img> 的 src（相对/绝对路径），其次 base64 data URI
-    tree = etree.HTML(html)
+    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底走下方 regex 提取
+    tree = etree.HTML(html) or etree.Element("html")
     img_src = ""
     for node in tree.xpath('//form[contains(@id,"veri") or contains(@id,"Veri")]//img/@src'):
         img_src = node
@@ -1211,7 +1240,8 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
 
 
 def parse_list(html: str):
-    tree = etree.HTML(html)
+    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底返回 0 条
+    tree = etree.HTML(html) or etree.Element("html")
     items = []
     for tr in tree.xpath('//tr[td[@class="name"]]'):
         # 1) 标题链接(原来就有的)
@@ -1415,7 +1445,15 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             html = search_grid(query_json, page_num=page, page_size=cur_size,
                                captcha_verification=captcha_verification,
                                bool_search=bool_search)
-            # 重拉后落回下方正常分支流程(若仍结构错误,由上方 struct_fix_attempted 分支终止)
+            # v9.6:重拉后立即复查——结构错误空壳含「请稍后重试」文案,若放行会被
+            # 下方限流分支误判:白等 ~3 分钟退避后误抛 CnkiServerBusyError,烧掉
+            # 补漏冷却。刷新后仍被拒 = 令牌机制疑似改版,直接上抛改版错。
+            if "查询对象结构错误" in html:
+                _dump_debug_list_html(html, page)
+                raise CnkiRevisionError(
+                    "知网报'查询对象结构错误'：turnpage 令牌刷新后仍被拒绝（接口结构疑似改版）——请反馈开发者更新"
+                )
+            # 重拉成功:落回下方正常分支流程
         if "起始游标越界" in html:
             # v8.6:空壳 value 属性回显 "start:21,size:20,total:1" —— 请求的起始游标
             # 超过结果总数,即已翻过末页。这是确定性信号而非服务端异常:
@@ -1859,7 +1897,8 @@ def fetch_abstract(detail_url: str) -> dict:
 
 
 def _parse_detail(text: str, detail_url: str) -> dict:
-    tree = etree.HTML(text)
+    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底走字段全空路径
+    tree = etree.HTML(text) or etree.Element("html")
 
     def clean(s):
         return s.replace("\n", " ").replace("\r", " ").strip() if s else ""

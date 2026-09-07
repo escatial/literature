@@ -144,35 +144,17 @@ def _add_footnote_definition(doc: Document, fn_id: int, text: str) -> None:
     fn_part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
-def _replace_anchors_with_footnote_refs(paragraph, fn_index: int) -> None:
-    """把段落中的首个 [N] / [lit_xxx] / [hash:xxx] 替换为脚注上标引用。
+def _append_text_run(paragraph, text: str) -> None:
+    r = OxmlElement("w:r")
+    t = OxmlElement("w:t")
+    t.text = text
+    t.set(qn("xml:space"), "preserve")
+    r.append(t)
+    paragraph._p.append(r)
 
-    python-docx 的 paragraph.runs 不暴露 XML 操作,
-    这里直接对 paragraph._p 做字符串级处理后重建 runs。
-    """
-    from lxml import etree
 
-    raw = paragraph.text or ""
-    m = _CITE_RE.search(raw)
-    if not m:
-        return
-
-    before, after = raw[: m.start()], raw[m.end():]
-    # 清空现有 runs
-    for r in list(paragraph._p):
-        if r.tag == qn("w:r"):
-            paragraph._p.remove(r)
-
-    # before text
-    if before:
-        r0 = OxmlElement("w:r")
-        t0 = OxmlElement("w:t")
-        t0.text = before
-        t0.set(qn("xml:space"), "preserve")
-        r0.append(t0)
-        paragraph._p.append(r0)
-
-    # 上标 + footnoteReference
+def _append_footnote_ref_run(paragraph, fn_index: int) -> None:
+    """上标 + footnoteReference(w:id 对应脚注定义的 fn_id)。"""
     r1 = OxmlElement("w:r")
     rPr = OxmlElement("w:rPr")
     rStyle = OxmlElement("w:rStyle")
@@ -184,14 +166,42 @@ def _replace_anchors_with_footnote_refs(paragraph, fn_index: int) -> None:
     r1.append(fn_ref)
     paragraph._p.append(r1)
 
-    # after text(如有)
-    if after:
-        r2 = OxmlElement("w:r")
-        t2 = OxmlElement("w:t")
-        t2.text = after
-        t2.set(qn("xml:space"), "preserve")
-        r2.append(t2)
-        paragraph._p.append(r2)
+
+def _replace_anchors_with_footnote_refs(paragraph, max_index: int) -> int:
+    """把段落中的所有 [N] 替换为脚注上标引用。
+
+    python-docx 的 paragraph.runs 不暴露 XML 操作,
+    这里直接对 paragraph._p 做字符串级处理后重建 runs。
+    v9.6:此前只替换每个段落的第一个 [N],其余以裸文本残留,多数引用
+    不可跳转——改为 finditer 全量替换;编号越界/非数字锚点(lit_xxx 等)
+    保留原文不脚注化。返回成功替换的引用数。
+    """
+    raw = paragraph.text or ""
+    matches = list(_CITE_RE.finditer(raw))
+    if not matches:
+        return 0
+
+    # 清空现有 runs
+    for r in list(paragraph._p):
+        if r.tag == qn("w:r"):
+            paragraph._p.remove(r)
+
+    replaced = 0
+    cursor = 0
+    for m in matches:
+        if m.start() > cursor:
+            _append_text_run(paragraph, raw[cursor:m.start()])
+        num = int(m.group(1)) if m.group(1) else None
+        if num is not None and 1 <= num <= max_index:
+            _append_footnote_ref_run(paragraph, fn_index=num)
+            replaced += 1
+        else:
+            # 非数字/越界锚点保留原文
+            _append_text_run(paragraph, m.group(0))
+        cursor = m.end()
+    if cursor < len(raw):
+        _append_text_run(paragraph, raw[cursor:])
+    return replaced
 
 
 def render_docx_with_footnotes(
@@ -271,16 +281,9 @@ def render_docx_with_footnotes(
             run = p.add_run(line)
             run.font.name = "Times New Roman"
             run.font.size = Pt(10.5)
-            # 把段落首个 [N] 替换为脚注引用
-            m = _CITE_RE.search(line)
-            if m:
-                try:
-                    num = int(m.group(1)) if m.group(1) else None
-                except ValueError:
-                    num = None
-                if num is not None and 1 <= num <= len(fn_items):
-                    _replace_anchors_with_footnote_refs(p, fn_index=num)
-                    body_paragraphs += 1
+            # v9.6:把段落中所有 [N] 都替换为脚注引用(此前只替换第一个)
+            if _replace_anchors_with_footnote_refs(p, max_index=len(fn_items)):
+                body_paragraphs += 1
 
     # 7. 末尾添加参考文献列表段
     doc.add_heading("参考文献", level=1)

@@ -73,6 +73,11 @@ from api.core_journals import router as core_journals_router  # noqa: E402
 from api.crawler_admin import router as crawler_admin_router  # noqa: E402
 from db.session import close_db, connect_db, init_db  # noqa: E402
 
+# v9.6:lifespan 冷导入失败分支引用 log,此前从未定义 → NameError 拖垮整个启动
+import logging  # noqa: E402
+
+log = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):

@@ -24,11 +24,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 try:  # 测试/独立脚本（backend/src 在 sys.path，顶层 automation 包可导入）
+    from automation.cnki import crawler as _crawler
     from automation.cnki import monitor as _monitor
     from automation.cnki import proxy_pool as _proxy_pool
     from automation.cnki import resilience as _resilience
     from automation.cnki import scheduler as _scheduler
 except ImportError:  # 生产路径（main.py 注入 backend 根，与 api/cnki.py 同源）
+    from src.automation.cnki import crawler as _crawler
     from src.automation.cnki import monitor as _monitor
     from src.automation.cnki import proxy_pool as _proxy_pool
     from src.automation.cnki import resilience as _resilience
@@ -61,7 +63,9 @@ def _pool_snapshot() -> dict:
 def _proxy_snapshot() -> dict:
     """代理池快照（off 模式无池实例，返回模式即可）。"""
     try:
-        mode = _proxy_pool.proxy_mode({})
+        # v9.6:读爬虫实际生效的 proxy 配置段——此前恒传空 dict,面板的 mode
+        # 永远显示 off(除非恰好设了环境变量)
+        mode = _proxy_pool.proxy_mode(_crawler.CONFIG.get("proxy") or {})
     except Exception:
         mode = "off"
     pool = _proxy_pool.get_proxy_pool()
@@ -131,7 +135,9 @@ def stop_all_tasks():
 def update_params(task_id: str, req: ParamsUpdateRequest):
     """运行中参数热调整（白名单外直接 422）。
 
-    delay_seconds 变更经 cnki_adapter 注册的钩子即时生效到爬虫限速器。
+    生效范围(v9.6):delay_seconds/max_workers/page_size 经钩子即时生效;
+    max_per_keyword 是任务启动参数(运行中不可达),仅落账——响应中以
+    deferred 如实标注,不再假称全部生效。
     """
     patch = {k: v for k, v in req.model_dump().items() if v is not None}
     if not patch:
@@ -142,7 +148,9 @@ def update_params(task_id: str, req: ParamsUpdateRequest):
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return {"task_id": task_id, "params": effective}
+    applied = [k for k in patch if k != "max_per_keyword"]
+    deferred = [k for k in patch if k == "max_per_keyword"]
+    return {"task_id": task_id, "params": effective, "applied": applied, "deferred": deferred}
 
 
 @router.get("/alerts")

@@ -40,19 +40,44 @@ DETAIL_CONCURRENCY = 3
 
 
 def _on_param_change(task_id: str, patch: dict) -> None:
-    """监控面板参数热调整回调：delay_seconds 变更立即生效到爬虫限速器。
+    """监控面板参数热调整回调。
 
-    其余白名单参数（max_workers/page_size/max_per_keyword）由动态池与
-    检索逻辑在各自循环点自然读取，无需显式回调。
+    v9.6:此前只处理 delay_seconds,docstring 声称其余参数「由动态池与检索
+    逻辑在各自循环点自然读取」但实际无任何读取点——调参返回 200 实为空操作。
+    现在:
+    - delay_seconds → 限速器热重载(原有)
+    - max_workers   → 动态池实例属性热调(desired_workers/effective_max 均实时读)
+    - page_size     → crawler.CONFIG["search"]["page_size"] 热写(下一页即生效,
+                      L1326 每页都从 CONFIG 现读)
+    - max_per_keyword → 仅落账(启动参数透传,运行中不可达),API 响应中标注
     """
     delay = patch.get("delay_seconds")
-    if delay is None:
-        return
-    try:
-        crawler.throttle_init(float(delay))
-        log.info("[cnki] 任务 %s 热调整 delay_seconds=%s 已生效", task_id, delay)
-    except Exception:
-        log.exception("[cnki] delay_seconds 热调整失败")
+    if delay is not None:
+        try:
+            crawler.throttle_init(float(delay))
+            log.info("[cnki] 任务 %s 热调整 delay_seconds=%s 已生效", task_id, delay)
+        except Exception:
+            log.exception("[cnki] delay_seconds 热调整失败")
+
+    workers = patch.get("max_workers")
+    if workers is not None:
+        try:
+            pool = _scheduler.get_pool()
+            if pool is not None:
+                pool.max_workers = max(int(workers), pool.min_workers)
+                log.info("[cnki] 任务 %s 热调整 max_workers=%s 已生效", task_id, workers)
+            else:
+                log.warning("[cnki] 动态池未初始化,max_workers 热调整跳过")
+        except Exception:
+            log.exception("[cnki] max_workers 热调整失败")
+
+    page_size = patch.get("page_size")
+    if page_size is not None:
+        try:
+            crawler.CONFIG["search"]["page_size"] = int(page_size)
+            log.info("[cnki] 任务 %s 热调整 page_size=%s 已生效(下一页起)", task_id, page_size)
+        except Exception:
+            log.exception("[cnki] page_size 热调整失败")
 
 
 # 注册到全局任务注册表（单例，幂等去重）：面板改参数 → 运行中任务即时生效
@@ -686,7 +711,11 @@ async def run_cnki_full_auto(
         pass
 
     def _check_stopped():
-        if stop_event is not None and stop_event.is_set():
+        # v9.6:同时检查 registry 的取消事件——调用方不传 stop_event 时
+        # (retrieval/sources/cnki.py、writing/orchestrator.py),面板
+        # POST /crawler/tasks/{id}/stop 置位的 state.cancel_event 此前无人
+        # 轮询,爬虫只能重启进程才能停
+        if (stop_event is not None and stop_event.is_set()) or state.cancel_event.is_set():
             raise _CnkiStopped("用户已手动停止")
 
     # 监控任务登记（Q-1 修复②）:注册提前到检索式预检之前,
@@ -820,11 +849,11 @@ async def run_cnki_full_auto(
             )
             return 0, 0
         # 需求3:入库前清空同源历史,避免文献池累积多次检索的旧数据。
-        # 修复:补传 pool_task_id,只清「本任务」同源数据,不跨任务误删(与英文侧对齐)。
-        cleared = _clear_source_records(db_type, pool_task_id)
-        if cleared:
-            emit(stage="log", msg=f"[入库] 已清空同源旧数据 {cleared} 篇,本次将覆盖写入", db=db_type)
+        # v9.6:清空动作延迟到「首批新数据即将入库」时执行(见下方块循环),
+        # 详情抓取中途致命失败(GB/T API 故障/闸口熔断/手动停止)时,
+        # 旧数据保持完好——不会出现「旧数据已删、新数据只有一半」的不可恢复丢失。
         saved = skipped = 0
+        _cleared_once = False
         total = len(items)
         valid_items = [
             (idx, it) for idx, it in enumerate(items, start=1) if (it.get("url") or "").strip()
@@ -849,7 +878,9 @@ async def run_cnki_full_auto(
         #   命中验证码/限流立即收缩,替代原固定 3 线程模型(需求4);
         # - 块间串行保证:停止请求及时生效、进度条平滑推进、失败不跨块扩散。
         pool = _scheduler.get_pool() or _scheduler.configure_pool(crawler.CONFIG["runtime"])
-        stop_flag = stop_event if stop_event is not None else threading.Event()
+        # v9.6:缺省时复用 registry 的取消事件——此前新建永不置位的 Event,
+        # 面板停止对动态池批间中断完全无效(与 _check_stopped 同一断链)
+        stop_flag = stop_event if stop_event is not None else state.cancel_event
         chunk_size = max(DETAIL_CONCURRENCY * 2, pool.max_workers * 2)
         registry.mark_stage(task_id, "摘要抓取")
         for chunk_start in range(0, len(valid_items), chunk_size):
@@ -953,6 +984,16 @@ async def run_cnki_full_auto(
                 record, q_report = _quality.quality_pipeline(record)
                 registry.add_quality_report(task_id, q_report)
                 parsed.append((idx, it, record))
+            # v9.6:首批解析成功的记录就绪、即将入库时才清空同源旧数据
+            # (先清后写,与原语义一致;此前清空提前到抓取前,中途致命失败
+            # 会造成旧数据已删、新数据只有一半的不可恢复丢失)
+            if not _cleared_once and parsed:
+                _cleared_once = True
+                cleared = _clear_source_records(db_type, pool_task_id)
+                if cleared:
+                    emit(stage="log",
+                         msg=f"[入库] 已清空同源旧数据 {cleared} 篇,本次将覆盖写入",
+                         db=db_type)
             # 本块解析成功的记录批量入库(单 session 单 commit)。
             # 入库失败只跳过本块,绝不杀整次任务:
             # 曾因一次 commit 异常直接逃出外层 except,数分钟抓取成果

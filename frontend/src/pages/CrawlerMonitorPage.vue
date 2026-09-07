@@ -151,6 +151,10 @@ const loadDetail = async (taskId: string) => {
   detailLoading.value = true;
   try {
     detail.value = await getCrawlerTask(taskId, true);
+  } catch (e) {
+    // v9.6:此前无 catch,接口失败直接 unhandled rejection,抽屉空白无提示
+    console.error('[crawler-monitor] 加载任务详情失败:', e);
+    toast.error('加载任务详情失败');
   } finally {
     detailLoading.value = false;
   }
@@ -169,11 +173,17 @@ const applyParams = async () => {
     toast.warning('请至少填写一个要调整的参数');
     return;
   }
-  await updateCrawlerTaskParams(detail.value.task_id, patch as CrawlerParamsPatch);
-  toast.success('参数已下发并即时生效');
-  paramForm.value = { ...EMPTY_PATCH };
-  await loadDetail(detail.value.task_id);
-  await loadAll();
+  try {
+    await updateCrawlerTaskParams(detail.value.task_id, patch as CrawlerParamsPatch);
+    toast.success('参数已下发并即时生效');
+    paramForm.value = { ...EMPTY_PATCH };
+    await loadDetail(detail.value.task_id);
+    await loadAll();
+  } catch (e) {
+    // v9.6:此前无 catch,下发失败(422/500)用户毫无感知,误以为已生效
+    console.error('[crawler-monitor] 参数下发失败:', e);
+    toast.error('参数下发失败,请检查后重试');
+  }
 };
 
 // 断路器手动复位(open 卡死时的运维动作)

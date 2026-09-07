@@ -250,6 +250,11 @@ def restore_to_pool(history_id: int, pool_task_id: str | None = None) -> int:
     rec = get_history(history_id)
     if not rec:
         raise ValueError(f"history {history_id} not found")
+    # v9.6:无任务上下文时拒绝执行——下方 del_q 若无 pool_task_id 过滤
+    # 会删全表,而写回行 task_id=None 在文献池 API 里又按 task 过滤查不到,
+    # 一次「查看历史」即可不可恢复地清空整个文献池(与 delete_history_record 同保护)
+    if not (pool_task_id or "").strip():
+        raise ValueError("缺少任务上下文(X-Task-Id),拒绝恢复以免误清文献池")
     snapshot = rec.get("papers_snapshot") or []
     with _db_session.SessionLocal() as db:
         legacy_ids = [

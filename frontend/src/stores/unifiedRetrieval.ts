@@ -125,7 +125,21 @@ function saveToStorage(s: State) {
 }
 
 export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
-  state: (): State => ({ ...initial }),
+  // v9.6:接线 loadFromStorage——此前只写不读,刷新后任务进度全丢,
+  // 且 isRunning 语义失效允许重复开任务(与页面注释宣称的行为相反)
+  state: (): State => {
+    const restored = { ...initial, ...loadFromStorage() } as State;
+    // 旧版本持久化数据可能缺键/类型漂移,兜底补齐防运行时 undefined
+    restored.enTasks = {
+      openalex: restored.enTasks?.openalex ?? { db: 'openalex', task_id: '', logs: [] },
+      pubmed: restored.enTasks?.pubmed ?? { db: 'pubmed', task_id: '', logs: [] },
+    };
+    restored.cnkiTasks = restored.cnkiTasks ?? {};
+    restored.ingestedEnKeys = restored.ingestedEnKeys instanceof Set
+      ? restored.ingestedEnKeys
+      : new Set<string>();
+    return restored;
+  },
 
   actions: {
     /** 任何状态变更后调用,持久化。 */

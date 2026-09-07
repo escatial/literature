@@ -36,6 +36,9 @@ export interface PoolTotals {
   selected: number;    // 池中被 selected 的篇数
 }
 
+// v9.6:refresh 请求序号——只认最新一次请求的响应
+let refreshSeq = 0;
+
 export const usePapersStore = defineStore('papers', {
   state: () => ({
     papers: [] as Paper[],
@@ -58,12 +61,14 @@ export const usePapersStore = defineStore('papers', {
   },
   actions: {
     /** 兼容旧代码:当前页切换时不重置 page_size,只换 page。
-     * 同步刷新 pageMeta + poolTotal;失败时保留旧数据。 */
+     * 同步刷新 pageMeta + poolTotal;失败时保留旧数据。
+     * v9.6:请求序号保护——快速连续翻页时,旧请求晚到会用旧页数据覆盖新页。 */
     async refresh(opts?: {
       page?: number;
       page_size?: number;
       source?: 'all' | 'cn' | 'en';
     }) {
+      const seq = ++refreshSeq;
       const page = opts?.page ?? this.pageMeta.page;
       const page_size = opts?.page_size ?? this.pageMeta.page_size;
       const src = opts?.source ?? this.sourceFilter;
@@ -73,6 +78,7 @@ export const usePapersStore = defineStore('papers', {
       this.loading = true;
       try {
         const resp = await listPapers(params);
+        if (seq !== refreshSeq) return; // 已有更新的请求,丢弃本次过期响应
         this.papers = resp.items;
         this.pageMeta = {
           total: resp.total,
@@ -87,11 +93,12 @@ export const usePapersStore = defineStore('papers', {
           selected: resp.items.filter((p) => p && p.selected).length,
         };
       } catch (e) {
+        if (seq !== refreshSeq) return;
         // 拉取失败:保留旧数据(不归零 pageMeta,避免 UI 误以为空)
         console.error('[papers] refresh failed:', e);
         toast.error('文献池拉取失败:请稍后重试');
       } finally {
-        this.loading = false;
+        if (seq === refreshSeq) this.loading = false;
       }
     },
     async addBatch(items: PaperCreatePayload[]) {

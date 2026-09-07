@@ -35,10 +35,13 @@ def assign_themes(
 
     theme_groups 形态(与 writing.classifier.Group 一致):
       [
-        {"name": "主题1", "paper_lit_ids": ["lit_oa_xxx", "lit_cnki_xxx", ...]},
-        {"name": "主题2", "paper_lit_ids": [...]},
+        {"name": "主题1", "lit_ids": ["lit_oa_xxx", "lit_cnki_xxx", ...]},
+        {"name": "主题2", "lit_ids": [...]},
         ...
       ]
+
+    v9.6:键名以 classifier.Group 的实际字段 lit_ids 为准;兼容旧文档写的
+    paper_lit_ids(此前按 paper_lit_ids 读取,传入标准形态必然解析为空)。
 
     一文一主题约束:同一 canonical_id 在同一 review_task_id 下只能分到 1 个主题;
     重复时,以第一次出现的 theme 为准,其余忽略并 warning。
@@ -51,7 +54,8 @@ def assign_themes(
     with SessionLocal() as db:
         for theme_idx, grp in enumerate(theme_groups, start=1):
             name = (grp.get("name") or f"主题{theme_idx}").strip()
-            lit_ids = list(grp.get("paper_lit_ids") or [])
+            # v9.6:以 classifier.Group 的实际字段 lit_ids 为准,兼容旧键 paper_lit_ids
+            lit_ids = list(grp.get("lit_ids") or grp.get("paper_lit_ids") or [])
 
             for lit_id in lit_ids:
                 # 通过 lit_id 反查 canonical_id

@@ -299,6 +299,10 @@ def init_proxy_pool(proxy_cfg: dict) -> ProxyPool:
     """
     global _pool
     with _POOL_LOCK:
+        # v9.6:热重载先停旧池巡检线程——此前直接覆盖全局引用,旧线程仍在
+        # 后台 check_all,线程数随 crawler.init() 重载次数无界增长
+        if _pool is not None:
+            _pool.stop_health_loop()
         _pool = ProxyPool(
             check_url=proxy_cfg.get("check_url", "https://kns.cnki.net/kns8s/AdvSearch"),
             check_timeout=float(proxy_cfg.get("check_timeout", 8.0)),

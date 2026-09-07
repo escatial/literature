@@ -378,6 +378,16 @@ def _screen_papers(
     if not papers:
         return [], [], build_relevance_report([], {})
 
+    # v9.6:同步筛选路径此前漏调 _dedup_papers(流式路径 _screen_papers_stream 有),
+    # 重复 lit_id 进入配额并触发 QA 判 FAIL——此处与流式路径对齐
+    deduped, dropped = _dedup_papers(papers)
+    if dropped:
+        log.warning(
+            "screening 输入去重:移除 %d 个重复 lit_id(%d → %d)",
+            len(dropped), len(papers), len(deduped),
+        )
+    papers = deduped
+
     decisions = screen_batch(papers, topic)
     kept_papers, screened_out = _finish_screening(
         papers, decisions, enforce_source_mix=False,
@@ -604,6 +614,23 @@ def _placeholder_section_result(spec, topic: str, papers: list[Paper]):
     """
     from writing.section_writer import SectionResult
 
+    # v9.6:文献述评章节(key="comment")按写作规则不得引用任何文献(section_writer
+    # _build_section_role 明确禁止 [lit_xxx] 与作者(年份)夹注),占位内容不能塞
+    # 全池题录清单——否则凭空扩大参考文献列表
+    if getattr(spec, "key", "") == "comment":
+        body = (
+            f"本章为「{topic}」综述的文献述评。由于 LLM 章节生成在本次运行中不可用,"
+            "无法完成对国内外研究共识、分歧与 Research Gap 的综合评述。"
+            "请结合前述章节人工核验补充,或重新运行写作流程。"
+        )
+        return SectionResult(
+            key=getattr(spec, "key", "comment"),
+            title=getattr(spec, "title", "文献述评"),
+            content=body,
+            citations=[],
+            dropped_citations=[],
+        )
+
     lines = [
         f"本章围绕「{topic}」展开,基于已检索到的 {len(papers)} 篇真实文献题录构建综述。",
         "由于 LLM 章节生成在本次运行中不可用,本章节以结构化题录形式呈现,"
@@ -818,7 +845,9 @@ def generate_review_stream(
 
         grade_map = _grade_map(relevance_report)
 
-        section_specs = build_review_sections(classify_mode, groups)
+        # v9.6:补传 topic——漏传时组名不合格的标题退化成通用名「主题研究进展」,
+        # 与阶段 1 预览(L741)/同步路径(L980)不一致
+        section_specs = build_review_sections(classify_mode, groups, topic)
         sections: list[SectionResult] = []
         all_dropped: list[str] = []
         for idx, spec in enumerate(section_specs):
@@ -837,31 +866,54 @@ def generate_review_stream(
                 "title": spec.title,
             })
             total_chars = 0
-            for piece, done, res in write_section_stream(
-                spec, topic, groups, section_papers, grades=grade_map,
-            ):
-                if piece:
-                    total_chars += len(piece)
-                    yield _sse_event("section_token", {
-                        "index": idx,
-                        "total": len(section_specs),
-                        "key": spec.key,
-                        "title": spec.title,
-                        "delta": piece,
-                        "chars": total_chars,
-                    })
-                if done and res is not None:
-                    sections.append(res)
-                    all_dropped.extend(res.dropped_citations)
-                    yield _sse_event("section_done", {
-                        "index": idx,
-                        "total": len(section_specs),
-                        "key": res.key,
-                        "title": res.title,
-                        "content": res.content,
-                        "citations": res.citations,
-                        "dropped_citations": res.dropped_citations,
-                    })
+            # v9.6:流式路径单章失败此前无占位兜底(非流式 L989 起有),LLM 全失败
+            # 时第 N 章异常会把前 N-1 章整体报废——对齐同步路径的占位章节语义
+            completed = False
+            try:
+                for piece, done, res in write_section_stream(
+                    spec, topic, groups, section_papers, grades=grade_map,
+                ):
+                    if piece:
+                        total_chars += len(piece)
+                        yield _sse_event("section_token", {
+                            "index": idx,
+                            "total": len(section_specs),
+                            "key": spec.key,
+                            "title": spec.title,
+                            "delta": piece,
+                            "chars": total_chars,
+                        })
+                    if done and res is not None:
+                        completed = True
+                        sections.append(res)
+                        all_dropped.extend(res.dropped_citations)
+                        yield _sse_event("section_done", {
+                            "index": idx,
+                            "total": len(section_specs),
+                            "key": res.key,
+                            "title": res.title,
+                            "content": res.content,
+                            "citations": res.citations,
+                            "dropped_citations": res.dropped_citations,
+                        })
+            except Exception as exc:
+                if completed:
+                    raise
+                log.warning(
+                    "章节 %s 流式写作失败,生成占位章节: %s",
+                    getattr(spec, "key", "?"), exc,
+                )
+                res = _placeholder_section_result(spec, topic, section_papers)
+                sections.append(res)
+                yield _sse_event("section_done", {
+                    "index": idx,
+                    "total": len(section_specs),
+                    "key": res.key,
+                    "title": res.title,
+                    "content": res.content,
+                    "citations": res.citations,
+                    "dropped_citations": res.dropped_citations,
+                })
 
         # 打通正文锚点与参考文献编号:分配全局编号、替换正文 [lit_xxx] -> [N]
         ref, _number_map = apply_citation_numbering(sections, papers)

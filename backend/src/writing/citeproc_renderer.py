@@ -53,6 +53,9 @@ def _parse_author_name(name: str) -> dict:
     """'Jingjing Sun' -> {family: 'Sun', given: 'Jingjing'}
 
     CSL 要求拆 family / given。英文按最后一个空格拆;中文整段作 family。
+    v9.6:PubMed 标准形态「姓 + 名首字母缩写」("Sun J"/"Sun JX")——末 token
+    为全大写缩写(可带点)时 family 在前;此前恒按「名 姓」拆,"Sun J" 被著录成
+    family="J"、given="Sun",GB/T 7714 输出颠倒。
     """
     name = (name or "").strip()
     if not name:
@@ -60,6 +63,9 @@ def _parse_author_name(name: str) -> dict:
     if " " not in name:
         return {"family": name}
     parts = name.rsplit(" ", 1)
+    last = parts[1].replace(".", "")  # "J."/"J.X." 去点后判断缩写形态
+    if last.isalpha() and last.isupper() and len(last) <= 3:
+        return {"family": parts[0], "given": parts[1]}
     return {"family": parts[1], "given": parts[0]}
 
 

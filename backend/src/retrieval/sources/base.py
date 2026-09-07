@@ -34,8 +34,14 @@ class AcademicSource(Protocol):
 
     name: str
 
-    def build_sub_query(self, query_string: str) -> dict:
-        """把 LLM 输出的检索式字符串翻译成本源查询参数(纯函数,无副作用)。"""
+    # v9.6:协议签名加可选年份窗口——未实现者(crossref/cnki)按鸭子类型兼容不传参
+    def build_sub_query(self, query_string: str, year_start: int | None = None,
+                        year_end: int | None = None) -> dict:
+        """把 LLM 输出的检索式字符串翻译成本源查询参数(纯函数,无副作用)。
+
+        year_start/year_end: 任务级发表年份窗口,实现方可选支持;
+        缺省时用本源默认年份窗口。
+        """
         ...
 
     def execute(self, query: dict, page: int, per_page: int) -> SourcePage:

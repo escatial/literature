@@ -31,6 +31,8 @@ const initialState: StreamState = {
   elapsedSeconds: 0,
   waitingSeconds: 0,
   currentSection: null,
+  qaProgress: null,
+  qaResult: null,
   detail: null,
   error: null,
 };

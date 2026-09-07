@@ -163,6 +163,39 @@ async def start_cnki(
     async def _runner():
         # 文献池隔离 ID:入库打标签与历史读取共用同一个值
         pool_task_id = (x_task_id or "").strip() or None
+
+        def _persist_history() -> None:
+            """v9.6:落历史挪到后台 daemon 线程——全量同步 DB 读写此前直接在
+            事件循环线程执行,落库瞬间阻塞所有并发请求(含写作 SSE 心跳)。
+            注意不能用 await asyncio.to_thread:请求结束后短命事件循环
+            (TestClient 每请求一个循环)会冻死挂起协程,任务终态永远落不了盘;
+            daemon 线程既不让出事件循环,DB 也不再阻塞循环。"""
+            if req.run_id:
+                # 走 aggregator:有 run_id 就走聚合,没 run_id 兼容旧调用方直接写一条
+                try:
+                    aggregator_add_cnki(
+                        run_id=req.run_id,
+                        topic=req.topic,
+                        papers=_cnki_papers_from_pool(pool_task_id),
+                        # v8:历史记录必须记「池 task_id」(与 papers.task_id 同源),
+                        # 不能记 SSE 内部 id(uuid4().hex),否则检索记录与池脱节
+                        task_id=pool_task_id or task_id,
+                    )
+                except Exception as exc:
+                    log.warning("aggregator(知网)写入失败: %s", exc)
+            else:
+                try:
+                    from retrieval.history_service import record_history
+                    record_history(
+                        topic=req.topic,
+                        sources=[req.db_type],
+                        papers=_cnki_papers_from_pool(pool_task_id),
+                        failed_sources={},
+                        task_id=pool_task_id or task_id,
+                    )
+                except Exception as exc:
+                    log.warning("写入知网检索历史失败: %s", exc)
+
         try:
             result = await run_cnki_full_auto(
                 topic=req.topic,
@@ -176,31 +209,11 @@ async def start_cnki(
                 pool_task_id=pool_task_id,
             )
             if result.get("status") == "succeeded":
-                # 走 aggregator:有 run_id 就走聚合,没 run_id 兼容旧调用方直接写一条
-                if req.run_id:
-                    try:
-                        aggregator_add_cnki(
-                            run_id=req.run_id,
-                            topic=req.topic,
-                            papers=_cnki_papers_from_pool(pool_task_id),
-                            # v8:历史记录必须记「池 task_id」(与 papers.task_id 同源),
-                            # 不能记 SSE 内部 id(uuid4().hex),否则检索记录与池脱节
-                            task_id=pool_task_id or task_id,
-                        )
-                    except Exception as exc:
-                        log.warning("aggregator(知网)写入失败: %s", exc)
-                else:
-                    try:
-                        from retrieval.history_service import record_history
-                        record_history(
-                            topic=req.topic,
-                            sources=[req.db_type],
-                            papers=_cnki_papers_from_pool(pool_task_id),
-                            failed_sources={},
-                            task_id=pool_task_id or task_id,
-                        )
-                    except Exception as exc:
-                        log.warning("写入知网检索历史失败: %s", exc)
+                threading.Thread(
+                    target=_persist_history,
+                    name=f"cnki-history-{task_id[:8]}",
+                    daemon=True,
+                ).start()
             _task_results[task_id] = result
             return result
         finally:

@@ -175,13 +175,16 @@ def check_reference_binding(
                 ))
 
     # 6) 入选未被任何章节引用(冗余文献)
+    # v9.6:降为 WARN——传给 QA 的是配额全集(70~90 篇),正文引用经
+    # 「作者(年份)→唯一匹配」注入,机构作者/同名歧义/元数据不全的命中不了,
+    # 未被引用是正常现象;此前判 FAIL 会经硬门禁报废整篇综述
     cited_ids_set = {cid for cid in cited_ids_in_order}
     for paper in papers:
         if paper.lit_id not in cited_ids_set:
             issues.append(QAIssue(
-                "BINDING_UNUSED_REFERENCE", QACheckStatus.FAIL,
+                "BINDING_UNUSED_REFERENCE", QACheckStatus.WARN,
                 "literature_pool", f"paper/{paper.lit_id}",
-                "文献进入了文献池但未被任何章节引用,属于冗余条目",
+                "文献进入了文献池但未被任何章节引用,未计入参考文献",
                 lit_id=paper.lit_id,
             ))
 

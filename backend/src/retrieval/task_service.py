@@ -40,6 +40,10 @@ log = logging.getLogger(__name__)
 # 各循环入口检查后尽快退出。stop_tasks 由停止接口调用。
 _CANCEL_LOCK = threading.Lock()
 _CANCEL_EVENTS: dict[str, threading.Event] = {}
+# v9.6:停止请求账本——create_task_v2 建 DB 行返回 task_id 后、后台线程跑到
+# _cancel_event() 注册之前存在窗口,此间到达的 stop_tasks 找不到 Event 直接
+# 丢失,任务照跑。这里把已请求停止的 task_id 记下来,注册时补置位。
+_CANCEL_REQUESTED: set[str] = set()
 
 
 def _cancel_event(task_id: str) -> threading.Event:
@@ -48,26 +52,38 @@ def _cancel_event(task_id: str) -> threading.Event:
         if ev is None:
             ev = threading.Event()
             _CANCEL_EVENTS[task_id] = ev
+        if task_id in _CANCEL_REQUESTED:
+            ev.set()
         return ev
 
 
 def _clear_cancel(task_id: str) -> None:
     with _CANCEL_LOCK:
         _CANCEL_EVENTS.pop(task_id, None)
+        _CANCEL_REQUESTED.discard(task_id)
 
 
 def stop_tasks(task_ids: list[str] | None = None) -> list[str]:
-    """置位取消标志。task_ids 为空时停止所有已注册任务。返回实际置位了标志的任务 id。"""
+    """置位取消标志。task_ids 为空时停止所有已注册任务。返回实际置位了标志的任务 id。
+
+    v9.6:task_id 尚未注册(任务线程还没跑到注册点)时也记账并计入返回值,
+    堵住「停止请求先于任务注册到达」的竞态窗口——否则停止指令静默丢失,
+    前端以为已停止,任务继续跑完并双写文献池。
+    """
     stopped: list[str] = []
     with _CANCEL_LOCK:
-        targets = (
-            list(_CANCEL_EVENTS.keys())
-            if task_ids is None
-            else [t for t in task_ids if t in _CANCEL_EVENTS]
-        )
-        for t in targets:
-            _CANCEL_EVENTS[t].set()
-            stopped.append(t)
+        if task_ids is None:
+            stopped = list(_CANCEL_EVENTS.keys())
+            for t in stopped:
+                _CANCEL_EVENTS[t].set()
+            _CANCEL_REQUESTED.update(stopped)
+        else:
+            for t in task_ids:
+                ev = _CANCEL_EVENTS.get(t)
+                if ev is not None:
+                    ev.set()
+                _CANCEL_REQUESTED.add(t)
+                stopped.append(t)
     return stopped
 
 
@@ -348,13 +364,15 @@ def create_task_v2(
         db.add(task); db.commit(); db.refresh(task)
 
     if run_inline:
+        # v9.6:年份窗口透传(#9)——此前 API 收了入库但从未进入查询构造
         run_task_v2(task_id, selected, use_snowball, run_id=run_id, limit=limit,
-                    pool_task_id=pool_task_id)
+                    pool_task_id=pool_task_id, year_start=year_start, year_end=year_end)
     else:
         threading.Thread(
             target=run_task_v2,
             args=(task_id, selected, use_snowball),
-            kwargs={"run_id": run_id, "limit": limit, "pool_task_id": pool_task_id},
+            kwargs={"run_id": run_id, "limit": limit, "pool_task_id": pool_task_id,
+                    "year_start": year_start, "year_end": year_end},
             daemon=True,
         ).start()
     with _db_session.SessionLocal() as db:
@@ -383,18 +401,61 @@ def _warmup_dns(hosts: list[str]) -> None:
         t.join(timeout=5.0)
 
 
+# v9.6:同 task_id 并发重入保护——两个线程同时跑同一任务会双双通过
+# 开头的 status 检查,双写文献池。进程级 _RUNNING 集合挡住重入。
+_RUNNING_LOCK = threading.Lock()
+_RUNNING: set[str] = set()
+
+
 def run_task_v2(task_id: str, sources: list[str] | None = None,
                 use_snowball: bool = False,
                 run_id: str | None = None,
                 limit: int | None = None,
-                pool_task_id: str | None = None) -> None:
-    """Run the v2 retrieval controller."""
+                pool_task_id: str | None = None,
+                year_start: int | None = None,
+                year_end: int | None = None) -> None:
+    """Run the v2 retrieval controller(并发重入保护入口,实际逻辑见 _run_task_v2_impl)。
+
+    year_start/year_end: 任务级发表年份窗口,透传给 RetrievalController
+    (v9.6:此前 create_task_v2 收了入库但查询硬编码「近 5 年」)。
+    """
+    with _RUNNING_LOCK:
+        if task_id in _RUNNING:
+            log.warning("任务 %s 已在运行,拒绝并发重入", task_id)
+            return
+        _RUNNING.add(task_id)
+    try:
+        _run_task_v2_impl(
+            task_id, sources, use_snowball, run_id=run_id, limit=limit,
+            pool_task_id=pool_task_id, year_start=year_start, year_end=year_end,
+        )
+    finally:
+        with _RUNNING_LOCK:
+            _RUNNING.discard(task_id)
+
+
+def _run_task_v2_impl(task_id: str, sources: list[str] | None = None,
+                      use_snowball: bool = False,
+                      run_id: str | None = None,
+                      limit: int | None = None,
+                      pool_task_id: str | None = None,
+                      year_start: int | None = None,
+                      year_end: int | None = None) -> None:
+    """Run the v2 retrieval controller.
+
+    year_start/year_end: 任务级发表年份窗口,透传给 RetrievalController
+    (v9.6:此前 create_task_v2 收了入库但查询硬编码「近 5 年」)。
+    """
     task = get_task(task_id)
     if not task or task.status in TERMINAL_STATUSES:
         return
 
     # 注册取消标志;用户点「停止」后置位,Controller 循环里抛 TaskCancelledError
     stop = _cancel_event(task_id)
+    # v9.6:事件缓冲必须在 try 外创建——下方兜底 except 无条件调用
+    # event_buffer.flush(),若异常发生在 try 内定义之前(如 _update 撞
+    # SQLite busy),except 自身 NameError,failed 终态永远写不进去
+    event_buffer = _EventBuffer(task_id)
     try:
         _update(task_id, status="running", progress=5)
 
@@ -457,8 +518,7 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
 
         # 3. 主流程 + 雪球 + 回填(异步跑完)
         progress_events: list[dict] = []
-        # 并发下事件产生极快:先攒内存缓冲,按条数/时间批量落库,终态前 flush
-        event_buffer = _EventBuffer(task_id)
+        # (事件缓冲已在 try 外创建,见函数开头——异常路径也要能 flush)
 
         def _on(evt):
             payload = {
@@ -489,6 +549,9 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
                       "backward_depth": 1, "max_seeds": 100, "max_results": 500},
                 on_progress=_on,
                 stop_event=stop,
+                # v9.6:任务级年份窗口贯通(#9),此前在源内被硬编码为「近 5 年」
+                year_start=year_start,
+                year_end=year_end,
             )
             return await ctrl.run_async()
 

@@ -118,21 +118,29 @@ class PubMedSource:
         boolean = (getattr(intent, "boolean_template", "") or "").strip() or ""
         return self._build_query_from_string(boolean)
 
-    def build_sub_query(self, query_string: str) -> dict:
+    # v9.6:year_start/year_end 贯通——任务级年份窗口此前被静默替换为「近 N 年」
+    def build_sub_query(self, query_string: str, year_start: int | None = None,
+                        year_end: int | None = None) -> dict:
         """把 LLM 直接输出的 PubMed 检索式字符串组装成 E-utilities 请求。
 
         query_string: LLM 直接输出的完整 PubMed 检索式,如
           ("Understanding by Design"[tiab] OR UbD[tiab]) AND "math teaching"[tiab]
+        year_start/year_end: 任务级发表年份窗口([dp] 限定);单边缺省时
+          另一边回退默认(end=当前年,start=当年-DEFAULT_PUBMED_YEAR_BACK)。
         """
-        return self._build_query_from_string(query_string)
+        return self._build_query_from_string(boolean=query_string,
+                                             year_start=year_start, year_end=year_end)
 
-    def _build_query_from_string(self, boolean: str) -> dict:
+    def _build_query_from_string(self, boolean: str, year_start: int | None = None,
+                                 year_end: int | None = None) -> dict:
         """把布尔主体 + 默认年份/语言/类型组装成 PubMed E-utilities term。"""
         import datetime as _dt
 
         year = _dt.datetime.now().year
+        ys = int(year_start) if year_start else year - DEFAULT_PUBMED_YEAR_BACK
+        ye = int(year_end) if year_end else year
         clauses = [f"({boolean})"]
-        clauses.append(f"{year - DEFAULT_PUBMED_YEAR_BACK}:{year}[dp]")
+        clauses.append(f"{ys}:{ye}[dp]")
         # 一篇文章只属于一种语言:多语言必须 OR 分组
         clauses.append("(" + " OR ".join(f"{lang}[la]" for lang in DEFAULT_PUBMED_LANGS) + ")")
         # 同理,一篇文章不可能同时是 journal article 和 review
