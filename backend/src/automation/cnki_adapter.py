@@ -632,6 +632,7 @@ def _run_with_rescue(
     target_count: int,
     rescue_rounds: int = _RESCUE_ROUNDS,
     rescue_cooldowns: tuple[float, ...] = _RESCUE_COOLDOWNS,
+    progress_fn=None,
 ) -> tuple[dict[str, dict], list[str]]:
     """首轮顺序抓取 + 失败式子多轮补漏调度(产品级「不丢单」语义)。
 
@@ -644,8 +645,10 @@ def _run_with_rescue(
       - CnkiServerBusyError/一般 Exception → 本式失败,进补漏队列(不丢单)
       - 闸口故障(CnkiCookieError/CnkiCaptchaBalanceError/CnkiRevisionError/
         CnkiSessionBlockedError)→ 自动处置已穷尽,原样上抛交外层 error 终态处置
+    progress_fn(done, total): 列表阶段进度回调(累计条目/目标)——列表+自愈
+      等待期可长达数分钟,没有进度事件前端进度条会冻结(2026-09-08 用户反馈)。
     返回 (merged: 去重条目表(键=_dedupe_key(url)), missing: 补漏后仍失败的式子)。
-    纯调度逻辑:sleep_fn/check_stopped/fetcher 均可注入,可离线确定性单测。
+    纯调度逻辑:sleep_fn/check_stopped/fetcher/progress_fn 均可注入,可离线确定性单测。
     """
     merged: dict[str, dict] = {}
     missing: list[str] = []
@@ -657,6 +660,11 @@ def _run_with_rescue(
             url = item.get("url") or ""
             if url:
                 merged.setdefault(_dedupe_key(url), item)
+        if progress_fn is not None:
+            try:
+                progress_fn(len(merged), target_count)
+            except Exception:
+                pass  # 进度上报失败绝不影响检索主流程
         return len(merged) - before
 
     # ---- 首轮:顺序尝试全部式子 ----
@@ -911,6 +919,13 @@ async def run_cnki_full_auto(
                 check_stopped=_check_stopped,
                 delay_seconds=crawler.CONFIG["runtime"]["delay_seconds"],
                 target_count=target_count,
+                # v9.8:列表阶段进度事件 —— 列表+自愈等待可长达数分钟,
+                # 没有进度信号前端进度条冻结(2026-09-08 用户反馈)。
+                # 不携带 saved 字段:已获取篇数语义仍由详情阶段 fetched 事件独占
+                progress_fn=lambda done, total: emit(
+                    stage="list_progress", db=db_type,
+                    progress_total=total, progress_done=done,
+                ),
             )
         except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
                 crawler.CnkiRevisionError, crawler.CnkiSessionBlockedError) as exc:

@@ -14,6 +14,9 @@ interface CnkiTaskRow {
   // 摘要进度(后端 fetched 事件携带);无界时 progress_total 不变,前端按 saved 推进
   progress_total?: number;
   progress_done?: number;
+  // v9.8:列表阶段进度(list_progress 事件置 true,fetched 事件置 false)——
+  // 进度条分段映射:列表 0-49%,详情 50-99%,阶段切换不回跳
+  listPhase?: boolean;
   // 检索过程日志(带时间戳前缀),按出现顺序追加,最多保留 200 条
   logs?: string[];
 }

@@ -185,3 +185,48 @@ def test_cooldown_sleep_stoppable():
     with pytest.raises(ValueError, match="用户已手动停止"):
         cnki_adapter._sleep_in_chunks(sleeps.append, check_stopped, 60.0, chunk=5.0)
     assert sleeps == [5.0]  # 只睡了第一段就被停止打断
+
+
+# ---------- v9.8 列表阶段进度回调 ----------
+
+def test_progress_fn_reports_cumulative_found_per_absorb():
+    """列表阶段进度:每式吸收后上报(累计条目, 目标),前端进度条不再冻结。"""
+    calls: list[str] = []
+    progress: list[tuple[int, int]] = []
+    merged, missing = cnki_adapter._run_with_rescue(
+        ["q1", "q2"],
+        _script_fetcher({"q2": [2]}, calls),
+        emit_fn=lambda m: None,
+        sleep_fn=lambda s: None,
+        check_stopped=lambda: None,
+        delay_seconds=0.0,
+        target_count=100,
+        rescue_rounds=0,
+        progress_fn=lambda done, total: progress.append((done, total)),
+    )
+    assert missing == []
+    assert len(merged) == 3
+    # q1 吸收 1 条 → (1,100);q2 吸收 2 条 → (3,100)
+    assert progress == [(1, 100), (3, 100)]
+
+
+def test_progress_fn_failure_never_breaks_retrieval():
+    """进度回调抛异常必须被吞掉 —— 进度上报绝不影响检索主流程。"""
+    calls: list[str] = []
+
+    def boom(done, total):
+        raise RuntimeError("SSE 队列瞬断")
+
+    merged, missing = cnki_adapter._run_with_rescue(
+        ["q1"],
+        _script_fetcher({}, calls),
+        emit_fn=lambda m: None,
+        sleep_fn=lambda s: None,
+        check_stopped=lambda: None,
+        delay_seconds=0.0,
+        target_count=100,
+        rescue_rounds=0,
+        progress_fn=boom,
+    )
+    assert missing == []
+    assert len(merged) == 1

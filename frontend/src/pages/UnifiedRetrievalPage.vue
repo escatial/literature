@@ -313,6 +313,10 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
       // 后端不带 saved 的事件(尤其 error)此前会把已入库计数清零显示
       const cur = ustore.cnkiTasks[db];
       const merged = { ...(cur || initial), ...msg };
+      // v9.8:标记进度所处阶段 —— list_progress(检索条目累计)与
+      // fetched(逐篇入库)分属进度条的两段区间,切换时不回跳
+      if (msg.stage === 'list_progress') merged.listPhase = true;
+      if (msg.stage === 'fetched') merged.listPhase = false;
       if (msg.stage === 'search_done' && msg.ok === false) {
         // 产品级:0 篇入库必须标为失败,否则任务停在 active →
         // 进度条显示「0 篇 已完成」误导用户;文案不暴露内部机制
@@ -399,9 +403,14 @@ const cnkiProgress = computed<ProgressBar>(() => {
   if (task.stage === 'done' || task.stage === 'error') percent = 100;
   else if ((task.progress_total ?? 0) > 0) {
     const total = task.progress_total ?? 0;
-    percent = Math.min(99, Math.round(((task.progress_done ?? 0) / total) * 100));
+    const ratio = Math.min(1, (task.progress_done ?? 0) / total);
+    // v9.8 分段映射:列表(检索条目累计)占 0-49%,详情(逐篇入库)占 50-99%
+    // —— 此前两阶段共用同一刻度,进入详情时进度条从 60% 跳回 3% 像卡死
+    percent = task.listPhase
+      ? Math.round(ratio * 49)
+      : Math.min(99, 50 + Math.round(ratio * 49));
   } else {
-    percent = Math.min(99, Math.round(((task.saved ?? 0) / target) * 100));
+    percent = Math.min(49, Math.round(((task.saved ?? 0) / target) * 49));
   }
   const logs = task.logs ?? [];
   return {
