@@ -1432,13 +1432,16 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             # 上抛 CnkiRevisionError 交前端横幅,勿静默烧完清单。
             _dump_debug_list_html(html, f"struct{page}")
             if struct_fix_attempted:
+                emit_log(f"[列表] 第{page}页 '查询对象结构错误'：刷新令牌后仍被拒绝")
                 raise CnkiRevisionError(
                     "知网报'查询对象结构错误'：刷新 turnpage 令牌后仍被拒绝，检索式或接口结构疑似改版——请反馈开发者更新"
                 )
             struct_fix_attempted = True
             print(f"[列表] 第{page}页 知网报'查询对象结构错误':turnpage 令牌疑似失效,刷新后重拉")
+            emit_log(f"[列表] 第{page}页 检测到令牌失效，正在自动恢复…")
             debug_log(f"[列表] 第{page}页 查询对象结构错误,刷新 turnpage 令牌后重拉")
             if not refresh_turnpage("结构错误自愈"):
+                emit_log("[列表] 令牌自动恢复失败，任务停止")
                 raise CnkiRevisionError(
                     "知网报'查询对象结构错误'且 turnpage 令牌刷新失败（高级检索页未提取到令牌）——知网可能改版，请反馈开发者更新"
                 )
@@ -1450,6 +1453,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             # 补漏冷却。刷新后仍被拒 = 令牌机制疑似改版,直接上抛改版错。
             if "查询对象结构错误" in html:
                 _dump_debug_list_html(html, page)
+                emit_log(f"[列表] 第{page}页 令牌恢复后仍报'查询对象结构错误'")
                 raise CnkiRevisionError(
                     "知网报'查询对象结构错误'：turnpage 令牌刷新后仍被拒绝（接口结构疑似改版）——请反馈开发者更新"
                 )
@@ -1468,6 +1472,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             m = re.search(r'value="([^"]*)"', html)
             detail = m.group(1) if m else "未知参数校验失败"
             _dump_debug_list_html(html, page)
+            emit_log(f"[列表] 第{page}页 知网参数校验失败，任务停止: {detail}")
             raise CnkiRevisionError(
                 f"知网参数校验失败(第{page}页): {detail} —— 接口参数约束变更,请反馈开发者更新"
             )
@@ -1526,6 +1531,9 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             if block == "login":
                 # v9:cookie 失效先自动续期(游客态重访首页即可种回 KNS2COOKIE),续期后重拉本页
                 if not (login_fix_attempts < 1 and refresh_cookies("列表页返回登录页")):
+                    # v9.8:闸口失败前必须留下用户可见日志——此前静默 raise,
+                    # 面板停留在最后一条成功日志上,任务凭空失败无从排查
+                    emit_log(f"[列表] 第{page}页返回登录页且自动续期未成功，会话凭证已失效")
                     raise CnkiCookieError(
                         "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
                     )
@@ -1535,6 +1543,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                                    bool_search=bool_search)
                 if "抱歉，暂无数据" in html or "no-content" in html:
                     if classify_block_page(html) == "login":
+                        emit_log(f"[列表] 第{page}页续期后仍返回登录页，会话凭证已失效")
                         raise CnkiCookieError(
                             "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
                         )
@@ -1565,6 +1574,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
             elif block == "login":
                 # v9:cookie 失效先自动续期,续期后重拉本页(每条式子限 1 次)
                 if not (login_fix_attempts < 1 and refresh_cookies("列表解析返回登录页")):
+                    emit_log(f"[列表] 第{page}页解析失败且返回登录页，自动续期未成功")
                     raise CnkiCookieError(
                         "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
                     )
@@ -1575,6 +1585,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                 items = parse_list(html)
                 if not items:
                     if classify_block_page(html) == "login":
+                        emit_log(f"[列表] 第{page}页续期后仍为登录页，会话凭证已失效")
                         raise CnkiCookieError(
                             "登录状态已过期，自动恢复未成功（数据源可能要求登录或当前网络受限），请检查网络后重试"
                         )

@@ -593,8 +593,10 @@ def _run_with_auto_restart(
     - rounds: 额外重启次数(总尝试 = 1 + rounds);
     - 冷却分段睡眠,面板「停止」秒级响应(与补漏轮同一机制);
     - before_restart(attempt): 重启前的会话重置钩子(清零空壳连击/换 cookie);
-    - 环境性故障(会话风控/网络/限流)重启,闸口故障(改版/题分耗尽/用户停止)
-      立即上抛;重启耗尽后抛最后一次异常,由外层以 error 终态如实上报。
+    - 环境性故障(会话风控/网络/限流/游客会话被杀的 CnkiCookieError)重启
+      —— 重启的第一个动作就是更换会话凭证,恰是这类故障的解药;
+    - 闸口故障(知网改版/超级鹰题分耗尽)与用户停止立即上抛,重启只会重复失败
+      或违背用户意图;重启耗尽后抛最后一次异常,由外层以 error 终态如实上报。
     纯调度逻辑:inner/emit/sleep/stop 钩子均可注入,离线确定性单测。
     """
     attempt = 0
@@ -604,9 +606,8 @@ def _run_with_auto_restart(
             return inner()
         except _CnkiStopped:
             raise  # 用户停止:任何重启都无意义
-        except (crawler.CnkiRevisionError, crawler.CnkiCaptchaBalanceError,
-                crawler.CnkiCookieError):
-            raise  # 闸口故障:需要人工介入(反馈开发者/充值/检查网络),重启只会重复失败
+        except (crawler.CnkiRevisionError, crawler.CnkiCaptchaBalanceError):
+            raise  # 闸口故障:需要人工介入(反馈开发者/充值),重启只会重复失败
         except Exception as exc:
             if attempt > rounds:
                 raise  # 重启预算耗尽:如实上抛最后一次异常

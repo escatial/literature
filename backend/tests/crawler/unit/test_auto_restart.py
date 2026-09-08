@@ -81,7 +81,6 @@ def test_busy_error_is_restartable():
 @pytest.mark.parametrize("gate_exc", [
     CnkiRevisionError("知网改版"),
     CnkiCaptchaBalanceError("超级鹰题分不足"),
-    CnkiCookieError("cookie 失效且续期无效"),
 ])
 def test_gate_failures_raise_immediately(gate_exc):
     calls, restarts, sleeps, logs = [], [], [], []
@@ -90,6 +89,18 @@ def test_gate_failures_raise_immediately(gate_exc):
         _run(inner, logs=logs, restarts=restarts, sleeps=sleeps)
     assert calls == ["run"]     # 没有重启
     assert restarts == [] and sleeps == []
+
+
+def test_cookie_error_restarts_with_fresh_session():
+    """v9.8:游客会话被知网杀掉(CnkiCookieError)是环境性故障 —— 重启的
+    第一个动作就是更换会话凭证,恰是解药;静默速败(07:46 事故)不再发生。"""
+    calls, restarts, sleeps, logs = [], [], [], []
+    inner = _scripted_inner(
+        calls, [CnkiCookieError("登录状态已过期，自动恢复未成功"), "ok"],
+    )
+    assert _run(inner, logs=logs, restarts=restarts, sleeps=sleeps) == 42
+    assert calls == ["run", "run"]
+    assert restarts == [1]  # 重启钩子(换会话凭证)被调用
 
 
 def test_user_stop_raises_immediately():
