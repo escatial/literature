@@ -578,6 +578,30 @@ def set_log_callback(cb):
     _log_local.callback = cb
 
 
+_wait_local = threading.local()
+
+
+def set_wait_callback(cb):
+    """设置当前线程的「长等待」回调(秒数, 原因);传 None 清除。
+
+    产品级(2026-09-08 用户反馈):限流退避/节拍冷却期间进度条静止数分钟,
+    用户看起来像坏了。≥10s 的等待经此回调上报,前端切流光动画+实时倒计时。
+    """
+    _wait_local.callback = cb
+
+
+def notify_wait(seconds: float, reason: str = ""):
+    """长等待上报:不足 10s 的等待对用户无感,不打扰。"""
+    if seconds < 10:
+        return
+    cb = getattr(_wait_local, "callback", None)
+    if cb:
+        try:
+            cb(seconds, reason)
+        except Exception:
+            pass
+
+
 def emit_log(msg: str):
     """过程日志：有回调则转发给调用方，同时始终打印到 stdout（CLI 兼容）。
 
@@ -1495,6 +1519,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                 print(f"[列表] 第{page}页 服务端异常空壳(请稍后重试),退避 {wait:.1f}s 后重试({attempt}/{SERVER_BUSY_RETRIES})")
                 emit_log(f"[列表] 第{page}页 数据源暂时繁忙，正在自动重试"
                          f"(第 {attempt}/{SERVER_BUSY_RETRIES} 次)，已获取的数据不会丢失")
+                notify_wait(wait, "数据源繁忙退避")
                 sleep_jitter(wait)
                 # v9.7:零进度空壳时,第 2 次重试前自动更换会话凭证 ——
                 # 同一会话的完全相同请求在会话级风控下必然次次空壳;
@@ -1643,6 +1668,7 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                 f"[节拍] 已连续获取 {_PACE_COOLDOWN_EVERY_PAGES} 页，"
                 f"休息 {_PACE_COOLDOWN_SECONDS:.0f}s 后继续，保障获取稳定"
             )
+            notify_wait(_PACE_COOLDOWN_SECONDS, "节拍冷却")
             sleep_jitter(_PACE_COOLDOWN_SECONDS)
         # 使用自适应限速的当前延迟(风控时增大,连续成功后回落)
         sleep_jitter(effective_delay())

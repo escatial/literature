@@ -317,6 +317,13 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
       // fetched(逐篇入库)分属进度条的两段区间,切换时不回跳
       if (msg.stage === 'list_progress') merged.listPhase = true;
       if (msg.stage === 'fetched') merged.listPhase = false;
+      // v9.8:长等待倒计时 —— waiting 事件带秒数,其余事件意味着等待已结束
+      if (msg.stage === 'waiting') {
+        merged.waitUntil = Date.now() + (msg.wait_seconds ?? 0) * 1000;
+        merged.waitReason = msg.reason || '等待';
+      } else {
+        merged.waitUntil = undefined;
+      }
       if (msg.stage === 'search_done' && msg.ok === false) {
         // 产品级:0 篇入库必须标为失败,否则任务停在 active →
         // 进度条显示「0 篇 已完成」误导用户;文案不暴露内部机制
@@ -370,6 +377,10 @@ const subscribeCnki = (db: string, initial: typeof cnkiTasks.value[string]) => {
 // 每库一条:进度百分比 + 状态 + 已入库数 + 最新一条日志。
 // 进度优先级: 终态→100; 有界任务(progress_total>0)→ done/total; 否则→ saved/目标。
 
+// v9.8:秒级心跳 —— 长等待倒计时靠它每秒刷新;静止进度条在用户眼里与坏了无异
+const nowMs = ref(Date.now());
+let waitTicker: number | undefined;
+
 /** 三库进度栏统一数据结构 */
 interface ProgressBar {
   key: string;
@@ -381,6 +392,10 @@ interface ProgressBar {
   target: number;
   running: boolean;
   lastLog: string;
+  /** 处于长等待(退避/冷却):进度条切流光动画,配实时倒计时 */
+  waiting: boolean;
+  waitRemaining: number;
+  waitReason: string;
 }
 const cnkiProgress = computed<ProgressBar>(() => {
   const task = cnkiTasks.value.cnki;
@@ -397,6 +412,9 @@ const cnkiProgress = computed<ProgressBar>(() => {
       target,
       running: false,
       lastLog: '',
+      waiting: false,
+      waitRemaining: 0,
+      waitReason: '',
     };
   }
   let percent = 0;
@@ -413,6 +431,9 @@ const cnkiProgress = computed<ProgressBar>(() => {
     percent = Math.min(49, Math.round(((task.saved ?? 0) / target) * 49));
   }
   const logs = task.logs ?? [];
+  const running = task.stage !== 'done' && task.stage !== 'error';
+  const waitUntil = task.waitUntil ?? 0;
+  const waiting = running && waitUntil > nowMs.value;
   return {
     key: 'cnki',
     name: '中国知网',
@@ -421,8 +442,11 @@ const cnkiProgress = computed<ProgressBar>(() => {
     status: task.stage === 'error' ? ('exception' as const) : task.stage === 'done' ? ('success' as const) : undefined,
     saved: task.saved ?? 0,
     target,
-    running: task.stage !== 'done' && task.stage !== 'error',
+    running,
     lastLog: logs[logs.length - 1] ?? '',
+    waiting,
+    waitRemaining: waiting ? Math.ceil((waitUntil - nowMs.value) / 1000) : 0,
+    waitReason: task.waitReason ?? '',
     _stage: task.stage,
   };
 });
@@ -454,6 +478,9 @@ const enProgressFor = (db: 'openalex' | 'pubmed') =>
       target,
       running: started && !finished,
       lastLog: logs[logs.length - 1] ?? '',
+      waiting: false,
+      waitRemaining: 0,
+      waitReason: '',
     };
   });
 
@@ -743,6 +770,8 @@ const stopAll = async () => {
 };
 
 onMounted(async () => {
+  // v9.8:秒级心跳驱动长等待倒计时(等待中进度条为流光动画+实时秒数)
+  waitTicker = window.setInterval(() => { nowMs.value = Date.now(); }, 1000);
   // Pinia store 会从 localStorage 恢复任务;同步到本页内存状态,确保刷新后仍显示完成汇总。
   runStarted.value = Boolean(
     ustore.englishTaskId || Object.keys(ustore.cnkiTasks).length,
@@ -778,6 +807,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopProgressPolling();
+  if (waitTicker !== undefined) {
+    window.clearInterval(waitTicker);
+    waitTicker = undefined;
+  }
   // SSE 不立刻关闭,后台仍继续推消息;事件触发 onprogress 会再写 store
   // 切换路由回来时 onMounted 会重连,避免双重订阅靠 task_id 去重
 });
@@ -891,19 +924,25 @@ onBeforeUnmount(() => {
             </el-tooltip>
           </div>
           <el-tag :type="bar.status === 'exception' ? 'danger' : bar.status === 'success' ? 'success' : 'warning'" size="small">
-            {{ bar.status === 'exception' ? '失败' : bar.status === 'success' ? '已完成' : bar.running ? '进行中' : '待开始' }}
+            {{ bar.status === 'exception' ? '失败' : bar.status === 'success' ? '已完成' : bar.waiting ? '等待中' : bar.running ? '进行中' : '待开始' }}
           </el-tag>
         </div>
       </template>
       <el-progress
-        :percentage="bar.percent"
+        :percentage="bar.waiting ? 100 : bar.percent"
         :status="bar.status"
         :stroke-width="14"
+        :indeterminate="bar.waiting"
+        :duration="2"
         style="margin: 4px 0 12px"
       />
       <div class="last-log">
         <span class="last-log-label">最新日志</span>
-        <span class="last-log-text">{{ bar.lastLog || '等待开始…' }}</span>
+        <span class="last-log-text">
+          {{ bar.waiting
+            ? `${bar.waitReason || '等待'}中，约 ${bar.waitRemaining}s 后自动继续…`
+            : (bar.lastLog || '等待开始…') }}
+        </span>
       </div>
     </el-card>
   </template>

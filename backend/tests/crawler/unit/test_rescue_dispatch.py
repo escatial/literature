@@ -230,3 +230,24 @@ def test_progress_fn_failure_never_breaks_retrieval():
     )
     assert missing == []
     assert len(merged) == 1
+
+
+def test_wait_fn_called_before_rescue_cooldown_and_busy_rest():
+    """补漏冷却与空壳 30s 休息前都上报等待 —— 前端切流光+倒计时。"""
+    calls: list[str] = []
+    waits: list[tuple[float, str]] = []
+    merged, missing = cnki_adapter._run_with_rescue(
+        ["q1"],
+        _script_fetcher({"q1": ["busy", 1]}, calls),
+        emit_fn=lambda m: None,
+        sleep_fn=lambda s: None,
+        check_stopped=lambda: None,
+        delay_seconds=0.0,
+        target_count=100,
+        rescue_rounds=1,
+        rescue_cooldowns=(60.0,),
+        wait_fn=lambda sec, reason: waits.append((sec, reason)),
+    )
+    assert missing == [] and len(merged) == 1
+    assert (30.0, "数据源繁忙休息") in waits
+    assert (60.0, "补全轮冷却") in waits

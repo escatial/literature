@@ -146,3 +146,32 @@ def test_budget_exhausted_raises_last_error():
     assert calls == ["run"] * 3               # 总尝试 = 1 + 2 轮重启
     assert restarts == [1, 2]
     assert sum(sleeps) == 111.0 + 222.0       # 两档冷却都用了
+
+
+# ---------- v9.8 长等待上报(wait_fn) ----------
+
+def test_wait_fn_called_before_restart_cooldown():
+    waits: list[tuple[float, str]] = []
+    calls: list[str] = []
+    inner = _scripted_inner(calls, [CnkiSessionBlockedError("风控"), "ok"])
+    cnki_adapter._run_with_auto_restart(
+        inner, rounds=2, cooldowns=(120.0,),
+        emit_fn=lambda m: None,
+        sleep_fn=lambda s: None,
+        check_stopped=lambda: None,
+        before_restart=lambda a: None,
+        wait_fn=lambda sec, reason: waits.append((sec, reason)),
+    )
+    assert waits == [(120.0, "自愈冷却")]
+
+
+def test_crawler_notify_wait_threshold_and_callback(monkeypatch):
+    from automation.cnki import crawler as cr
+    seen: list[tuple[float, str]] = []
+    monkeypatch.setattr(cr._wait_local, "callback", lambda s, r: seen.append((s, r)), raising=False)
+    cr.notify_wait(5, "太短不上报")     # <10s 不打扰
+    cr.notify_wait(15, "退避")
+    assert seen == [(15, "退避")]
+    # 回调抛异常绝不影响主流程
+    monkeypatch.setattr(cr._wait_local, "callback", lambda s, r: (_ for _ in ()).throw(RuntimeError("x")), raising=False)
+    cr.notify_wait(20, "异常也要吞")

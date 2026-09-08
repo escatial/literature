@@ -586,6 +586,7 @@ def _run_with_auto_restart(
     sleep_fn,
     check_stopped,
     before_restart,
+    wait_fn=None,
 ):
     """agent 自愈重启循环:检索整体失败 → 冷却 → 重置会话 → 自动重启。
 
@@ -617,6 +618,8 @@ def _run_with_auto_restart(
                 f"冷却 {cooldown:.0f}s 后自动重启检索"
                 f"(第 {attempt + 1}/{rounds + 1} 次,可随时停止)"
             )
+            if wait_fn is not None:
+                wait_fn(cooldown, "自愈冷却")
             _sleep_in_chunks(sleep_fn, check_stopped, cooldown)
             before_restart(attempt)
 
@@ -633,6 +636,7 @@ def _run_with_rescue(
     rescue_rounds: int = _RESCUE_ROUNDS,
     rescue_cooldowns: tuple[float, ...] = _RESCUE_COOLDOWNS,
     progress_fn=None,
+    wait_fn=None,
 ) -> tuple[dict[str, dict], list[str]]:
     """首轮顺序抓取 + 失败式子多轮补漏调度(产品级「不丢单」语义)。
 
@@ -690,6 +694,8 @@ def _run_with_rescue(
                 break
             # 冷却 30s 让知网限流窗口衰减(连续短退避只会加重风控)
             emit_fn("[检索] 数据源繁忙，休息 30s 后继续")
+            if wait_fn is not None:
+                wait_fn(30.0, "数据源繁忙休息")
             sleep_fn(30.0)
         except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
                 crawler.CnkiRevisionError, crawler.CnkiSessionBlockedError):
@@ -717,6 +723,8 @@ def _run_with_rescue(
         cooldown = rescue_cooldowns[min(round_index, len(rescue_cooldowns) - 1)]
         emit_fn(f"[补全] 第 {round_index + 1}/{rescue_rounds} 轮：待补 {len(missing)} 条检索式，"
                 f"稍后自动开始（可随时停止）")
+        if wait_fn is not None:
+            wait_fn(cooldown, "补全轮冷却")
         _sleep_in_chunks(sleep_fn, check_stopped, cooldown)
         still_missing: list[str] = []
         for order, query in enumerate(missing, start=1):
@@ -785,6 +793,14 @@ async def run_cnki_full_auto(
         if (stop_event is not None and stop_event.is_set()) or state.cancel_event.is_set():
             raise _CnkiStopped("用户已手动停止")
 
+    def _wait_fn(seconds: float, reason: str) -> None:
+        """长等待上报(≥10s):走 crawler 的线程本地等待回调 → waiting 事件。
+
+        定义在 run_cnki_full_auto 层级:_sync_run(装回调)与
+        _run_sync_inner(两个调度器消费 wait_fn)都要引用。
+        """
+        crawler.notify_wait(seconds, reason)
+
     # 监控任务登记（Q-1 修复②）:注册提前到检索式预检之前,
     # 预检失败的任务也在面板留痕(failed 终态),杜绝「start 返回 running
     # 但面板永远无此任务」的静默丢失
@@ -850,6 +866,14 @@ async def run_cnki_full_auto(
         # 绑定任务线程:crawler.safe_request 的请求记账/环形日志归属本任务
         crawler.set_current_task(task_id)
         crawler.set_log_callback(lambda m: emit(stage="log", msg=m, db=db_type))
+        # v9.8 长等待上报:限流退避/节拍/自愈冷却 ≥10s 时通知前端,
+        # 进度条切流光动画+倒计时,不再静止数分钟像坏了
+        crawler.set_wait_callback(
+            lambda seconds, reason: emit(
+                stage="waiting", db=db_type,
+                wait_seconds=round(seconds), reason=reason or "等待",
+            )
+        )
         outcome = "done"
         error_msg = ""
 
@@ -874,6 +898,7 @@ async def run_cnki_full_auto(
                 sleep_fn=crawler.sleep_jitter,
                 check_stopped=_check_stopped,
                 before_restart=_before_restart,
+                wait_fn=_wait_fn,
             )
         except _CnkiStopped as exc:
             outcome, error_msg = "stopped", str(exc)
@@ -882,6 +907,7 @@ async def run_cnki_full_auto(
             outcome, error_msg = "failed", str(exc)
             raise
         finally:
+            crawler.set_wait_callback(None)
             crawler.set_log_callback(None)
             crawler.set_current_task(None)
             try:
@@ -926,6 +952,7 @@ async def run_cnki_full_auto(
                     stage="list_progress", db=db_type,
                     progress_total=total, progress_done=done,
                 ),
+                wait_fn=_wait_fn,
             )
         except (crawler.CnkiCookieError, crawler.CnkiCaptchaBalanceError,
                 crawler.CnkiRevisionError, crawler.CnkiSessionBlockedError) as exc:

@@ -17,6 +17,10 @@ interface CnkiTaskRow {
   // v9.8:列表阶段进度(list_progress 事件置 true,fetched 事件置 false)——
   // 进度条分段映射:列表 0-49%,详情 50-99%,阶段切换不回跳
   listPhase?: boolean;
+  // v9.8:长等待(退避/冷却 ≥10s,waiting 事件携带)——进度条切流光动画+倒计时,
+  // 静止数分钟的进度条在用户眼里与坏了没有区别
+  waitUntil?: number;
+  waitReason?: string;
   // 检索过程日志(带时间戳前缀),按出现顺序追加,最多保留 200 条
   logs?: string[];
 }
