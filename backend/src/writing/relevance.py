@@ -101,19 +101,81 @@ _CONCEPT_SYSTEM = """你是学术文献检索专家。任务:把用户的研究�
 """
 
 
+def _salvage_truncated_concepts(raw: str) -> dict | list | None:
+    """从被 max_tokens 截断的概念组 JSON 里抢救已完整的概念对象。
+
+    思考型模型的正文预算被推理消耗后,JSON 常在 concepts 数组中途截断;
+    扫描数组内逐个完整闭合的对象,丢弃残缺的最后一个,补上 ]} 后重解析。
+    """
+    start = raw.find("{")
+    if start == -1:
+        return None
+    marker = raw.find('"concepts"', start)
+    if marker == -1:
+        return None
+    arr = raw.find("[", marker)
+    if arr == -1:
+        return None
+    i, n = arr + 1, len(raw)
+    last_obj_end = -1
+    while i < n:
+        while i < n and raw[i] in " \t\r\n,":
+            i += 1
+        if i >= n or raw[i] != "{":
+            break
+        depth, in_str, esc, j = 0, False, False, i
+        while j < n:
+            ch = raw[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            j += 1
+        if j >= n:
+            break  # 最后一个对象未闭合,丢弃
+        last_obj_end = j
+        i = j + 1
+    if last_obj_end == -1:
+        return None
+    repaired = raw[start:last_obj_end + 1] + "]}"
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        return None
+
+
 def _build_concept_groups_once(topic: str) -> list[dict] | None:
     """单次 LLM 调用生成概念组;解析失败/为空返回 None。"""
     from llm.client import messages_create
 
+    # v9.8:MiniMax 推理模型的思考内容与正文共享 max_tokens 预算,
+    # 1500 上限下正文 JSON 常被截断("Unterminated string")→ 概念组
+    # 全灭 → 英文文献只剩字面匹配 → 高相关 0 篇(线上实测)。
+    # 预算放大 + 截断抢救双保险。
     raw = messages_create(
         _CONCEPT_SYSTEM,
         f"研究主题:{topic}",
-        max_tokens=1500,
+        max_tokens=4000,
         temperature=0.3,
         timeout=60.0,
     )
     cleaned = re.sub(r"```(?:json)?|```", "", raw or "").strip()
-    data = json.loads(cleaned)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        data = _salvage_truncated_concepts(cleaned)
     if isinstance(data, list):
         data = data[0] if data else {}
     groups: list[dict] = []

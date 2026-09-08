@@ -121,12 +121,20 @@ async function consumeWritingSSE(
   onUpdate: (s: StreamState) => void,
   signal?: AbortSignal,
 ): Promise<StreamState> {
-  const resp = await fetch(url, {
+  // v9.8:5xx 自动重试一次 —— 路由级 5xx 意味着服务端什么都没执行(未进流),
+  // 重试幂等零成本;吸收开发态热重载/进程重启的瞬时窗口,避免用户看到
+  // 凭空出现的"HTTP 500:服务器内部错误"还得手点重试
+  const doFetch = () => fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),
     signal,
   });
+  let resp = await doFetch();
+  if (resp.status >= 500 && !signal?.aborted) {
+    await new Promise((r) => setTimeout(r, 2000));
+    resp = await doFetch();
+  }
 
   if (!resp.ok || !resp.body) {
     // v9.7:读出响应体里的错误详情(后端全局异常处理器返回 {"detail": "..."}),
