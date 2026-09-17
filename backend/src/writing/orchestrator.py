@@ -984,23 +984,40 @@ def _run_post_write_qa(
             ruleset = default_rule_set
 
     def _soft_on_fail(summary) -> None:  # noqa: ANN001
-        # v9.7:QA FAIL 不再报废整篇综述。此时正文/参考文献已全部生成,
-        # 抛错只会丢掉全部 LLM 成本,且 raise 路径连核查报告都不返回,
-        # 用户只能看到一句笼统的"未通过"。改为:照常返回 payload,
-        # overall/issues 经 qa_done 事件与 complete.qa_report 交付前端,
-        # 由用户决定是否采纳;真正的失败信息一处不丢。
-        log.warning("QA 核查未通过(软门禁,不阻断输出): %s",
+        # 失败不会静默交付：外层会先执行确定性修复并重新核查。
+        log.warning("QA 首轮未通过，准备自动修复: %s",
                     ", ".join(r.name for r in summary.results
                               if r.status == "fail"))
 
-    return run_post_write_qa(
-        runner=QARunner(ruleset),
-        papers=papers,
-        sections=sections,
-        reference_list=reference_list,
-        grades=grade_map,
-        on_fail=_soft_on_fail,
-    )
+    payload = None
+    auto_repairs = []
+    # runner 内部会修复确定性的作者标点、期刊名泄漏等问题；这里再进行
+    # 一轮闭环，避免修复后仍沿用旧的报告状态。保留软门禁兼容性，
+    # 对无法自动修复的元数据问题返回明确 FAIL，而不是伪造 PASS。
+    for attempt in range(2):
+        payload = run_post_write_qa(
+            runner=QARunner(ruleset),
+            papers=papers,
+            sections=sections,
+            reference_list=reference_list,
+            grades=grade_map,
+            on_fail=_soft_on_fail,
+        )
+        summary = payload.get("summary", {}) if payload else {}
+        if summary.get("overall") != "fail":
+            break
+        from qa.article_lint import repair_article_text
+        repairs = repair_article_text(sections, papers=papers)
+        auto_repairs.extend(repairs)
+        if not repairs:
+            break
+        # 正文发生变化后，编号和参考文献映射必须重新生成，防止报告读取旧引用。
+        reference_list, _ = apply_citation_numbering(sections, papers)
+    if payload is None:
+        return {"skipped": True, "reason": "QA 未执行"}
+    if auto_repairs:
+        payload.setdefault("summary", {}).setdefault("auto_repairs", []).extend(auto_repairs)
+    return payload
 
 
 def plan_review_stream(
