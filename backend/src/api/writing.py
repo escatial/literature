@@ -11,7 +11,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.retrieval.types import Paper, Source
+from src.retrieval.types import Paper, Source, normalize_source
+from src.retrieval.provenance import derive_paper_provenance
 from src.writing.classifier import Group
 from src.writing.orchestrator import (
     collect_cited_ids,
@@ -22,6 +23,10 @@ from src.writing.orchestrator import (
 )
 
 router = APIRouter(tags=["writing"])
+
+# 写作任务协作式取消：本地单用户工作台允许同时停止当前活动流。
+_WRITING_STOP_EVENTS: set[threading.Event] = set()
+_WRITING_STOP_LOCK = threading.Lock()
 
 
 def _validate_writing_request(req: WritingRequest) -> None:
@@ -51,17 +56,27 @@ def _sse_stream_response(stream_fn) -> StreamingResponse:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
         started_at = time.monotonic()
+        stop_event = threading.Event()
+        with _WRITING_STOP_LOCK:
+            _WRITING_STOP_EVENTS.add(stop_event)
 
         def publish(kind: str, payload: Any) -> None:
+            # 停止后丢弃尚未入队的进度，避免前端在点击停止后又收到旧事件。
+            if stop_event.is_set() and kind == "chunk":
+                return
             loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
 
         def produce() -> None:
             try:
-                for chunk in stream_fn():
+                for chunk in stream_fn(stop_event, publish):
+                    if stop_event.is_set():
+                        break
                     publish("chunk", chunk)
             except BaseException as exc:
                 publish("failure", exc)
             finally:
+                with _WRITING_STOP_LOCK:
+                    _WRITING_STOP_EVENTS.discard(stop_event)
                 publish("done", None)
 
         worker = threading.Thread(
@@ -79,7 +94,8 @@ def _sse_stream_response(stream_fn) -> StreamingResponse:
                     "event": "heartbeat",
                     "data": {"elapsed_seconds": int(time.monotonic() - started_at)},
                 }
-                yield f"data: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
+                # 注释行 + padding 促使开发代理立即 flush，避免长时间无正文时浏览器收不到心跳。
+                yield f": heartbeat\n: {' ' * 1024}\n\ndata: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
                 continue
 
             if kind == "chunk":
@@ -96,13 +112,23 @@ def _sse_stream_response(stream_fn) -> StreamingResponse:
 
     return StreamingResponse(
         event_gen(),
-        media_type="text/event-stream",
+        media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/writing/stop")
+def writing_stop() -> dict:
+    """立即请求停止当前写作流；循环会在当前 LLM/网络调用返回后退出。"""
+    with _WRITING_STOP_LOCK:
+        events = list(_WRITING_STOP_EVENTS)
+    for event in events:
+        event.set()
+    return {"stopped": len(events)}
 
 
 class PaperIn(BaseModel):
@@ -127,9 +153,10 @@ class PaperIn(BaseModel):
     raw_citation: str | None = None
 
     def to_paper(self) -> Paper:
+        source = normalize_source(self.source)
         return Paper(
             lit_id=self.lit_id,
-            source=Source(self.source),
+            source=source,
             title=self.title,
             authors=self.authors,
             journal=self.journal or "",
@@ -143,6 +170,7 @@ class PaperIn(BaseModel):
             cited_by_count=self.cited_by_count,
             journal_level=self.journal_level,
             relevance_score=self.relevance_score,
+            provenance=derive_paper_provenance(source.value, self.lit_id, self.source_url),
             raw_citation=self.raw_citation,
         )
 
@@ -303,13 +331,14 @@ async def writing_generate_stream(req: WritingRequest):
         _to_domain_groups(req.confirmed_groups)
         if req.confirmed_groups is not None else None
     )
-    return _sse_stream_response(lambda: generate_review_stream(
+    return _sse_stream_response(lambda stop_event, _publish: generate_review_stream(
         topic=req.topic,
         papers=papers,
         classify_mode=req.classify_mode,
         do_screening=req.do_screening,
         confirmed_groups=confirmed,
         relevance_report=req.relevance_report,
+        stop_event=stop_event,
     ))
 
 
@@ -330,8 +359,21 @@ async def writing_plan_stream(req: PlanRequest):
     传 confirmed_groups 进入阶段2正文写作。
     """
     papers = [p.to_paper() for p in req.papers]
-    return _sse_stream_response(lambda: plan_review_stream(
+
+    def publish_classify_progress(stop_event, publish):
+        def emit(data):
+            if stop_event.is_set():
+                raise RuntimeError("用户已停止写作")
+            publish(
+                "chunk",
+                f"data: {json.dumps({'event': 'classify_progress', 'data': data}, ensure_ascii=False)}\n\n",
+            )
+        return emit
+
+    return _sse_stream_response(lambda stop_event, publish: plan_review_stream(
         topic=req.topic,
         papers=papers,
         classify_mode=req.classify_mode,
+        stop_event=stop_event,
+        progress=publish_classify_progress(stop_event, publish),
     ))

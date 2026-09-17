@@ -1,18 +1,17 @@
 /**
  * v7.0 任务隔离:全局 task_id session store。
  *
- * - 应用启动时自动生成 task_id(不调后端,本地生成时间戳格式 id)。
+ * - 页面加载时自动生成 task_id(不调后端,本地生成时间戳格式 id)。
  * - 启动新检索时,UI 调用 newPaperSession(currentId),后端复用并清空该 task 的论文,
  *   返回的 task_id 写回本 store 与 localStorage。
- * - http.ts 的请求拦截器从 localStorage 读 X-Task-Id(同步源,避开循环依赖)。
+ * - task_id 只保留在当前标签页会话,关闭页面后重新生成。
  * - 整个生命周期内任意时刻只有一个 current task。
  */
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { newPaperSession } from '@/api/endpoints';
 
-/** 与 http.ts 共享同一个 LS_KEY,确保拦截器和 store 读同一份。 */
-export const TASK_ID_LS_KEY = 'lit_review.current_task_id';
+export const TASK_ID_SESSION_KEY = 'lit_review.current_task_id';
 
 /**
  * v8.2:时间戳相关的任务 id —— `t-{yyyyMMddHHmmss}-{4位随机}`。
@@ -30,19 +29,15 @@ export function newTimestampId(): string {
 export const useSessionStore = defineStore('session', () => {
   /**
    * 当前任务 id(每次启动新检索时由后端 newPaperSession 刷新)。
-   * 修复:X-Task-Id 断链 —— 初始生成的 uuid 必须立刻写回 localStorage。
-   * 否则 http.ts 拦截器读 LS 为空 → 请求不带 X-Task-Id → 后端 papers 不打
-   * task_id 标签(检索页从不调用 startNewTask,LS 永远不会被写入)。
+   * v9.6:任务 id 只保存在 sessionStorage,避免重新打开页面继续关联上次任务。
    */
-  const initialTaskId = localStorage.getItem(TASK_ID_LS_KEY) || newTimestampId();
-  if (!localStorage.getItem(TASK_ID_LS_KEY)) {
-    localStorage.setItem(TASK_ID_LS_KEY, initialTaskId);
-  }
+  const initialTaskId = sessionStorage.getItem(TASK_ID_SESSION_KEY) || newTimestampId();
+  sessionStorage.setItem(TASK_ID_SESSION_KEY, initialTaskId);
   const currentTaskId = ref<string>(initialTaskId);
 
   function setCurrent(id: string): void {
     currentTaskId.value = id;
-    localStorage.setItem(TASK_ID_LS_KEY, id);
+    sessionStorage.setItem(TASK_ID_SESSION_KEY, id);
   }
 
   /**

@@ -134,8 +134,10 @@
       '<else-if type="article-journal article-magazine periodical" match="any">
         <choose>
           <!-- 完整卷期页码的期刊文章由载体宏输出 J,此处不重复输出。 -->
-          <if type="article-journal" variable="volume issue page" match="all">
+          <if type="article-journal" variable="medium" match="all">
           </if>
+          <else-if type="article-journal" variable="volume issue page" match="all">
+          </else-if>
           <else>
             <text value="J"/>
           </else>

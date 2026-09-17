@@ -132,7 +132,13 @@
         <text value="A"/>
       </if>
       <else-if type="article-journal article-magazine periodical" match="any">
-        <text value="J"/>
+        <choose>
+          <if type="article-journal" variable="medium" match="all">
+          </if>
+          <else>
+            <text value="J"/>
+          </else>
+        </choose>
       </else-if>
       <else-if type="article-newspaper">
         <text value="N"/>

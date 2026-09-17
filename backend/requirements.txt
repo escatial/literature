@@ -1,5 +1,8 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
+# uvicorn[standard] 0.52+ imports ServerProtocol, which is unavailable in
+# websockets 10.x and otherwise makes the backend subprocess crash on startup.
+websockets>=13.0,<16
 httpx>=0.27
 pydantic>=2.6
 openai>=1.40

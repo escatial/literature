@@ -76,7 +76,6 @@ interface State {
   autoRetryCount: number;
 }
 
-const STORAGE_KEY = 'lit-review-unified-retrieval-v1';
 const REQUIRED_DATABASES = ['cnki', 'openalex', 'pubmed'] as const;
 
 const initial: State = {
@@ -104,54 +103,19 @@ const initial: State = {
   autoRetryCount: 0,
 };
 
-function loadFromStorage(): Partial<State> {
-  if (typeof localStorage === 'undefined') return {};
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    // Set 在 JSON 里退化为对象;恢复为 Set,避免去重指纹失效
-    if (parsed.ingestedEnKeys && !(parsed.ingestedEnKeys instanceof Set)) {
-      parsed.ingestedEnKeys = new Set(parsed.ingestedEnKeys);
-    }
-    return parsed;
-  } catch {
-    return {};
-  }
-}
-
-function saveToStorage(s: State) {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    const payload = {
-      ...s,
-      ingestedEnKeys: Array.from(s.ingestedEnKeys || []),
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  } catch { /* ignore */ }
-}
-
 export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
-  // v9.6:接线 loadFromStorage——此前只写不读,刷新后任务进度全丢,
-  // 且 isRunning 语义失效允许重复开任务(与页面注释宣称的行为相反)
-  state: (): State => {
-    const restored = { ...initial, ...loadFromStorage() } as State;
-    // 旧版本持久化数据可能缺键/类型漂移,兜底补齐防运行时 undefined
-    restored.enTasks = {
-      openalex: restored.enTasks?.openalex ?? { db: 'openalex', task_id: '', logs: [] },
-      pubmed: restored.enTasks?.pubmed ?? { db: 'pubmed', task_id: '', logs: [] },
-    };
-    restored.cnkiTasks = restored.cnkiTasks ?? {};
-    restored.ingestedEnKeys = restored.ingestedEnKeys instanceof Set
-      ? restored.ingestedEnKeys
-      : new Set<string>();
-    return restored;
-  },
+  state: (): State => ({
+    ...initial,
+    enTasks: {
+      openalex: { db: 'openalex', task_id: '', logs: [] },
+      pubmed: { db: 'pubmed', task_id: '', logs: [] },
+    },
+    ingestedEnKeys: new Set<string>(),
+  }),
 
   actions: {
-    /** 任何状态变更后调用,持久化。 */
+    /** 任何状态变更后调用,状态仅保留在当前页面会话。 */
     persist() {
-      saveToStorage(this.$state as State);
     },
 
     reset() {
@@ -161,7 +125,6 @@ export const useUnifiedRetrievalStore = defineStore('unifiedRetrieval', {
         openalex: { db: 'openalex', task_id: '', logs: [] },
         pubmed: { db: 'pubmed', task_id: '', logs: [] },
       };
-      this.persist();
     },
 
     /** 主题被改了,清掉旧的检索式结果。 */

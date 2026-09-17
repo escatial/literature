@@ -288,13 +288,23 @@ def _persist_record(record: dict, pool_task_id: str | None = None) -> bool:
     if pool_task_id:
         record = {**record, "task_id": pool_task_id}
     with SessionLocal() as db:
-        # v8.1:按 (task_id, lit_id) 查重 —— 同一文献可在不同任务各存一行
-        q = db.query(PaperModel).filter(PaperModel.lit_id == record["lit_id"])
-        if pool_task_id:
-            q = q.filter(PaperModel.task_id == pool_task_id)
-        else:
-            q = q.filter(PaperModel.task_id.is_(None))
-        existing = q.first()
+        # 文献 URL 常带会话/分页参数，同一篇文献可能因此生成不同 lit_id。
+        # identity_key 才是同一任务内的稳定去重键，必须优先于 lit_id。
+        task_filter = (PaperModel.task_id == pool_task_id) if pool_task_id else PaperModel.task_id.is_(None)
+        identity = record.get("identity_key")
+        existing = (
+            db.query(PaperModel)
+            .filter(task_filter, PaperModel.identity_key == identity)
+            .first()
+            if identity
+            else None
+        )
+        if existing is None:
+            existing = (
+                db.query(PaperModel)
+                .filter(task_filter, PaperModel.lit_id == record["lit_id"])
+                .first()
+            )
         if existing:
             for k, v in record.items():
                 if k in {"lit_id", "created_at"}:
@@ -319,6 +329,7 @@ def _persist_records(records: list[dict], pool_task_id: str | None = None) -> li
 
     results: list[bool] = []
     valid: list[dict] = []
+    seen_keys: set[tuple[str, str | None]] = set()
     for record in records:
         try:
             validate_paper_provenance(
@@ -329,6 +340,16 @@ def _persist_records(records: list[dict], pool_task_id: str | None = None) -> li
             continue
         if pool_task_id:
             record = {**record, "task_id": pool_task_id}
+        # 同一批次内先去重，避免两个不同 URL/lit_id 的记录互相撞唯一索引。
+        dedupe_key = (
+            str(record.get("identity_key")), record.get("task_id")
+        ) if record.get("identity_key") else (
+            f"lit:{record.get('lit_id')}", record.get("task_id")
+        )
+        if dedupe_key in seen_keys:
+            results.append(False)
+            continue
+        seen_keys.add(dedupe_key)
         valid.append(record)
         results.append(True)
     if not valid:
@@ -336,14 +357,20 @@ def _persist_records(records: list[dict], pool_task_id: str | None = None) -> li
     try:
         with SessionLocal() as db:
             for record in valid:
-                # v8.1:按 (task_id, lit_id) 查重 —— 同一文献可在不同任务各存一行
-                q = db.query(PaperModel).filter(PaperModel.lit_id == record["lit_id"])
                 rid = record.get("task_id")
-                if rid:
-                    q = q.filter(PaperModel.task_id == rid)
-                else:
-                    q = q.filter(PaperModel.task_id.is_(None))
-                existing = q.first()
+                task_filter = (PaperModel.task_id == rid) if rid else PaperModel.task_id.is_(None)
+                identity = record.get("identity_key")
+                existing = (
+                    db.query(PaperModel)
+                    .filter(task_filter, PaperModel.identity_key == identity)
+                    .first()
+                    if identity
+                    else None
+                )
+                if existing is None:
+                    existing = db.query(PaperModel).filter(
+                        task_filter, PaperModel.lit_id == record["lit_id"]
+                    ).first()
                 if existing:
                     for k, v in record.items():
                         if k in {"lit_id", "created_at"}:
@@ -687,13 +714,13 @@ def _run_with_rescue(
         except CnkiServerBusyError as exc:
             missing.append(query)
             busy_streak += 1
-            emit_fn(f"[检索] {index}/{len(queries)} 数据源暂时繁忙，已记入待补全队列（待补 {len(missing)} 条）")
+            emit_fn(f"[检索] {index}/{len(queries)} 请求未获得有效结果，已记入待补全队列（待补 {len(missing)} 条）")
             if busy_streak >= 3:
                 aborted_by_busy = True
-                emit_fn("[检索] 数据源暂时繁忙，首轮已暂停，未完成的检索已自动转入补全队列")
+                emit_fn("[检索] 连续请求未获得有效结果，首轮已暂停，未完成的检索已自动转入补全队列")
                 break
             # 冷却 30s 让知网限流窗口衰减(连续短退避只会加重风控)
-            emit_fn("[检索] 数据源繁忙，休息 30s 后继续")
+            emit_fn("[检索] 正在更换会话并冷却请求，30s 后继续")
             if wait_fn is not None:
                 wait_fn(30.0, "数据源繁忙休息")
             sleep_fn(30.0)
@@ -929,7 +956,10 @@ async def run_cnki_full_auto(
                 if query.startswith(("SU=", "TI=", "KY=", "AB=", "FT="))
                 else crawler.build_query(keyword=query)
             )
-            found = crawler.fetch_all_list(query_json=query_json, max_count=per_query_count)
+            # 列表翻页共享 Cookie/turnpage/验证码状态；整个检索式必须保持
+            # 连续执行，不能与另一检索式交错翻页，否则会把会话状态污染成空壳。
+            with crawler._search_request_lock:
+                found = crawler.fetch_all_list(query_json=query_json, max_count=per_query_count)
             # v8.7:总库混入学位论文,先剔除(只留期刊)
             found = _strip_thesis_items(found, emit, db_type)
             # v8.4 守门:知网静默降级(检索式未生效)时整批弃用,交调度器入补漏队列

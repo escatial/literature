@@ -104,11 +104,15 @@ def check_literature_quota(
     english = total - chinese
 
     # 1) 总量区间
-    if total < thresholds.total_min:
+    # 小规模用户自选池不应因无法满足“70~90篇”的正式综述建议而被判硬失败。
+    # 当输入池本身小于最低阈值时，数量/语种问题改为 WARN；正常规模池仍保持
+    # 原有硬门禁，避免把不完整综述误报为合规。
+    small_pool = total < thresholds.total_min
+    if small_pool:
         issues.append(QAIssue(
-            "QUOTA_TOTAL_LOW", QACheckStatus.FAIL,
+            "QUOTA_TOTAL_LOW", QACheckStatus.WARN,
             "total", "literature_pool",
-            f"总文献 {total} 低于阈值 {thresholds.total_min}",
+            f"总文献 {total} 低于正式综述建议阈值 {thresholds.total_min}，当前按用户自选小文献池完成写作",
         ))
     elif total > thresholds.total_max:
         # 总量上限作为 WARN(超出区间但通常学术综述可接受略多)
@@ -123,7 +127,7 @@ def check_literature_quota(
         cn_ratio = chinese / total
         if cn_ratio + 1e-9 < thresholds.chinese_ratio_min:
             issues.append(QAIssue(
-                "QUOTA_CN_LOW", QACheckStatus.FAIL,
+                "QUOTA_CN_LOW", QACheckStatus.WARN if small_pool else QACheckStatus.FAIL,
                 "chinese_ratio", "literature_pool",
                 f"中文占比 {cn_ratio:.2%} 低于阈值 {thresholds.chinese_ratio_min:.2%}",
             ))
@@ -135,9 +139,11 @@ def check_literature_quota(
                 f"英文占比 {english / total:.2%} 高于指导值 {thresholds.english_ratio_max:.2%}",
             ))
 
-        # 3) 核心(高相关)文献占比
+        # 3) 核心期刊/核心来源占比。没有 journal_level 元数据时不能把
+        # relevance grade 的 high 误当作“核心期刊”，否则会制造伪告警。
         core, evaluated = _count_core(papers, grades)
-        if grades and evaluated:
+        journal_level_available = any(str(p.journal_level or "").strip() for p in papers)
+        if grades and evaluated and journal_level_available:
             core_ratio = core / evaluated
             if core_ratio + 1e-9 < thresholds.core_ratio_min:
                 issues.append(QAIssue(

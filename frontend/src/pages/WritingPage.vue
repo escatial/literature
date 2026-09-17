@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import {
   ElAlert,
   ElButton,
   ElCard,
+  ElCollapse,
+  ElCollapseItem,
   ElDivider,
   ElEmpty,
   ElInput,
@@ -34,16 +36,41 @@ const form = reactive({
 // 写作状态全局持有:切换 tab 不中断任务、不丢进度
 const { stream, running, awaitingConfirm, topic, hasProgress } = storeToRefs(writingStore);
 
-// 组件挂载时尝试恢复快照(刷新页面或上次崩溃也能恢复进度)
-writingStore.restore();
+// 独立于 SSE 的本地计时：即使后端长时间没有业务事件，用户仍能看到任务真实运行时长。
+const displayElapsedSeconds = ref(0);
+let elapsedTimer: number | undefined;
+let elapsedStartedAt = 0;
+watch(running, (isRunning) => {
+  if (isRunning) {
+    elapsedStartedAt = Date.now();
+    displayElapsedSeconds.value = 0;
+    window.clearInterval(elapsedTimer);
+    elapsedTimer = window.setInterval(() => {
+      displayElapsedSeconds.value = Math.max(
+        displayElapsedSeconds.value,
+        Math.floor((Date.now() - elapsedStartedAt) / 1000),
+      );
+    }, 500);
+  } else {
+    window.clearInterval(elapsedTimer);
+    elapsedTimer = undefined;
+  }
+}, { immediate: true });
 
 const allPapers = ref<Paper[]>([]);
 const loadingPapers = ref(false);
+const activityLogEl = ref<HTMLElement | null>(null);
+
+watch(() => stream.value.activityLog.length, async () => {
+  await nextTick();
+  if (activityLogEl.value) activityLogEl.value.scrollTop = 0;
+});
 
 const loadPapers = async () => {
   loadingPapers.value = true;
   try {
-    // 写作池 = 文献池页「去写作」筛选导入的集合(selected=true),此处不再做二次筛选
+    // 写作入口只加载文献池页勾选的集合；主题相关性与摘要质量由后端
+    // 规划阶段统一筛选，前端不自行删减或改变文献归属。
     allPapers.value = await papersStore.fetchFiltered({
       selected_only: true,
       limit: 5000,
@@ -55,7 +82,13 @@ const loadPapers = async () => {
   }
 };
 
-onMounted(loadPapers);
+onMounted(() => {
+  void loadPapers();
+});
+
+onBeforeUnmount(() => {
+  window.clearInterval(elapsedTimer);
+});
 
 const selectedPapers = computed(() => allPapers.value.filter((paper) => paper.selected));
 const selectedCount = computed(() => selectedPapers.value.length);
@@ -90,6 +123,12 @@ const topicInput = computed({
 });
 
 const phaseLabel = computed(() => {
+  const writingStarted = stream.value.activityLog.some((item) =>
+    item.message.includes('主题已确认，开始生成综述正文'),
+  );
+  if (writingStarted && ['start', 'classify'].includes(stream.value.phase)) {
+    return '章节写作准备中';
+  }
   switch (stream.value.phase) {
     case 'start':
       return '初始化中';
@@ -119,6 +158,38 @@ const phaseLabel = computed(() => {
       return '';
   }
 });
+
+const actionLabel = computed(() => {
+  if (!running.value) {
+    return awaitingConfirm.value ? '请在下方确认主题' : '① 划分主题';
+  }
+  // 阶段2由已确认的 plan 启动。即使某个过渡事件暂时仍把 phase 留在
+  // classify，只要 plan 已存在且不再等待确认，按钮就必须显示正文状态。
+  if (stream.value.phase === 'reference') return '整理参考文献中...';
+  if (stream.value.phase === 'qa') return '质量核查中...';
+  if (stream.value.activityLog.some((item) =>
+    item.message.includes('主题已确认，开始生成综述正文'),
+  )) {
+    return '生成正文中...';
+  }
+  if (!awaitingConfirm.value && (
+    stream.value.plan !== null ||
+    stream.value.currentSection !== null ||
+    stream.value.progress !== null
+  )) {
+    return '生成正文中...';
+  }
+  switch (stream.value.phase) {
+    case 'screening': return '筛选文献中...';
+    case 'classify': return '划分主题中...';
+    case 'writing': return '生成正文中...';
+    default: return '准备任务中...';
+  }
+});
+
+const primaryActionDisabled = computed(() =>
+  awaitingConfirm.value || !topicInput.value.trim() || selectedCount.value === 0 || loadingPapers.value,
+);
 
 const liveChars = computed(() => stream.value.currentSection?.content.length ?? 0);
 const livePreview = computed(() => stream.value.currentSection?.content ?? '');
@@ -200,6 +271,16 @@ const groupPreview = (litIds: string[]) => {
   return rest > 0 ? `${head} 等 ${litIds.length} 篇` : head;
 };
 
+const groupTitles = (litIds: string[]) => {
+  const map = planPaperTitles.value;
+  return litIds.slice(0, 6).map((id) => map.get(id) ?? id);
+};
+
+const blueprintGroup = (name: string) => blueprint.value?.organization.groups.find((g) => g.name === name);
+
+const blueprint = computed(() => stream.value.plan?.blueprint ?? null);
+const blueprintRows = computed(() => blueprint.value?.matrix ?? []);
+
 const removeGroup = (idx: number) => {
   editableGroups.value.splice(idx, 1);
 };
@@ -227,6 +308,20 @@ const stop = () => writingStore.stop();
 const downloadMd = () => {
   const lines: string[] = [];
   lines.push(`# ${topicInput.value.trim()} 文献综述`, '');
+  if (blueprint.value) {
+    lines.push('## 综述设计卡', '');
+    lines.push(`- 综述问题：${blueprint.value.research_question}`);
+    lines.push(`- 组织方式：${blueprint.value.organization.mode}`);
+    lines.push(`- 纳入文献：${blueprint.value.scope.included_count} 篇；筛除：${blueprint.value.scope.screened_out_count} 篇`);
+    lines.push(`- 组织原则：${blueprint.value.organization.principle}`, '');
+    lines.push('## 文献编码矩阵', '');
+    lines.push('| 文献 | 年份 | 主题 | 方法线索 | 核心证据 | 局限 |', '| --- | --- | --- | --- | --- | --- |');
+    for (const row of blueprint.value.matrix) {
+      const cell = (v: unknown) => String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+      lines.push(`| ${cell(row.title)} | ${cell(row.year)} | ${cell(row.group)} | ${cell(row.method)} | ${cell(row.core_findings)} | ${cell(row.limitation)} |`);
+    }
+    lines.push('');
+  }
   for (const s of stream.value.sections) {
     lines.push(`## ${s.title}`, '', s.content, '');
   }
@@ -300,7 +395,7 @@ const downloadMd = () => {
       </div>
       <div style="margin-bottom: 12px; color: #909399; font-size: 12px">
         {{ form.mode === 'theme'
-          ? 'LLM 动态归纳 3-5 个并列研究主题,每个主题写一节'
+          ? '依据全部文献摘要聚类归纳实际研究主题,每个主题写一节'
           : '按中文/外文两节分述,国内一节(知网)+ 国外一节(OpenAlex/PubMed)' }}
         <el-tag v-if="!awaitingConfirm" type="warning" effect="plain" size="small" style="margin-left: 8px">
           流程:① 划分主题 → ② 您确认主题 → ③ 开始写作
@@ -310,13 +405,13 @@ const downloadMd = () => {
         type="primary"
         size="large"
         :loading="running"
-        :disabled="!topicInput.trim() || selectedCount === 0 || loadingPapers"
+        :disabled="primaryActionDisabled"
         @click="start"
       >
-        {{ running ? '划分主题中...' : (awaitingConfirm ? '重新划分主题' : '① 划分主题') }}
+        {{ actionLabel }}
       </el-button>
       <el-button v-if="running" type="danger" size="large" plain @click="stop">
-        停止生成
+        停止任务
       </el-button>
 
       <div v-if="running || stream.phase !== 'idle'" style="margin-top: 16px">
@@ -326,14 +421,14 @@ const downloadMd = () => {
             当前章节: {{ stream.currentSection.title }}
           </el-tag>
           <el-tag v-if="stream.elapsedSeconds > 0" type="info" effect="plain">
-        已运行 {{ formatDuration(stream.elapsedSeconds) }}
+          已运行 {{ formatDuration(Math.max(displayElapsedSeconds, stream.elapsedSeconds)) }}
       </el-tag>
       <el-tag
         v-if="running && stream.waitingSeconds >= 2"
         type="warning"
         effect="plain"
       >
-        当前模型处理中 {{ stream.waitingSeconds }} 秒
+        当前阶段无新结果 {{ stream.waitingSeconds }} 秒
       </el-tag>
       <el-tag v-if="stream.phase === 'screening' && stream.screeningProgress" type="success" effect="plain">
         已处理 {{ stream.screeningProgress.processed }}/{{ stream.screeningProgress.total }} 篇
@@ -376,22 +471,66 @@ const downloadMd = () => {
         >
           {{ stream.detail }}
         </div>
+        <el-collapse v-if="stream.activityLog.length" style="margin-top: 10px">
+          <el-collapse-item name="activity" title="实时工作记录">
+            <div ref="activityLogEl" style="max-height: 180px; overflow: auto; font-size: 12px; line-height: 1.8; color: #606266">
+              <div v-for="item in stream.activityLog.slice().reverse()" :key="item.id">
+                <span style="color: #909399; margin-right: 8px">{{ item.at }}</span>{{ item.message }}
+              </div>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         <div
           v-if="stream.phase === 'writing' && livePreview"
-          style="margin-top: 10px; border: 1px solid #ebeef5; border-radius: 8px; overflow: hidden"
+          style="margin-top: 10px"
         >
-          <div style="padding: 10px 12px; background: #fafafa; border-bottom: 1px solid #ebeef5; color: #606266; font-size: 13px">
-            当前章节流式预览
+          <div style="margin-bottom: 6px; color: #606266; font-size: 13px">
+            正文流式输出{{ stream.currentSection?.title ? ` · ${stream.currentSection.title}` : '' }}
           </div>
-          <div style="padding: 12px; white-space: pre-wrap; line-height: 1.8; color: #303133; max-height: 320px; overflow: auto">
-            {{ livePreview }}
-          </div>
+          <el-input
+            :model-value="livePreview"
+            type="textarea"
+            readonly
+            resize="none"
+            :rows="10"
+            style="width: 100%"
+            input-style="max-height: 320px; min-height: 180px; overflow-y: auto; line-height: 1.8; color: #303133"
+          />
         </div>
       </div>
     </el-card>
 
     <!-- 两阶段·确认点:主题划分完成,必须由用户确认后才进入正文写作 -->
     <template v-if="awaitingConfirm">
+      <el-card v-if="blueprint" style="margin-top: 16px">
+        <template #header>
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap">
+            <span>综述设计卡与证据矩阵</span>
+            <span style="font-size:12px; color:#909399">
+              {{ blueprint.organization.mode }} · 纳入 {{ blueprint.scope.included_count }} 篇 · 筛除 {{ blueprint.scope.screened_out_count }} 篇
+            </span>
+          </div>
+        </template>
+        <div style="display:grid; gap:8px; color:#606266; line-height:1.7; font-size:13px">
+          <div><strong>综述问题：</strong>{{ blueprint.research_question }}</div>
+          <div><strong>范围：</strong>{{ blueprint.scope.time_range[0] ?? '未定'}}, {{ blueprint.scope.time_range[1] ?? '未定'}}, 数据源 {{ blueprint.scope.sources.join('、') || '未标注' }}</div>
+          <div><strong>纳入标准：</strong>{{ blueprint.inclusion_criteria.join('；') }}</div>
+          <div><strong>排除标准：</strong>{{ blueprint.exclusion_criteria.join('；') }}</div>
+          <div><strong>组织原则：</strong>{{ blueprint.organization.principle }}</div>
+        </div>
+        <el-table :data="blueprintRows" size="small" border stripe max-height="420" style="margin-top: 12px">
+          <el-table-column prop="title" label="文献" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="year" label="年份" width="72" />
+          <el-table-column prop="group" label="主题" width="140" show-overflow-tooltip />
+          <el-table-column prop="method" label="方法线索" width="150" show-overflow-tooltip />
+          <el-table-column prop="data_or_sample" label="数据/样本" width="130" show-overflow-tooltip />
+          <el-table-column prop="core_findings" label="摘要证据" min-width="280" show-overflow-tooltip />
+          <el-table-column prop="limitation" label="局限与缺口" width="140" show-overflow-tooltip />
+        </el-table>
+        <div style="margin-top:8px; color:#909399; font-size:12px">
+          矩阵中的“待编码”表示元数据不足，需在精读阶段补全；系统不会用常识替代原文证据。
+        </div>
+      </el-card>
       <el-alert
         :type="stream.plan?.classify_fallback ? 'error' : 'warning'"
         :closable="false"
@@ -401,7 +540,7 @@ const downloadMd = () => {
           ? '自动主题划分失败,当前仅 1 个兜底主题 — 强烈建议重新划分'
           : '主题划分完成,请确认后才会开始写作'"
         :description="stream.plan?.classify_fallback
-          ? '模型未按要求输出分组结果(输出被截断或格式异常),已降级为单一主题兜底。请点「不满意,重新划分」重试;若多次失败请检查模型服务。确认前不会生成任何正文。'
+          ? '模型输出未能可靠完成主题划分，系统已自动整理候选主题。请检查下方主题及文献归属；不满意可重新划分。确认前不会生成正文。'
           : '确认前不会生成任何正文。可修改主题名称、删除不需要的主题;确认后将按这些主题分节写作。'"
       />
       <el-card style="margin-top: 12px">
@@ -442,7 +581,29 @@ const downloadMd = () => {
           >
             删除主题
           </el-button>
+          <div
+            v-if="blueprintGroup(g.name)"
+            style="width:100%; padding:6px 0 2px 68px; color:#909399; font-size:12px; line-height:1.7"
+          >
+            <span v-if="blueprintGroup(g.name)?.boundary">边界：{{ blueprintGroup(g.name)?.boundary }}</span>
+            <span v-if="blueprintGroup(g.name)?.relation_hint" style="margin-left:12px">比较：{{ blueprintGroup(g.name)?.relation_hint }}</span>
+          </div>
         </div>
+        <el-collapse style="margin-top: 8px">
+          <el-collapse-item
+            v-for="(g, idx) in editableGroups"
+            :key="`detail-${idx}`"
+            :name="`detail-${idx}`"
+            :title="`${g.name || `主题 ${idx + 1}`} · ${g.lit_ids.length} 篇文献`"
+          >
+            <div style="display: grid; gap: 5px; color: #606266; font-size: 12px">
+              <div v-for="title in groupTitles(g.lit_ids)" :key="title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
+                {{ title }}
+              </div>
+              <span v-if="g.lit_ids.length > 6" style="color: #909399">其余 {{ g.lit_ids.length - 6 }} 篇已折叠</span>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
         <el-empty
           v-if="editableGroups.length === 0"
           description="已无主题:全部删除将无法写作,请重新划分"

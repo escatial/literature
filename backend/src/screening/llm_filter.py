@@ -21,11 +21,14 @@ SYSTEM = """你是学术论文写作前的文献筛选助手。
 任务:对每篇候选论文同时判断主题相关性和摘要是否足以支撑后续综述写作。
 
 判定规则:
-- relevant=true:论文与用户研究主题在研究对象、问题、方法、理论或应用上有实质关联。
+- relevant=true:论文与用户研究主题的研究对象或核心问题相同、属于直接上下位概念，
+  或者摘要明确说明其结论可直接迁移到该研究对象。
   语义同义即算相关,不要因用字差异误杀:用户主题用词可能不是学术规范表述
   (如「权利寻租」的规范用语是「权力寻租」、「村官」即「村干部」),
   文献标题/摘要中出现规范表述或常见变体时,应视为同一概念。
-- relevant=false:完全无关、仅有表面关键词重合、或研究对象差异过大。
+- relevant=false:完全无关、仅有表面关键词重合、研究对象差异过大，或者仅仅使用了
+  相同算法/模型/研究方法但没有研究同一对象或问题。方法相似只能影响
+  method_applicability 分数，不能单独使 relevant=true。
 - abstract_ok=true:摘要不是空白、占位符、明显截断文本,并且至少能识别研究对象/问题和主要发现、方法或结论中的核心信息。
 - abstract_ok=false:摘要缺失、只有极短描述、明显被截断,或信息不足以支撑学术综述。
 - 不要根据常识补全摘要中没有的信息。
@@ -82,8 +85,8 @@ def _parse_decisions(raw: str) -> list[dict]:
 
 _SCREENING_BATCH_SIZE = 24
 _SCREENING_ABSTRACT_CHARS = 2000
-_SCREENING_TIMEOUT_SECONDS = 90.0
-_SCREENING_MAX_RETRIES = 1
+_SCREENING_TIMEOUT_SECONDS = 75.0
+_SCREENING_MAX_RETRIES = 2
 
 
 def _screen_chunk(
@@ -138,6 +141,17 @@ def _screen_chunk_with_fallback(
         if not retryable or len(papers) <= 1:
             raise
         midpoint = len(papers) // 2
+        return (
+            _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars)
+            + _screen_chunk_with_fallback(papers[midpoint:], topic, abstract_chars)
+        )
+    except Exception as exc:
+        # 连接/超时/网关错误也按“当前批次失败”处理：先二分降低上下文和输出，
+        # 不让一个批次的异常取消其他已完成批次。小批次仍失败才上抛。
+        if len(papers) <= 6:
+            raise ScreeningError(f"筛选批次调用失败(size={len(papers)}): {exc}") from exc
+        midpoint = len(papers) // 2
+        log.warning("筛选批次调用失败(size=%d)，自动二分重试: %s", len(papers), exc)
         return (
             _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars)
             + _screen_chunk_with_fallback(papers[midpoint:], topic, abstract_chars)
@@ -225,7 +239,9 @@ def _screen_batch_events(
     if not batches:
         return
 
-    max_workers = min(4, total_batches)
+    # 筛选是 LLM 重请求；并发 4 容易把单一 provider 的连接池和限额打满。
+    # 降到 2，配合单批二分重试，整体吞吐略降但失败率显著降低。
+    max_workers = min(2, total_batches)
     for batch_index, batch in enumerate(batches[:max_workers], start=1):
         yield {
             "status": "started",

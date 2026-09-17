@@ -331,6 +331,12 @@ class PubMedSource:
             pages=str(record.get("pages") or "") or None,
             doi=doi,
             source_url=f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
+            provenance={
+                "source": "pubmed",
+                "record_id": str(uid),
+                "source_url": f"https://pubmed.ncbi.nlm.nih.gov/{uid}/",
+                "api_url": f"{EUTILS}/esummary.fcgi",
+            },
         )
 
     def _extract_abstract_from_xml(self, xml_text: str) -> str | None:

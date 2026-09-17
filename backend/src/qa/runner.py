@@ -17,6 +17,7 @@ from typing import Any
 from qa.accuracy import check_citation_accuracy
 from qa.binding import check_reference_binding
 from qa.citation_format import check_citation_format
+from qa.article_lint import check_article_text, repair_article_text
 from qa.quota import check_literature_quota
 from qa.models import QACheckResult, QASummary
 from qa.rules import QACheckStatus, QARuleSet, default_rule_set
@@ -50,6 +51,18 @@ class QARunner:
         started = time.monotonic()
         results: list[QACheckResult] = []
         executed = 0
+
+        # 0) 正文可读性与引用排版体检
+        try:
+            repairs = repair_article_text(sections, papers=papers)
+            r = check_article_text(sections, papers=papers)
+            if repairs:
+                r.metrics["auto_repairs"] = repairs
+            results.append(r)
+            executed += 1
+        except Exception as exc:  # noqa: BLE001
+            log.exception("article lint check raised")
+            results.append(_skipped("article_lint_001", "文章正文可读性体检", str(exc)))
 
         # 1) 准确性
         if self.ruleset.check_accuracy:
@@ -121,8 +134,10 @@ def _summarize(
     ruleset: QARuleSet,
 ) -> QASummary:
     """汇总并判定总体状态。"""
-    # 总通过率 = PASS / 已执行 (SKIPPED 不计入分母,避免影响判定)
-    passed = sum(1 for r in results if r.status == QACheckStatus.PASS)
+    # 通过率统计“未失败”的检查；WARN 是可交付但需关注，不应在没有
+    # FAIL 时把总体状态误报为 FAIL。此前 PASS/4=0% 导致小池子正常完成后
+    # 页面仍显示“质量核查失败”。
+    passed = sum(1 for r in results if r.status in {QACheckStatus.PASS, QACheckStatus.WARN})
     pass_rate = passed / executed if executed else 1.0
     overall_status = (
         QACheckStatus.PASS
@@ -130,7 +145,7 @@ def _summarize(
         and all(r.status != QACheckStatus.FAIL for r in results)
         else QACheckStatus.FAIL
     )
-    # 若有 WARN 但未触发 FAIL,且通过率达到阈值,可降级为 WARN(不放行)
+    # 若有 WARN 但未触发 FAIL,总体标记为 WARN，继续交付正文并展示告警。
     if overall_status == QACheckStatus.PASS and any(
         r.status == QACheckStatus.WARN for r in results
     ):

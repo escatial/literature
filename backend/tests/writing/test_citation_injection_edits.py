@@ -72,3 +72,35 @@ def test_content_length_accounting():
     anchor_len = len("[lit_cnki_bbbb]")          # 李四注入
     stripped_len = len("(2020)")                  # 王五剥掉的部分
     assert len(out) == len(content) + anchor_len - stripped_len
+
+
+def test_known_chinese_author_punctuation_is_normalized_before_injection():
+    papers = [_paper("lit_cnki_hu", "胡大伟", 2023)]
+    content = "胡，大，伟等（2023）构建了协同配送模型。"
+    out, cited, dropped = _inject_citations_by_author_year(content, papers)
+    assert out == "胡大伟等（2023）构建了协同配送模型[lit_cnki_hu]。"
+    assert cited == ["lit_cnki_hu"]
+    assert dropped == []
+
+
+def test_known_multi_author_punctuation_is_normalized_without_touching_prose():
+    paper = _paper("lit_cnki_zhao", "赵林林", 2026)
+    paper.authors = ["赵林林", "梁杰"]
+    content = "这类研究与赵，林，林与梁杰（2026）的模型形成对照。"
+    out, cited, dropped = _inject_citations_by_author_year(content, [paper])
+    assert out == "这类研究与赵林林与梁杰（2026）的模型形成对照[lit_cnki_zhao]。"
+    assert cited == ["lit_cnki_zhao"]
+    assert dropped == []
+
+
+def test_common_chinese_surname_does_not_create_false_same_year_ambiguity():
+    papers = [
+        _paper("lit_cnki_li", "李世熙", 2026),
+        _paper("lit_cnki_liu", "刘兴", 2026),
+        _paper("lit_cnki_liang", "李宗晏", 2026),
+    ]
+    content = "李世熙等（2026）构建了协同配送模型。"
+    out, cited, dropped = _inject_citations_by_author_year(content, papers)
+    assert out == "李世熙等（2026）构建了协同配送模型[lit_cnki_li]。"
+    assert cited == ["lit_cnki_li"]
+    assert dropped == []

@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 
 from retrieval.query_planner import plan_query_strings
 from retrieval.reranker import rerank
-from retrieval.types import Paper, Source
+from retrieval.types import Paper, Source, normalize_source
+from retrieval.provenance import derive_paper_provenance
 
 router = APIRouter()
 
@@ -66,9 +67,10 @@ class RerankPaperIn(BaseModel):
     relevance_score: float | None = None
 
     def to_paper(self) -> Paper:
+        source = normalize_source(self.source)
         return Paper(
             lit_id=self.lit_id,
-            source=Source(self.source),
+            source=source,
             title=self.title,
             authors=self.authors,
             journal=self.journal,
@@ -82,6 +84,7 @@ class RerankPaperIn(BaseModel):
             cited_by_count=self.cited_by_count,
             journal_level=self.journal_level,
             relevance_score=self.relevance_score,
+            provenance=derive_paper_provenance(source.value, self.lit_id, self.source_url),
         )
 
 

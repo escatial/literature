@@ -1,5 +1,5 @@
 /** SSE 流式写作客户端:逐章实时回填;两阶段模式(主题划分→用户确认→正文写作)。*/
-import { getWritingStreamURL, getWritingPlanStreamURL } from '@/config/api';
+import { getWritingStreamURL, getWritingPlanStreamURL, getWritingStopURL } from '@/config/api';
 import type { Paper, WritingRequest, WritingResponse } from './types';
 
 export type StreamPhase =
@@ -13,6 +13,10 @@ export type StreamPhase =
   | 'qa'
   | 'complete'
   | 'error';
+
+export async function stopWritingRequest(): Promise<void> {
+  await fetch(getWritingStopURL(), { method: 'POST' });
+}
 
 /** 《文献相关性分级清单》的一行 */
 export interface RelevanceRow {
@@ -52,7 +56,48 @@ export interface PlanPayload {
     papers: Paper[];
     screened_out_ids: string[];
     /** LLM 主题划分失败,单组兜底(前端应提示重新划分) */
-    classify_fallback?: boolean;
+  classify_fallback?: boolean;
+  blueprint?: ReviewBlueprint;
+}
+
+export interface ReviewBlueprint {
+  research_question: string;
+  scope: {
+    time_range: [number | null, number | null];
+    sources: string[];
+    included_count: number;
+    screened_out_count: number;
+  };
+  inclusion_criteria: string[];
+  exclusion_criteria: string[];
+  organization: {
+    mode: string;
+    principle: string;
+    groups: {
+      name: string;
+      count: number;
+      lit_ids: string[];
+      shared_problem_terms?: string[];
+      boundary?: string;
+      comparison_axes?: string[];
+      relation_hint?: string;
+    }[];
+  };
+  matrix: {
+    lit_id: string;
+    title: string;
+    authors: string[];
+    year: number | null;
+    source: string;
+    research_question: string;
+    theory_or_concept: string;
+    method: string;
+    data_or_sample: string;
+    core_findings: string;
+    limitation: string;
+    relation: string;
+    group: string;
+  }[];
 }
 
 export interface StreamState {
@@ -87,6 +132,7 @@ export interface StreamState {
   } | null;
   detail: string | null;
   error: string | null;
+  activityLog: { id: number; at: string; message: string }[];
 }
 
 // v9.6:改为工厂函数——此前模块级单例 + {...initialState} 浅拷贝,sections/
@@ -111,6 +157,7 @@ function createInitialState(): StreamState {
     qaResult: null,
     detail: null,
     error: null,
+    activityLog: [],
   };
 }
 
@@ -160,8 +207,13 @@ async function consumeWritingSSE(
   let state: StreamState = createInitialState();
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
+  let activitySeq = 0;
+  const addActivity = (message: string) => {
+    const item = { id: ++activitySeq, at: new Date().toLocaleTimeString(), message };
+    state.activityLog = [...state.activityLog, item].slice(-80);
+  };
   const ticker = window.setInterval(() => {
-    if (state.phase === 'complete' || state.phase === 'error' || state.phase === 'await_confirm') return;
+    if (state.phase === 'complete' || state.phase === 'error') return;
     const now = Date.now();
     state = {
       ...state,
@@ -209,10 +261,24 @@ async function consumeWritingSSE(
               state.elapsedSeconds,
               Number(evt.data.elapsed_seconds ?? 0),
             );
+            // 心跳也要推送到 Vue 状态；此前只更新了闭包变量，页面会一直显示 1 秒。
+            state.waitingSeconds = Math.floor((Date.now() - lastProgressAt) / 1000);
+            onUpdate({ ...state });
             break;
           case 'start':
-            state.phase = 'start';
-            state.detail = `已接收 ${evt.data.total_papers ?? 0} 篇文献，准备启动综述写作...`;
+            // 阶段2的 start 事件可能因代理缓冲晚于 writing_started 到达，
+            // 不能把已经进入正文的状态回退成“初始化中”。
+            if (!state.activityLog.some((item) => item.message.includes('主题已确认，开始生成综述正文'))) {
+              state.phase = 'start';
+              state.detail = `已接收 ${evt.data.total_papers ?? 0} 篇文献，准备启动综述写作...`;
+              addActivity(state.detail ?? 'AI 质检正在运行');
+            }
+            break;
+          case 'stopped':
+            state.phase = 'idle';
+            state.detail = evt.data.message ?? '已停止写作任务';
+            state.error = null;
+            onUpdate({ ...state });
             break;
           case 'screening_started':
             state.phase = 'screening';
@@ -254,14 +320,51 @@ async function consumeWritingSSE(
             break;
           }
           case 'classify_started':
-            state.phase = 'classify';
+            if (!state.activityLog.some((item) => item.message.includes('主题已确认，开始生成综述正文'))) {
+              state.phase = 'classify';
+            }
             state.detail = `正在按${evt.data.classify_mode === 'theme' ? '主题' : '国内外'}方式进行文献分组...`;
+            addActivity(state.detail ?? 'AI 质检正在运行');
             break;
           case 'classify_progress': {
             // pipeline 内嵌 AI 质检 agent 的实时进度(感知查组/提交被拒/超时)
             state.phase = 'classify';
             const kind = String(evt.data.kind ?? '');
-            if (kind === 'inspect') {
+            if (kind === 'chunk_started') {
+              state.detail = `正在处理第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块（${evt.data.count ?? 0} 篇）...`;
+            } else if (kind === 'llm_attempt') {
+              state.detail = `正在分析第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块...`;
+            } else if (kind === 'llm_result') {
+              const themes = Array.isArray(evt.data.themes) ? evt.data.themes.filter(Boolean) : [];
+              const summary = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 块第 ${evt.data.attempt ?? 1} 次响应：解析 ${evt.data.parsed_groups ?? 0} 个主题，有效 ${evt.data.valid_groups ?? 0} 个，覆盖 ${evt.data.covered ?? 0}/${evt.data.papers ?? 0} 篇`;
+              state.detail = summary;
+              addActivity(`${summary}${themes.length ? `；主题：${themes.slice(0, 12).join('、')}${themes.length > 12 ? '等' : ''}` : '；未得到有效主题'}`);
+            } else if (kind === 'chunk_done') {
+              const themes = Array.isArray(evt.data.themes) ? evt.data.themes.filter(Boolean) : [];
+              state.detail = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块完成：保留 ${evt.data.groups ?? 0} 个主题，覆盖 ${evt.data.covered ?? 0}/${evt.data.count ?? 0} 篇。`;
+              addActivity(`${state.detail}${themes.length ? ` 主题：${themes.slice(0, 12).join('、')}${themes.length > 12 ? '等' : ''}` : ''}`);
+            } else if (kind === 'fallback_result') {
+              const themes = Array.isArray(evt.data.themes) ? evt.data.themes.filter(Boolean) : [];
+              state.detail = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 块启用本地兜底：${evt.data.groups ?? 0} 个主题，覆盖 ${evt.data.covered ?? 0}/${evt.data.papers ?? 0} 篇。`;
+              addActivity(`${state.detail}${themes.length ? ` 主题：${themes.join('、')}` : ''}`);
+            } else if (kind === 'merge_candidates') {
+              const themes = Array.isArray(evt.data.themes) ? evt.data.themes.slice(0, 6).join('、') : '';
+              state.detail = evt.data.message ?? `已形成 ${evt.data.count ?? 0} 个候选主题，正在进行二级归并...`;
+              if (themes) addActivity(`当前候选主题：${themes}${Number(evt.data.count) > 6 ? '等' : ''}`);
+            } else if (kind === 'merge_done') {
+              const themes = Array.isArray(evt.data.themes) ? evt.data.themes.join('、') : '';
+              state.detail = `主题归并完成，共 ${evt.data.count ?? 0} 个主题。`;
+              if (themes) addActivity(`归并后的主题：${themes}`);
+            } else if (kind === 'local_cluster_started') {
+              state.detail = evt.data.message ?? '正在基于标题与摘要进行本地语义聚类...';
+            } else if (kind === 'local_cluster_done') {
+              state.detail = evt.data.message ?? `本地摘要聚类完成，共形成 ${evt.data.count ?? 0} 个主题簇。`;
+            } else if (kind === 'naming_started') {
+              state.detail = evt.data.message ?? '主题簇已形成，正在生成可读主题名称...';
+            } else if (kind === 'writing_pool_selected') {
+              state.detail = evt.data.message ?? '已为各主题选择写作代表文献。';
+              addActivity(state.detail ?? '已为各主题选择写作代表文献。');
+            } else if (kind === 'inspect') {
               state.detail = `AI 质检：正在抽查分组《${evt.data.group}》（${evt.data.count ?? 0} 篇）...`;
             } else if (kind === 'submit_rejected') {
               state.detail = `AI 质检：模型提交被驳回（${evt.data.reason ?? '校验未通过'}），要求修正重提...`;
@@ -269,13 +372,18 @@ async function consumeWritingSSE(
               state.detail = evt.data.message ?? 'AI 质检未在限定轮次内完成，保留初版分组。';
             } else {
               state.detail = evt.data.message ?? 'AI 质检：正在检查分组合理性...';
+              addActivity(String(state.detail));
             }
             break;
           }
           case 'classify_done': {
-            state.phase = 'classify';
+            state.phase = evt.data.phase === 'writing' ? 'writing' : 'classify';
             state.groups = evt.data.groups ?? [];
             const base = `文献分组完成，共得到 ${state.groups.length} 个分组。`;
+            if (state.groups.length) {
+              const names = state.groups.map((g) => g.name).filter(Boolean).slice(0, 8).join('、');
+              addActivity(`当前已形成主题：${names}${state.groups.length > 8 ? '等' : ''}`);
+            }
             const agent = evt.data.agent as { checked?: boolean; changed?: boolean; note?: string } | null;
             state.detail = agent?.checked
               ? agent.changed
@@ -284,6 +392,11 @@ async function consumeWritingSSE(
               : base;
             break;
           }
+          case 'writing_started':
+            state.phase = 'writing';
+            state.detail = evt.data.message ?? '主题已确认，开始生成综述正文。';
+            addActivity(String(state.detail));
+            break;
           case 'plan_complete': {
             // 两阶段模式:阶段1到此为止,等用户确认主题划分后才进入正文写作
             state.phase = 'await_confirm';
@@ -295,9 +408,10 @@ async function consumeWritingSSE(
               papers: evt.data.papers ?? [],
               screened_out_ids: evt.data.screened_out_ids ?? [],
               classify_fallback: evt.data.classify_fallback === true,
+              blueprint: evt.data.blueprint,
             };
             state.detail = state.plan.classify_fallback
-              ? `自动主题划分失败，当前为兜底单主题，建议点「重新划分」重试。`
+              ? `模型主题划分未完全达标，已启用本地多主题兜底；请检查各主题后再开始写作。`
               : `主题划分完成，共 ${state.plan.groups.length} 个主题，请确认或调整后开始写作。`;
             break;
           }

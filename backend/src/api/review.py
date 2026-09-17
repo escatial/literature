@@ -1,7 +1,8 @@
 """激进简化版综述 API: topic in -> 综述 out。"""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import time
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.llm.client import (
@@ -9,6 +10,7 @@ from src.llm.client import (
     get_provider_health,
     get_fallback_order,
     list_llm_providers,
+    messages_create,
 )
 from src.review.simple_review import run_simple_review
 
@@ -29,6 +31,13 @@ class SimpleReviewResponse(BaseModel):
     papers_found: int
     query: dict
     provider: str
+
+
+class LLMTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    elapsed_ms: int
+    response_preview: str
 
 
 @router.get("/providers")
@@ -54,6 +63,30 @@ def review_providers_health() -> dict:
         "active_fallback_order": health["active_fallback_order"],
         "providers": health["providers"],
     }
+
+
+@router.post("/test", response_model=LLMTestResponse)
+def review_llm_test() -> LLMTestResponse:
+    """发送最小 hello 请求，验证当前 LLM provider 的真实连通性。"""
+    started = time.perf_counter()
+    try:
+        text = messages_create(
+            system="你是连通性测试助手。请简短回答。",
+            user="hello",
+            max_tokens=32,
+            max_retries=1,
+            timeout=20.0,
+        )
+        health = get_provider_health()
+        active = health.get("active_fallback_order") or [get_default_provider()]
+        return LLMTestResponse(
+            ok=bool(str(text).strip()),
+            provider=str(active[0]),
+            elapsed_ms=round((time.perf_counter() - started) * 1000),
+            response_preview=str(text).strip()[:120],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM 测试失败: {exc}") from exc
 
 
 @router.post("/simple", response_model=SimpleReviewResponse)

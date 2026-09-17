@@ -123,14 +123,20 @@ resource_map:
 # ---------- 运行控制 ----------
 runtime:
   # 基础请求间隔(秒):过低会触发知网限流/风控
-  delay_seconds: 2.0
+  # 产品默认采用保守节奏；确认出口/IP 稳定后再逐步调低。
+  delay_seconds: 3.0
   retry_times: 3
   progress_bar_width: 30
   # 动态并发池边界:抓详情页的线程数在 [min_workers, max_workers] 区间内
   # 按实时负载(响应延迟/失败率/风控信号/本机CPU)自适应调节——
   # 站点顺畅提速、迎风减速到1线程,兼顾效率与目标站保护
   min_workers: 1
-  max_workers: 6
+  # 详情页并发越高越容易触发同一出口的风控，默认上限收敛到 3。
+  max_workers: 3
+  # 连续翻页主动冷却，打断知网滑动窗口的频率累积。
+  # 默认关闭主动节拍冷却；只有确认站点存在滑动窗口限流时再显式开启。
+  pace_cooldown_every_pages: 0
+  pace_cooldown_seconds: 0.0
 
 # ---------- 文件路径（嵌入后运行时文件统一落到本包 data/ 目录）----------
 paths:

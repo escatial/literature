@@ -22,8 +22,9 @@ const menus = [
       <div class="brand">文献综述 Agent</div>
       <el-menu
         :default-active="active"
+        :router="true"
+        :active-text-color="'#409EFF'"
         mode="horizontal"
-        router
         class="app-menu"
         :ellipsis="false"
       >
@@ -33,7 +34,7 @@ const menus = [
       </el-menu>
     </el-header>
     <el-main class="app-main">
-      <router-view />
+      <router-view :key="route.fullPath" />
     </el-main>
   </el-container>
   <!-- 全局吐司宿主:所有提醒从右上角弹出 -->

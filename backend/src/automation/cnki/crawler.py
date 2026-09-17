@@ -15,7 +15,7 @@ import threading
 import time
 from hashlib import md5
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, quote
+from urllib.parse import urlparse, parse_qs, quote, unquote, urlencode
 
 import requests
 import yaml
@@ -95,6 +95,10 @@ DEFAULT_CONFIG = {
         "default_resource": "CAPJ",
         "page_size": 20,
         "max_per_keyword": 20,
+        # 浏览器“专业检索-学术期刊”实际提交的资源集合与总库不同。
+        # 保留完整 productStr，避免服务端把请求判为资源上下文不完整。
+        "journal_product_str": "YSTT4HG0,LSTPFY1C,RMJLXHZ3,JQIRZIYA,EMRPGLPA,J708GVCE,JUP3MUPD,1UR4K4HZ,BPBAFJ5S,MPMFIG1A,WQ0UVIAA,NB3BWEHK,XVLO76FD,HR1YT1Z9,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R,",
+        "journal_search_from": "资源范围：学术期刊;  中英文扩展;  时间范围：更新时间：不限;  来源类别：全部期刊; ",
     },
     "resource_map": {
         "CAPJ":    ["YSTT4HG0,LSTPFY1C,EMRPGLPA,JUP3MUPD,MPMFIG1A,WQ0UVIAA,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R", "WD0FTY92"],
@@ -288,6 +292,10 @@ session: requests.Session | None = None
 cj: CjyClient | None = None
 dispatcher: CaptchaDispatcher | None = None
 _turnpage = ""
+# 知网会话状态是绑定的：列表请求、验证码和 turnpage 不能并发互相覆盖。
+# 详情页仍可走动态池，但列表/令牌相关请求必须串行，避免并发污染会话。
+_search_request_lock = threading.RLock()
+_turnpage_refresh_lock = threading.Lock()
 
 
 def init() -> None:
@@ -447,24 +455,27 @@ def refresh_turnpage(reason: str = "") -> bool:
     提取成功 → 更新模块变量 + 落盘 data/turnpage.txt，下次 init() 直接可用。
     """
     global _turnpage
-    try:
-        resp = session.get(CONFIG["endpoints"]["adv_search"], timeout=CONFIG["http"]["timeout"])
-        extracted = extract_turnpage(resp.text)
-    except Exception as e:
-        print(f"[警告] turnpage 刷新失败({reason}): {e}")
-        return False
-    if not extracted:
-        print(f"[警告] turnpage 刷新失败({reason}): 高级检索页未提取到令牌（页面可能改版）")
-        return False
-    if extracted != _turnpage:
-        print(f"[turnpage] 令牌已刷新({reason})")
-        debug_log(f"[turnpage] 令牌已刷新({reason})")
-    _turnpage = extracted
-    try:
-        _turnpage_file().write_text(extracted, "utf-8")
-    except OSError:
-        pass
-    return True
+    with _turnpage_refresh_lock:
+        try:
+            # 与列表请求共用同一把会话锁，避免刷新令牌时并发改写 Cookie。
+            with _search_request_lock:
+                resp = session.get(CONFIG["endpoints"]["adv_search"], timeout=CONFIG["http"]["timeout"])
+                extracted = extract_turnpage(resp.text)
+        except Exception as e:
+            print(f"[警告] turnpage 刷新失败({reason}): {e}")
+            return False
+        if not extracted:
+            print(f"[警告] turnpage 刷新失败({reason}): 高级检索页未提取到令牌（页面可能改版）")
+            return False
+        if extracted != _turnpage:
+            print(f"[turnpage] 令牌已刷新({reason})")
+            debug_log(f"[turnpage] 令牌已刷新({reason})")
+        _turnpage = extracted
+        try:
+            _turnpage_file().write_text(extracted, "utf-8")
+        except OSError:
+            pass
+        return True
 
 
 def sleep_jitter(base_seconds: float):
@@ -549,6 +560,20 @@ def throttle_base() -> float:
     """基准请求间隔(最终报告用它判断本次风控强度)。"""
     with _throttle_lock:
         return _throttle["base"]
+
+
+def _pace_cooldown_config() -> tuple[int, float]:
+    """读取主动节拍冷却配置，并对异常值做保守兜底。"""
+    runtime = CONFIG.get("runtime", {}) if isinstance(CONFIG, dict) else {}
+    try:
+        every = max(int(runtime.get("pace_cooldown_every_pages", _PACE_COOLDOWN_EVERY_PAGES)), 0)
+    except (TypeError, ValueError):
+        every = _PACE_COOLDOWN_EVERY_PAGES
+    try:
+        seconds = max(float(runtime.get("pace_cooldown_seconds", _PACE_COOLDOWN_SECONDS)), 0.0)
+    except (TypeError, ValueError):
+        seconds = _PACE_COOLDOWN_SECONDS
+    return every, seconds
 
 
 # v9.2:知网 2026-08-31 起对 pageSize 做参数校验(只认 10/20/50 白名单),
@@ -915,8 +940,15 @@ def build_expert_query(
             "（如 CAPJ=期刊、CAPM=博硕、CROSSDB=总库）"
         )
     kua_ku, default_classid = resource_map[resource]
+    # 专业检索的浏览器请求使用 JOURNAL/YSTT4HG0 语义；旧的 CAPJ
+    # 映射是列表检索的总库兼容值，直接复用会造成“参数看似正确但返回空壳”。
+    query_resource = "JOURNAL" if resource == "CAPJ" else resource
+    # 浏览器专业检索请求将跨库资源列表放在 productStr，QueryJson 内的
+    # KuaKuCode 保持空字符串；两处同时填值会被知网判为上下文不一致。
+    query_kua_ku = "" if resource == "CAPJ" else kua_ku
+    query_classid = "YSTT4HG0" if resource == "CAPJ" and classid is None else classid
     if classid is None:
-        classid = default_classid
+        classid = query_classid or default_classid
 
     expert_item = {
         "Key": "Expert",
@@ -936,14 +968,14 @@ def build_expert_query(
     }
     query = {
         "Platform": "",
-        "Resource": resource,
+        "Resource": query_resource,
         "Classid": classid,
         "Products": "",
         "QNode": {"QGroup": [subject_group, {"Key": "ControlGroup", "Title": "", "Logic": 0, "Items": [], "ChildItems": []}]},
         "ExScope": "1",
         "SearchType": 4,
         "Rlang": "CHINESE",
-        "KuaKuCode": kua_ku,
+        "KuaKuCode": query_kua_ku,
         "Expands": {},
         "View": "changeDBCh",
         "SearchFrom": 1
@@ -1222,16 +1254,32 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
                               boolSearch=false 才能拿到数据页
     """
     page_size = page_size or CONFIG["search"]["page_size"]
-    body_str = (
-        f"boolSearch={bool_search}&QueryJson={query_json}"
-        f"&pageNum={page_num}&pageSize={page_size}&dstyle=listmode"
-        "&boolSortSearch=false&sentenceSearch=false&productStr="
-        "&searchFrom=%E8%B5%84%E6%BA%90%E8%8C%83%E5%9B%B4%EF%BC%9A%E6%80%BB%E5%BA%93%3B++"
-        f"&subject=&turnpage={_turnpage}"
-        "&language=&uniplatform=&CurPage=1"
-    )
+    search_cfg = CONFIG.get("search", {})
+    product_str = search_cfg.get("journal_product_str", "")
+    search_from = search_cfg.get("journal_search_from", "")
+    # 与浏览器表单一致地进行 application/x-www-form-urlencoded 编码，
+    # 避免中文 searchFrom、QueryJson 中的括号/加号被服务端错误解码。
+    fields = {
+        "boolSearch": bool_search,
+        "QueryJson": unquote(query_json),
+        "pageNum": str(page_num),
+        "pageSize": str(page_size),
+        "dstyle": "listmode",
+        "boolSortSearch": "false",
+        "sentenceSearch": "false",
+        "productStr": product_str,
+        "searchFrom": search_from,
+        "subject": "",
+        "turnpage": unquote(_turnpage),
+        "language": "",
+        # 浏览器抓包中该字段为 NZKPT；空值会让请求脱离当前站点上下文，
+        # 知网可能返回 105 字节“暂无数据，请稍后重试”空壳。
+        "uniplatform": CONFIG["http"].get("uniplatform", "NZKPT"),
+        "CurPage": "1",
+    }
     if captcha_verification:
-        body_str += f"&captchaVerification={captcha_verification}"
+        fields["captchaVerification"] = captcha_verification
+    body_str = urlencode(fields, doseq=False)
 
     client_id = session.cookies.get("Ecp_ClientId", "")
     if not client_id:
@@ -1241,17 +1289,27 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
         debug_log("[签名] 警告: session 缺少 Ecp_ClientId(签名客户端 ID),请求大概率被拒")
     sign = make_signature(CONFIG["endpoints"]["search"], client_id)
     headers = {
+        "Accept": "*/*",
+        "Accept-Language": CONFIG["http"]["accept_language"],
+        "Connection": "keep-alive",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Origin": CONFIG["endpoints"]["base"],
         "Referer": CONFIG["endpoints"]["adv_search"],
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
         "X-Requested-With": "XMLHttpRequest",
+        "uniplatform": CONFIG["http"].get("uniplatform", ""),
         **sign,
         "ClientID": client_id,
     }
     # 核心列表请求走统一入口：断路器→分层重试→代理 failover→全链路记账
     # (200 空壳不抛异常，仍由下方限流退避逻辑处置——两层各司其职)
-    resp = http_post(CONFIG["endpoints"]["search"], data=body_str,
-                     headers=headers, timeout=CONFIG["http"]["timeout"])
+    # 列表接口是会话级状态机，不能与另一个检索式并发提交。
+    # 并发详情抓取不受影响；这里只串行化搜索/翻页请求本身。
+    with _search_request_lock:
+        resp = http_post(CONFIG["endpoints"]["search"], data=body_str,
+                         headers=headers, timeout=CONFIG["http"]["timeout"])
     html = resp.content.decode("utf-8", errors="ignore")
     # 插桩:限流空壳现场取证 —— 记录 HTTP 状态码/响应长度/页码,
     # 样本落盘(debug_list_*.html,内容 md5 去重,上限 10 份),
@@ -1260,7 +1318,74 @@ def search_grid(query_json: str, page_num: int = 1, page_size: int = None,
         print(f"[诊断] search_grid 空壳现场: HTTP {resp.status_code}, "
               f"长度 {len(html)}, pageNum={page_num}, pageSize={page_size}, boolSearch={bool_search}")
         _dump_debug_list_html(html, f"busy{page_num}")
+        _dump_sanitized_search_diagnostic(
+            query_json=query_json,
+            page_num=page_num,
+            page_size=page_size,
+            bool_search=bool_search,
+            body_str=body_str,
+            status_code=resp.status_code,
+            html=html,
+        )
     return html
+
+
+def _dump_sanitized_search_diagnostic(*, query_json: str, page_num: int,
+                                      page_size: int, bool_search: str,
+                                      body_str: str, status_code: int,
+                                      html: str) -> None:
+    """保存空壳请求诊断，但绝不落盘 Cookie/签名/验证码等敏感凭据。"""
+    try:
+        parsed = dict(parse_qs(body_str, keep_blank_values=True))
+        safe_fields = {
+            key: (value[0] if isinstance(value, list) and len(value) == 1 else value)
+            for key, value in parsed.items()
+            if key not in {"captchaVerification"}
+        }
+        safe_query = json.loads(unquote(query_json))
+        safe_query.pop("Expands", None)
+        def _fingerprint(value: str) -> dict:
+            raw = str(value or "")
+            return {"present": bool(raw), "length": len(raw),
+                    "sha256": __import__("hashlib").sha256(raw.encode("utf-8")).hexdigest()[:16]}
+
+        cookie_meta = {}
+        for name in ("KNS2COOKIE", "Ecp_ClientId", "SID_kns_new", "Ecp_session"):
+            cookie_meta[name] = _fingerprint(session.cookies.get(name, ""))
+        header_meta = {
+            name: _fingerprint(value)
+            for name, value in {
+                "ClientID": session.cookies.get("Ecp_ClientId", ""),
+                "turnpage": unquote(_turnpage),
+                "uniplatform": CONFIG["http"].get("uniplatform", ""),
+            }.items()
+        }
+        payload = {
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "request": {
+                "endpoint": CONFIG.get("endpoints", {}).get("search", ""),
+                "page_num": page_num,
+                "page_size": page_size,
+                "bool_search": bool_search,
+                "status_code": status_code,
+                "response_length": len(html or ""),
+                "fields": safe_fields,
+                "query_json": safe_query,
+                "session": {"cookies": cookie_meta, "headers": header_meta},
+            },
+            "response": {
+                "has_retry_phrase": "请稍后重试" in (html or ""),
+                "has_structure_error": "查询对象结构错误" in (html or ""),
+                "has_parameter_error": "参数校验" in (html or ""),
+                "preview": re.sub(r"\s+", " ", html or "")[:500],
+            },
+        }
+        base = Path(CONFIG["paths"]["debug_abstract_html"])
+        path = base.with_name(f"search_diagnostic_{int(time.time())}_p{page_num}.json")
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        debug_log(f"[诊断] 已保存脱敏搜索诊断: {path.name}")
+    except Exception as exc:
+        debug_log(f"[诊断] 保存脱敏搜索诊断失败: {exc}")
 
 
 def parse_list(html: str):
@@ -1517,9 +1642,9 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
                       f"已抓 {len(all_items)} 条, value={shell_value!r}")
             for attempt, wait in enumerate(SERVER_BUSY_BACKOFF_SECONDS, start=1):
                 print(f"[列表] 第{page}页 服务端异常空壳(请稍后重试),退避 {wait:.1f}s 后重试({attempt}/{SERVER_BUSY_RETRIES})")
-                emit_log(f"[列表] 第{page}页 数据源暂时繁忙，正在自动重试"
+                emit_log(f"[列表] 第{page}页 未获得有效结果，正在自动恢复并重试"
                          f"(第 {attempt}/{SERVER_BUSY_RETRIES} 次)，已获取的数据不会丢失")
-                notify_wait(wait, "数据源繁忙退避")
+                notify_wait(wait, "请求恢复等待")
                 sleep_jitter(wait)
                 # v9.7:零进度空壳时,第 2 次重试前自动更换会话凭证 ——
                 # 同一会话的完全相同请求在会话级风控下必然次次空壳;
@@ -1660,16 +1785,17 @@ def fetch_all_list(query_json: str, max_count: int | None = None,
         # 验证码通过后翻页用 boolSearch=false 不再触发
         if bool_search == "true":
             bool_search = "false"
-        # v9.4 预防性节拍冷却:每连续完成 8 页(page-1 为已完成页数)主动长歇一次,
-        # 打断知网滑动窗口的频率累积,在限流空壳出现前预防 —— 生产实测第 10 页
-        # 高频翻页必中招,节拍冷却把它消解在成型之前。
-        if (page - 1) % _PACE_COOLDOWN_EVERY_PAGES == 0:
+        # 预防性节拍冷却仅在显式配置大于 0 时启用；默认关闭，避免任务刚开始
+        # 就出现“节拍冷却中”的误导性提示。该等待不是知网返回的状态。
+        pace_every, pace_seconds = _pace_cooldown_config()
+        completed_pages = page - 1
+        if pace_every > 0 and completed_pages > 0 and completed_pages % pace_every == 0:
             emit_log(
-                f"[节拍] 已连续获取 {_PACE_COOLDOWN_EVERY_PAGES} 页，"
-                f"休息 {_PACE_COOLDOWN_SECONDS:.0f}s 后继续，保障获取稳定"
+                f"[节拍] 已连续获取 {pace_every} 页，"
+                f"休息 {pace_seconds:.0f}s 后继续，保障获取稳定"
             )
-            notify_wait(_PACE_COOLDOWN_SECONDS, "节拍冷却")
-            sleep_jitter(_PACE_COOLDOWN_SECONDS)
+            notify_wait(pace_seconds, "节拍冷却")
+            sleep_jitter(pace_seconds)
         # 使用自适应限速的当前延迟(风控时增大,连续成功后回落)
         sleep_jitter(effective_delay())
 

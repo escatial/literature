@@ -162,36 +162,35 @@ def check_reference_binding(
             else:
                 seen_in_section.add(cid)
 
-    # 5) 同一章节同一 [N] 必须仅 1 次
+    # 5) 同一章节同一 [N] 可以在多个独立论断中重复出现；编号重复本身
+    # 不是错误。真正需要阻断的是无法映射的锚点或章节声明与正文不一致。
+    # 这里保留重复次数指标，供报告展示，但不再把正常的重复引用判为告警。
     for s in sections:
         counter: Counter[int] = Counter(chapter_n_used.get(s.key, []))
-        for n, cnt in counter.items():
-            if cnt > 1:
-                issues.append(QAIssue(
-                    "BINDING_DUP_ANCHOR", QACheckStatus.WARN,
-                    "content", f"section:{s.key}",
-                    f"同一编号 [{n}] 在本章节出现 {cnt} 次",
-                    section_key=s.key,
-                ))
+        duplicate_anchor_count = sum(max(0, cnt - 1) for cnt in counter.values())
+        if duplicate_anchor_count:
+            result.metrics.setdefault("duplicate_anchor_count", 0)
+            result.metrics["duplicate_anchor_count"] += duplicate_anchor_count
 
-    # 6) 入选未被任何章节引用(冗余文献)
-    # v9.6:降为 WARN——传给 QA 的是配额全集(70~90 篇),正文引用经
-    # 「作者(年份)→唯一匹配」注入,机构作者/同名歧义/元数据不全的命中不了,
-    # 未被引用是正常现象;此前判 FAIL 会经硬门禁报废整篇综述
+    # 6) 候选池覆盖率审计
+    # 写作池是“候选证据全集”，不是要求每篇都必须进入正文的参考文献清单。
+    # 逐篇报告未引用会制造几十条噪声告警，也掩盖真正的锚点错配；改为报告
+    # 一个可比较的覆盖率指标，只有覆盖率明显过低才给出一条聚合告警。
     cited_ids_set = {cid for cid in cited_ids_in_order}
-    for paper in papers:
-        if paper.lit_id not in cited_ids_set:
-            issues.append(QAIssue(
-                "BINDING_UNUSED_REFERENCE", QACheckStatus.WARN,
-                "literature_pool", f"paper/{paper.lit_id}",
-                "文献进入了文献池但未被任何章节引用,未计入参考文献",
-                lit_id=paper.lit_id,
-            ))
+    pool_size = len(papers)
+    coverage = len(cited_ids_set) / pool_size if pool_size else 1.0
+    if pool_size >= 15 and coverage < 0.50:
+        issues.append(QAIssue(
+            "BINDING_COVERAGE_LOW", QACheckStatus.WARN,
+            "literature_pool", "literature_pool",
+            f"正文仅覆盖候选文献的 {coverage:.1%},低于 50% 的最低覆盖线",
+        ))
 
     result.issues = issues
     result.metrics.update({
         "anchors_total": total_anchors,
         "unique_cited": len(cited_ids_in_order),
+        "pool_coverage": round(coverage, 4),
         "reference_count": len(ref_lines),
         "issues_count": len(issues),
         "fail_count": sum(1 for i in issues if i.severity == QACheckStatus.FAIL),

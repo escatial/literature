@@ -12,29 +12,15 @@ export const http = axios.create({
   timeout: 180_000,
 });
 
-// v7.0 任务隔离:请求拦截器自动注入 X-Task-Id header。
-// 这里只读 localStorage(同步可访问),Pinia store 也从同一处初始化。
-// 优势:
-//   1. 拦截器无需 import session store,避免循环依赖;
-//   2. localStorage 是同步源,拦截器不依赖 Pinia 初始化时机;
-//   3. store 与拦截器共享 LS_KEY,保持一致。
-// 与 stores/session.ts 的 TASK_ID_LS_KEY 同步(避免重复 magic string)
-const TASK_ID_LS_KEY = 'lit_review.current_task_id';
-function readTaskIdFromLS(): string | null {
-  try {
-    return localStorage.getItem(TASK_ID_LS_KEY);
-  } catch {
-    return null;
-  }
-}
+const TASK_ID_SESSION_KEY = 'lit_review.current_task_id';
+
+// v9.6:任务 id 只从 sessionStorage 读取,关闭标签页后不恢复旧页面任务。
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
-  // 调用方已经显式带了 X-Task-Id 时,尊重调用方(用于「同 task 复用」语义)
   const explicit = config.headers.get?.('X-Task-Id');
   if (explicit) return config;
-  // 否则从 localStorage 读取当前 task_id 注入
-  const tid = readTaskIdFromLS();
-  if (tid) {
-    config.headers.set('X-Task-Id', tid);
+  const taskId = sessionStorage.getItem(TASK_ID_SESSION_KEY);
+  if (taskId) {
+    config.headers.set('X-Task-Id', taskId);
   }
   return config;
 });

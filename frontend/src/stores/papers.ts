@@ -130,6 +130,7 @@ export const usePapersStore = defineStore('papers', {
       const all: Paper[] = [];
       let page = 1;
       const page_size = 100;
+      const maxPages = Math.max(1, Math.ceil(limit / page_size));
       for (;;) {
         const resp = await listPapers({
           page,
@@ -140,7 +141,7 @@ export const usePapersStore = defineStore('papers', {
         if (all.length >= resp.total || resp.items.length === 0) break;
         if (all.length >= limit) break;
         page += 1;
-        if (page > 20) break; // 安全上限
+        if (page > maxPages) break;
       }
       return all.slice(0, limit);
     },

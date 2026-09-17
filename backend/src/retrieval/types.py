@@ -1,5 +1,6 @@
 """检索结果统一类型。字段值都来自平台原始返回,工具不构造任何字段。"""
 from __future__ import annotations
+import re
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
@@ -11,6 +12,46 @@ class Source(str, Enum):
     CROSSREF = "crossref"
     GOOGLE_SCHOLAR = "google_scholar"
     USER_IMPORTED = "user_imported"  # 中文手动导入
+
+
+def normalize_source(value: object) -> Source:
+    """Normalize API/UI source values, including ``Source.OPENALEX`` strings."""
+    if isinstance(value, Source):
+        return value
+    raw = str(value or "").strip()
+    if raw.startswith("Source."):
+        raw = raw[7:]
+    try:
+        return Source(raw.lower())
+    except ValueError as exc:
+        raise ValueError(f"不支持的文献来源: {value!r}") from exc
+
+
+_CNKI_PUBLICATION_YEAR_RE = re.compile(
+    r"\[(?:J|J/OL)\]\.?\s*[^,\n]+,\s*((?:19|20)\d{2})(?=[,.(])",
+    re.IGNORECASE,
+)
+
+
+def canonical_publication_year(
+    source: Source | str,
+    year: int | None,
+    raw_citation: str | None,
+) -> int:
+    """Return the publication year used consistently in prose and references.
+
+    Some historical CNKI snapshots contain the online-first year in ``year``
+    but a different final publication year in the original GB/T citation.  The
+    reference renderer intentionally preserves that original citation, so the
+    narrative author/year must use the same publication year.  Access dates in
+    ``[YYYY-MM-DD]`` are deliberately ignored by the journal-pattern regex.
+    """
+    normalized = source.value if isinstance(source, Source) else str(source or "").lower()
+    if normalized in {Source.CNKI.value, Source.USER_IMPORTED.value} and raw_citation:
+        match = _CNKI_PUBLICATION_YEAR_RE.search(raw_citation)
+        if match:
+            return int(match.group(1))
+    return int(year or 0)
 
 
 @dataclass
@@ -48,6 +89,11 @@ class Paper:
 
     # 中文专用:用户粘贴的原始 GB/T 7714 引文字符串(原样保留)
     raw_citation: str | None = None
+
+    def __post_init__(self) -> None:
+        self.year = canonical_publication_year(
+            self.source, self.year, self.raw_citation
+        )
 
     def to_dict(self) -> dict:
         d = asdict(self)

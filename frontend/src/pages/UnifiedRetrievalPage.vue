@@ -33,6 +33,7 @@ import {
   restoreRetrievalHistory,
   deleteRetrievalHistory,
   listPapers,
+  testLLM,
 } from '@/api/endpoints';
 import type { RetrievalTask } from '@/api/types';
 import type { RetrievalHistory } from '@/api/endpoints';
@@ -46,6 +47,21 @@ const REQUIRED_DATABASE_LABELS = {
 } as const;
 // v7.1:展示 LLM provider 配置状态(推荐/备用/配置保留)
 const llmProviders = useLLMProvidersStore();
+const testingLLM = ref(false);
+const testLLMConnection = async () => {
+  if (testingLLM.value) return;
+  testingLLM.value = true;
+  try {
+    const result = await testLLM();
+    toast.success(`LLM 连接成功：${result.provider}，${result.elapsed_ms}ms，响应：${result.response_preview || '有响应'}`);
+    await llmProviders.refresh();
+  } catch (e: any) {
+    toast.error(`LLM 连接失败：${e?.message ?? e}`);
+    await llmProviders.refresh().catch(() => undefined);
+  } finally {
+    testingLLM.value = false;
+  }
+};
 const runStarted = ref(false);
 const runFailed = ref(false);
 const runFailureMessage = ref('');
@@ -770,42 +786,22 @@ const stopAll = async () => {
 };
 
 onMounted(async () => {
+  ustore.reset();
+  sessionStore.newSession();
+  runStarted.value = false;
   // v9.8:秒级心跳驱动长等待倒计时(等待中进度条为流光动画+实时秒数)
   waitTicker = window.setInterval(() => { nowMs.value = Date.now(); }, 1000);
-  // Pinia store 会从 localStorage 恢复任务;同步到本页内存状态,确保刷新后仍显示完成汇总。
-  runStarted.value = Boolean(
-    ustore.englishTaskId || Object.keys(ustore.cnkiTasks).length,
-  );
   // v7.1:加载 LLM provider 状态(后台异步,不阻塞主题输入)
   llmProviders.refresh().catch(() => { /* 接口挂了也不挡用户 */ });
   await refreshHistory();
-  // 恢复英文任务进度
-  if (ustore.englishTaskId) {
-    try {
-      const t = await getRetrievalTask(ustore.englishTaskId);
-      englishTask.value = t;
-      // v4.1:把已落库的事件同步到 enTasks,刷新后也能看到 OpenAlex / PubMed 过程日志
-      if (t.events && t.events.length) {
-        ustore.ingestEnEvents(t.task_id, t.events);
-      }
-      startProgressPolling();
-    } catch {
-      // v9.6:恢复失败不放弃——占住 task_id 让轮询接手自动重试
-      // (englishTask 仅缺 status/events,refreshProgress 首次成功即整包覆盖)
-      console.warn('[检索] 恢复英文任务状态失败,交由轮询自动重试');
-      englishTask.value = { task_id: ustore.englishTaskId } as RetrievalTask;
-      startProgressPolling();
-    }
-  }
-  // 恢复未完结的知网任务 SSE(切 tab 后回来)
-  for (const [db, row] of Object.entries(cnkiTasks.value)) {
-    if (row.stage === 'done' || row.stage === 'error') continue;
-    if (!row.task_id) continue;
-    subscribeCnki(db, row);
-  }
 });
 
 onBeforeUnmount(() => {
+  sseSources.forEach((es) => es.close());
+  sseSources.clear();
+  ustore.reset();
+  englishTask.value = null;
+  runStarted.value = false;
   stopProgressPolling();
   if (waitTicker !== undefined) {
     window.clearInterval(waitTicker);
@@ -868,6 +864,14 @@ onBeforeUnmount(() => {
       >
         <span class="llm-providers-hint">ⓘ</span>
       </el-tooltip>
+      <el-button
+        size="small"
+        plain
+        :loading="testingLLM"
+        @click="testLLMConnection"
+      >
+        测试 LLM
+      </el-button>
     </div>
   </el-card>
 

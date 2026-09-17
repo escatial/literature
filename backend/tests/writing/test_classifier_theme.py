@@ -32,6 +32,28 @@ def _papers(n: int) -> list[Paper]:
     return [_make_paper(i) for i in range(1, n + 1)]
 
 
+def test_language_rebalance_keeps_each_feasible_theme_bilingual():
+    papers = _papers(4)
+    for i in range(4, 8):
+        papers.append(Paper(
+            lit_id=f"lit_openalex_{i:016x}", source=Source.OPENALEX,
+            title=f"Digital governance optimization model {i}", authors=[f"Smith {i}"],
+            journal="Test Journal", year=2024,
+            abstract="This study examines digital governance optimization and coordination.",
+        ))
+    groups = [
+        clf.Group("协同治理机制", [p.lit_id for p in papers[:4]]),
+        clf.Group("治理绩效优化", [p.lit_id for p in papers[4:]]),
+    ]
+    clf._rebalance_language_groups(groups, papers)
+    assert clf._groups_language_balanced(groups, papers)
+    by_id = {p.lit_id: p for p in papers}
+    for group in groups:
+        sources = {by_id[lid].source for lid in group.lit_ids}
+        assert Source.CNKI in sources
+        assert Source.OPENALEX in sources
+
+
 # ---------- _output_token_budget ----------
 
 def test_token_budget_floor_and_scaling():
@@ -78,6 +100,22 @@ def test_parse_group_response_prefers_complete_json_over_salvage():
     assert len(items) == 2
 
 
+def test_parse_group_response_salvages_multiline_markdown_groups():
+    raw = """**Group 1: 灾后道路损毁/路网中断下的协同路径规划**
+- #1: 道路损毁
+- #6: 道路中断
+
+**Group 2: 公平性/紧迫度/满意度/人本关怀导向的配送优化**
+- #4: 需求紧迫度
+- #9: 满意度
+"""
+    items = clf._parse_group_response(raw)
+    assert items == [
+        {"name": "灾后道路损毁与路网中断", "ids": [1, 6]},
+        {"name": "人本关怀导向的配送优化", "ids": [4, 9]},
+    ]
+
+
 # ---------- 编号映射 ----------
 
 def test_map_group_items_maps_numeric_ids():
@@ -99,9 +137,85 @@ def test_map_group_items_drops_unknown_and_keeps_lit_prefix():
     assert mapped[0]["lit_ids"] == ["lit_cnki_aaaa", "lit_cnki_bbbb"]
 
 
+def test_group_name_rejects_english_stopword_fragments():
+    assert not clf._group_name_acceptable("of与in与to")
+    assert not clf._group_name_acceptable("this与learnin")
+    assert not clf._group_name_acceptable("this与that与ch")
+
+
+def test_group_name_rejects_placeholders_and_keyword_chains():
+    assert not clf._group_name_acceptable("主题5")
+    assert not clf._group_name_acceptable("主题方向六")
+    assert not clf._group_name_acceptable("研究议题3")
+    assert not clf._group_name_acceptable("无人机协同子主题2")
+    assert not clf._group_name_acceptable("无人与人机与配送")
+    assert not clf._group_name_acceptable("市区内卡车与无人机协同配方向")
+    assert clf._group_name_acceptable("Hybrid Routing Models")
+
+
+def test_clean_group_name_does_not_hardcode_domain_terms():
+    raw = "领域甲参与乙与丙"
+    assert clf._clean_group_name(raw) == raw
+
+
+def test_build_groups_drops_duplicate_names():
+    papers = _papers(3)
+    valid = {p.lit_id for p in papers}
+    groups, covered = clf._build_groups(
+        [
+            {"name": "无人机配送", "lit_ids": [papers[0].lit_id]},
+            {"name": "无人机配送", "lit_ids": [papers[1].lit_id]},
+            {"name": "协同调度", "lit_ids": [papers[2].lit_id]},
+        ],
+        valid,
+    )
+    assert [g.name for g in groups] == ["无人机配送", "协同调度"]
+    assert papers[1].lit_id not in covered
+
+
 # ---------- 端到端:classify_by_theme(338 篇) ----------
 
 class TestClassifyByThemeLargePool:
+    def test_local_cluster_name_model_has_bounded_timeout(self, monkeypatch):
+        papers = _papers(120)
+        calls: list[dict] = []
+
+        def fake_create(**kwargs):
+            calls.append(kwargs)
+            return json.dumps({"names": [f"问题导向主题{i}" for i in range(1, 7)]}, ensure_ascii=False)
+
+        monkeypatch.setattr(clf, "messages_create", fake_create)
+        groups = clf._semantic_cluster_groups(papers, "任意研究主题")
+        assert groups
+        assert calls and calls[0]["timeout"] == 45.0
+        covered = [lid for g in groups for lid in g.lit_ids]
+        assert sorted(covered) == sorted(p.lit_id for p in papers)
+
+    def test_normal_writing_pool_uses_one_cross_language_llm_classification(self, monkeypatch):
+        papers = _papers(80)
+        calls: list[dict] = []
+
+        def fake_create(**kwargs):
+            calls.append(kwargs)
+            return self._mock_reply(papers)
+
+        monkeypatch.setattr(clf, "messages_create", fake_create)
+        groups = clf.classify_by_theme(papers, "任意研究主题")
+
+        assert len(groups) == 4
+        assert len(calls) == 1
+        assert calls[0]["timeout"] == 75.0
+
+    def test_normal_writing_pool_never_returns_title_truncation_fallback(self, monkeypatch):
+        papers = _papers(80)
+
+        def fail_create(**kwargs):
+            raise RuntimeError("provider unavailable")
+
+        monkeypatch.setattr(clf, "messages_create", fail_create)
+        with pytest.raises(ValueError, match="不会再用截断标题或编号主题"):
+            clf.classify_by_theme(papers, "任意研究主题")
+
     def _mock_reply(self, papers, n_groups=4):
         """构造覆盖全部 338 篇、按编号输出的合法分组 JSON。"""
         buckets: list[list[int]] = [[] for _ in range(n_groups)]
@@ -156,7 +270,7 @@ class TestClassifyByThemeLargePool:
         covered = [lid for g in groups for lid in g.lit_ids]
         assert sorted(covered) == sorted(p.lit_id for p in papers)
 
-    def test_llm_total_failure_falls_back_to_single_group(self, monkeypatch):
+    def test_llm_total_failure_falls_back_to_deterministic_groups(self, monkeypatch):
         papers = _papers(338)
 
         def fake_create(**kwargs):
@@ -164,5 +278,6 @@ class TestClassifyByThemeLargePool:
 
         monkeypatch.setattr(clf, "messages_create", fake_create)
         groups = clf.classify_by_theme(papers, "数字政府治理")
-        assert len(groups) == 1
-        assert len(groups[0].lit_ids) == 338
+        assert len(groups) >= clf._min_groups(len(papers))
+        covered = [lid for g in groups for lid in g.lit_ids]
+        assert sorted(covered) == sorted(p.lit_id for p in papers)

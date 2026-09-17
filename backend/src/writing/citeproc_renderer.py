@@ -92,11 +92,19 @@ def paper_to_csl_item(paper: Paper) -> dict:
         item["issue"] = paper.issue
     if paper.pages:
         item["page"] = paper.pages
-    if paper.doi:
-        item["DOI"] = paper.doi
+    # DOI is retained in the structured Paper record for provenance and
+    # deduplication, but the project's reference-list policy omits DOI fields.
+    # Do not pass it to citeproc, otherwise CSL appends a DOI URL to every
+    # rendered entry.
     # OpenAlex URL is provenance, not the publication access URL; keep DOI only.
     if paper.source_url and paper.source != Source.OPENALEX:
         item["URL"] = paper.source_url
+    # DOI/URL are persistent identifiers or provenance links; they do not by
+    # themselves mean that a journal article is an online-only publication.
+    # The CSL style uses the presence of URL/DOI as a fallback for OL, so mark
+    # records with formal journal issue metadata explicitly as ordinary J.
+    if paper.journal:
+        item["medium"] = "J"
     return item
 
 
@@ -119,6 +127,10 @@ def format_citation_via_citeproc(
     # citeproc-py 的 plain formatter 在 lxml 上返回 MixedString(继承 str 但带
     # __html__),正则不能直接处理它,先强制转回纯 str。
     rendered = str(items[0]) if items else ""
+    # GB/T 样式文件使用中文 locale 时，英文作者列表可能把 et al. 渲染成“等”。
+    # 英文来源必须保持语种一致，统一转回英文缩写，避免 QA 将其误判为语言混用。
+    if paper.source in {Source.OPENALEX, Source.PUBMED, Source.CROSSREF}:
+        rendered = rendered.replace("等", "et al.")
     return _CITE_NUM_PREFIX_RE.sub("", rendered).strip()
 
 
@@ -131,7 +143,3 @@ def format_citation_safe(
         return format_citation_via_citeproc(paper, style_id=style_id)
     except Exception:
         return None
-
-
-
-

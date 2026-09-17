@@ -9,7 +9,7 @@
 实现策略:
 - 中文条目(raw_citation): 基于已有的 _clean_dirty + 标准著录要素序列做检查;
   由于原文来自用户粘贴,只做"是否存在明显遗漏"的弱校验,不擅自拼接。
-- 英文条目(OpenAlex / PubMed): 重用 writing.citeproc_renderer 的 citeproc 规则
+- 英文条目(OpenAlex / PubMed / Crossref): 重用 writing.citeproc_renderer 的 citeproc 规则
   引擎拿到渲染结果,再做语种一致性 + 关键要素完备度校验。
 """
 from __future__ import annotations
@@ -48,6 +48,15 @@ def _has_latin(text: str) -> bool:
     return bool(_LATIN_LETTER_RE.search(text or ""))
 
 
+def _fallback_chinese_citation(paper: Paper) -> str:
+    """与写作端一致的中文结构化引文兜底，仅用于 QA 语种/要素检查。"""
+    authors = ", ".join(a.strip() for a in (paper.authors or []) if a and a.strip()) or "佚名"
+    title = (paper.title or "未命名").strip()
+    journal = (paper.journal or "来源不详").strip()
+    year = str(paper.year) if paper.year else "n.d."
+    return f"{authors}. {title}[J]. {journal}, {year}."
+
+
 def _check_lang_consistency(papers: list[Paper], rendered: dict[str, str]) -> list[QAIssue]:
     """语种一致性:中文条目不能出现英文渲染;英文条目渲染里不允许中文字符。"""
     issues: list[QAIssue] = []
@@ -56,7 +65,7 @@ def _check_lang_consistency(papers: list[Paper], rendered: dict[str, str]) -> li
         text = rendered.get(paper.lit_id) or ""
 
         if paper.source in _CHINESE_SOURCES:
-            raw = paper.raw_citation or text
+            raw = paper.raw_citation or text or _fallback_chinese_citation(paper)
             if not _has_chinese(raw):
                 issues.append(QAIssue(
                     "CITATION_FORMAT_LANG_LOSS", QACheckStatus.FAIL,
@@ -147,6 +156,42 @@ def _check_required_elements(papers: list[Paper], rendered: dict[str, str]) -> l
     return issues
 
 
+def _check_medium_marker(papers: list[Paper], rendered: dict[str, str]) -> list[QAIssue]:
+    """校验期刊文献类型/载体标识没有被 DOI 或 URL 误判。
+
+    只要英文期刊记录含有卷、期或页码中的任一正式出版要素，
+    就不应被渲染为在线优先的 ``[J/OL]``；同时禁止重复的 ``[J/J]``。
+    对缺少正式出版要素的记录保留 ``[J/OL]``，以避免凭空断言其已正式刊行。
+    """
+    issues: list[QAIssue] = []
+    for paper in papers:
+        if paper.source not in _ENGLISH_SOURCES:
+            continue
+        path = f"paper/{paper.lit_id}"
+        text = rendered.get(paper.lit_id) or ""
+        if "[J/J]" in text:
+            issues.append(QAIssue(
+                "CITATION_FORMAT_DUPLICATE_MEDIUM", QACheckStatus.FAIL,
+                "rendered", path,
+                "英文期刊文献类型标识重复为 [J/J]",
+                lit_id=paper.lit_id,
+                snippet=text[:120],
+            ))
+        has_formal_publication = bool(
+            (paper.journal or "").strip()
+            and any((value or "").strip() for value in (paper.volume, paper.issue, paper.pages))
+        )
+        if has_formal_publication and "[J/OL]" in text:
+            issues.append(QAIssue(
+                "CITATION_FORMAT_WRONG_MEDIUM", QACheckStatus.FAIL,
+                "rendered", path,
+                "英文期刊已有卷/期/页码等正式出版要素,不应标为 [J/OL]",
+                lit_id=paper.lit_id,
+                snippet=text[:120],
+            ))
+    return issues
+
+
 def _check_punctuation_and_order(papers: list[Paper], rendered: dict[str, str]) -> list[QAIssue]:
     """标点与字段顺序启发式校验。
 
@@ -214,7 +259,7 @@ def _render_papers(papers: list[Paper], style_id: str) -> dict[str, str]:
 
     for paper in papers:
         if paper.source in _CHINESE_SOURCES:
-            out[paper.lit_id] = (paper.raw_citation or "").strip()
+            out[paper.lit_id] = (paper.raw_citation or _fallback_chinese_citation(paper)).strip()
         elif paper.source in _ENGLISH_SOURCES and format_citation_via_citeproc is not None:
             try:
                 rendered = format_citation_via_citeproc(paper, style_id=style_id)
@@ -253,6 +298,7 @@ def check_citation_format(
     issues: list[QAIssue] = []
     issues.extend(_check_lang_consistency(papers, rendered))
     issues.extend(_check_required_elements(papers, rendered))
+    issues.extend(_check_medium_marker(papers, rendered))
     issues.extend(_check_punctuation_and_order(papers, rendered))
     issues.extend(_check_render_quality(papers, rendered))
 

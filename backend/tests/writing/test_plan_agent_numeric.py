@@ -66,7 +66,8 @@ def test_validate_submission_numeric_passes_min_groups_for_large_pool():
         submission, papers, initial, lid_of_idx=lid_of_idx,
     )
     assert groups is not None, reason
-    assert len(groups) == _min_groups(338) == 4
+    assert len(groups) == 4
+    assert len(groups) >= _min_groups(338) == 2
     assert sum(len(g.lit_ids) for g in groups) == 338
 
 

@@ -53,6 +53,16 @@ export const getLLMProviders = () =>
 export const getLLMProvidersHealth = () =>
   http.get<LLMProvidersHealthResponse>('/review/providers/health').then(r => r.data);
 
+export interface LLMTestResponse {
+  ok: boolean;
+  provider: string;
+  elapsed_ms: number;
+  response_preview: string;
+}
+
+export const testLLM = () =>
+  http.post<LLMTestResponse>('/review/test').then(r => r.data);
+
 // ─── 查询规划 / 重排 / 筛选 / 写作 ──────────────────────────
 
 export interface QueryPlanResponse {
