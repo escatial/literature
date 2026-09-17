@@ -1,0 +1,2732 @@
+{
+  "criteria": {
+    "keyword_overlap_high": 80.0,
+    "field_match_full": 90.0,
+    "method_applicable": 70.0,
+    "weights": {
+      "keyword_overlap": 0.35,
+      "field_match": 0.3,
+      "method_applicability": 0.2,
+      "conclusion_value": 0.15
+    }
+  },
+  "summary": {
+    "high": 26,
+    "medium": 52,
+    "low": 22
+  },
+  "total": 100,
+  "items": [
+    {
+      "lit_id": "lit_cnki_abfa7f9cb45fdaa2",
+      "title": "应急物资配送车辆与多批次无人机协同调度优化模型",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 97.05,
+      "match_points": [
+        "命中概念: 协同配送、无人机、配送车辆、应急物资配送、调度优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "直接研究应急物资货车-无人机协同调度，考虑道路损毁、多批次作业等应急特征",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 98.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_59659f33bae1d3b7",
+      "title": "山区森林火灾应急物资配送定位–路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.7,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "山区森林火灾应急物资配送，卡车-无人机协同定位-路径优化，完全契合主题",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 95.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_cf389f1ca795cc0d",
+      "title": "考虑心理成本的应急物流卡车——无人机协同配送路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.7,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "应急物流卡车-无人机协同配送路径优化，含经济与心理成本目标，与主题高度相关。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 95.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_905efa5708acd86b",
+      "title": "疫区应急物资供应的卡车-无人机动态协同配送路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.6,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "疫区应急物资卡车-无人机动态协同配送路径优化，直接对应研究主题。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 98.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_c2d7ae5d876ca7b9",
+      "title": "应急响应初期“卡车-无人机”联合配送路径问题",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.3,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、配送车辆、drone、应急物资配送",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "直接研究应急响应初期卡车-无人机联合配送应急物资路径问题，高度匹配。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_a99fe5fa4056e329",
+      "title": "考虑道路中断的应急物资卡车-无人机协同配送路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.2,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资运输、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 96.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "直接研究应急物资卡车-无人机协同配送路径优化，考虑道路中断等应急场景因素",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 96.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_0c577fce8df731e0",
+      "title": "灾后卡车-氢能无人机协同配送多目标路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.0,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "灾后卡车-氢能无人机协同配送多目标路径优化，与应急物资配送主题高度契合。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_ca6d48175f9df4eb",
+      "title": "通行受限下需求可拆分的应急物资卡车-多无人机协同配送路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 95.0,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "通行受限下应急物资卡车-多无人机协同配送路径优化，与研究主题高度吻合。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_4f0fdce2a9d138be",
+      "title": "考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 94.9,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 96.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究需求紧迫度下应急物资卡车-无人机联合配送路径优化，与主题完全契合。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 96.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_6ff879f575603830",
+      "title": "救援与配送结合的洪灾应急多载具多模态多目标调度优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 93.1,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、调度优化",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 92.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "洪灾应急卡车-无人机协同配送，直接对应研究主题，价值极高。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 92.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_e0af50f73cdf6a12",
+      "title": "需求不确定下卡车-无人机协同的路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 92.95,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 92.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "直接研究卡车-无人机协同应急物资配送路径,需求不确定场景高度相关",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 92.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_096049489666a4b1",
+      "title": "基于卡车-无人机协同的山区自然灾害应急物资调度优化决策研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 91.25,
+      "match_points": [
+        "命中概念: 无人机、卡车、应急物资调度、调度优化、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 100.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "卡车-无人机协同山区自然灾害应急物资调度，主题完全契合。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 100.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_903c6f447833999b",
+      "title": "考虑灾后路况时空不确定的卡车-无人机协同应急配送路径优化",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 91.25,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 100.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "卡车-无人机协同应急配送路径优化，考虑灾后路况不确定性，高度相关。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 100.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_a5a8d3f0dc723373",
+      "title": "应急物资末端配送的卡车与无人机路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 89.9,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、路径优化、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 100.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "应急物资末端配送的卡车与无人机路径优化，直接对应研究主题。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 100.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_b71f9a924fb40e65",
+      "title": "基于混合遗传算法的无人机与车辆协同应急物资配送路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 89.2,
+      "match_points": [
+        "命中概念: 无人机、应急物资配送、应急物资运输、路径优化、应急、突发事件",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "直接研究无人机与车辆协同应急物资配送路径优化，核心匹配研究主题",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 98.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_31dab29970e5619c",
+      "title": "考虑灾民心理的震后卡车-无人机协同配送路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 89.0,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化、应急、灾后救援",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究震后卡车-无人机协同配送应急物资路径优化,场景与方法高度契合。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_bc2cc26f30d1a658",
+      "title": "应急物流下货车-无人机协同配送路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 88.4,
+      "match_points": [
+        "命中概念: 协同配送、无人机、路径优化、应急、应急物流",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究应急物流下货车-无人机协同配送路径优化，模型与结论可作为核心参考。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_940bee1868901856",
+      "title": "卡车-无人机协同的洪灾应急选址-路径鲁棒优化问题",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 88.2,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "卡车-无人机协同洪灾应急选址-路径鲁棒优化，与主题高度相关。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 98.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_1c2206736e3b1632",
+      "title": "灾后应急救援背景下卡车-无人机协同配送路径规划",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 88.0,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、救援物资配送、应急、应急救援",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "灾后应急救援卡车无人机协同配送路径规划，直接研究对象与主题一致",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_4e3242520c958e97",
+      "title": "考虑道路受损和公平性的卡车无人机协同配送路径优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 87.6,
+      "match_points": [
+        "命中概念: 协同配送、卡车无人机协同、无人机、卡车、路径优化、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究应急物流中考虑道路受损与公平性的卡车-无人机协同配送路径优化，高度契合。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_32b0bd96a143965c",
+      "title": "考虑受灾点权重的卡车-无人机协同配送应急物资路径规划研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 87.25,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "直接研究自然灾害下卡车-无人机协同配送应急物资路径规划,与主题完全吻合。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_e48879139831c6e0",
+      "title": "无接触式“卡车+无人机”联合配送问题研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 87.0,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、应急物资配送、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "卡车+无人机联合配送应急物资,新冠无接触场景与主题高度契合",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_f5848f8fb99294bd",
+      "title": "考虑物资储备点调用的铁路应急物资车机协同配送优化研究",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 86.8,
+      "match_points": [
+        "命中概念: 协同配送、车机协同、无人机、卡车、应急物资配送、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 92.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "铁路应急物资卡车-无人机协同配送，与主题研究对象、问题高度一致",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 92.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_fafb7d239ff51b00",
+      "title": "疫区卡车-无人机协同配送路径规划:风险与效率兼顾",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 86.4,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、应急、应急物流",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 92.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "疫区卡车-无人机协同配送应急物资，与主题完全契合",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 92.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_21d2453f1292100f",
+      "title": "考虑心理成本的应急物流选址路径问题",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 85.35,
+      "match_points": [
+        "命中概念: 协同配送、卡车无人机协同、无人机、卡车、选址路径、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 92.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "应急物流卡车无人机协同选址路径问题，含心理成本目标，直接相关",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 92.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_1439edeae6d500ee",
+      "title": "应急响应中卡车-无人机协同配送优化策略",
+      "grade": "high",
+      "grade_label": "高相关",
+      "total": 84.1,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急物资配送、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 80.0"
+      ],
+      "reason": "应急响应中卡车-无人机协同配送优化策略，与主题直接契合。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 95.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 80.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_f44a21ca4c6cdb99",
+      "title": "UAV–Ground Vehicle Collaborative Delivery in Emergency Response: A Review of Key Technologies and Future Trends",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 83.7,
+      "match_points": [
+        "命中概念: collaborative delivery、uav、emergency、emergency logistics、disaster response",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 100.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 98.0"
+      ],
+      "reason": "综述无人机与地面车辆在应急场景中的协同配送,直接对应无人机卡车协同配送应急物资主题。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 100.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 98.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_9e5b2dcffdbc03b9",
+      "title": "A robust optimization framework for two‐echelon vehicle and UAV routing for post‐disaster humanitarian logistics operations",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 83.65,
+      "match_points": [
+        "命中概念: uav、drone、truck、vehicle routing problem、emergency",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "研究灾后人道物流中车辆与无人机协同路径优化,直接对应无人机卡车协同配送应急物资主题。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 98.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_cbabd88767e962d8",
+      "title": "5G网络环境下的“无人机+车辆”应急物资配送优化方案",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 83.5,
+      "match_points": [
+        "命中概念: 联合配送、无人机、配送车辆、应急物资配送、路径优化、应急",
+        "关键词重合度 100.0%",
+        "研究领域匹配度 80.0",
+        "研究方法适用性 70.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "5G环境下无人机+车辆应急物资配送优化，直接涉及车-机协同应急配送。",
+      "dimensions": {
+        "keyword_overlap": 100.0,
+        "field_match": 80.0,
+        "method_applicability": 70.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_8f850c14af0a7af1",
+      "title": "无人机-货车协同应急资源调度多目标优化研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 82.9,
+      "match_points": [
+        "命中概念: 协同配送、无人机、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 100.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究无人机-货车协同应急资源调度，与主题完全吻合。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 100.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_0ab597af6949b08d",
+      "title": "事件驱动下考虑优先级的卡车-无人机应急调度研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 82.6,
+      "match_points": [
+        "命中概念: 车机协同、无人机、卡车、应急、灾后救援",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "事件驱动下卡车-无人机应急调度，含优先级与动态重规划，与主题高度契合。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 98.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_21d86ef86a6df596",
+      "title": "基于卡车-无人机协同配送的双目标应急物资运送优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 81.6,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 96.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "卡车无人机协同配送双目标应急物资运送优化，主题高度契合",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 96.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_75daa40a4eb27e02",
+      "title": "基于改进ALNS的无人机-车辆应急物流路径规划",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 81.3,
+      "match_points": [
+        "命中概念: 协同配送、无人机、应急、应急物流",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "无人机-车辆应急物流路径规划，洪涝灾害场景下协同配送，与主题高度吻合。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_51b58c5ceafe2ca0",
+      "title": "考虑动态能耗的“卡车+无人机”应急物资配送优化研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 80.9,
+      "match_points": [
+        "命中概念: 无人机、卡车、应急物资配送、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 96.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究卡车+无人机应急物资配送路径优化，考虑动态能耗，与主题完全契合。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 96.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_ba74c32ff864708b",
+      "title": "高寒环境下以热衰减基准为基础的卡车和无人机应急物资协同调度优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 79.0,
+      "match_points": [
+        "命中概念: 无人机、卡车、调度优化、vrp、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "高寒环境下卡车-无人机应急物资协同调度优化，直接匹配研究主题",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 95.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_cf398ce77e441d53",
+      "title": "考虑货车-无人机协同的灾后应急响应策略及调度优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 78.8,
+      "match_points": [
+        "命中概念: 无人机、调度优化、应急、灾后救援",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 92.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "灾后应急响应货车-无人机协同策略与调度优化，直接服务应急配送研究。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 92.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_443f283bfd152681",
+      "title": "灾害区应急条件下“货车+无人机”协同配送研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 78.25,
+      "match_points": [
+        "命中概念: 协同配送、无人机、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "直接研究灾害区应急条件下货车+无人机协同配送路径优化，与主题高度契合。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 95.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_71d3e0650effd7ed",
+      "title": "场景驱动的卡车-无人机协同配送问题研究综述",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 77.3,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 70.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "卡车-无人机协同配送综述，明确涵盖应急场景，对综述写作参考价值极高。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 95.0,
+        "method_applicability": 70.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_5318a3f68b8250e7",
+      "title": "卡车-无人机协同路径规划研究进展",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 77.25,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、车辆路径问题",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 85.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "综述卡车-无人机协同路径规划，应用场景覆盖人道主义物流等应急领域",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 85.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_3cf58fb8776d4f01",
+      "title": "应急物资“火车-卡车-无人机”协同运输优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 77.0,
+      "match_points": [
+        "命中概念: 无人机、卡车、应急物资运输、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 90.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 80.0"
+      ],
+      "reason": "含卡车-无人机协同的应急物资运输优化,增加铁路环节,主题直接相关可借鉴。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 90.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 80.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_f00d4201bc7550f9",
+      "title": "地震应急救援中卡车-无人机多目标协同调度问题及优化算法",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 76.65,
+      "match_points": [
+        "命中概念: 无人机、卡车、应急、应急救援",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "直接研究地震应急救援中多卡车-多无人机协同调度，与主题完全契合，方法与结论均可直接参考。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 98.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_05de48100ce3c574",
+      "title": "Discrete Optimization on Truck‐Drone Collaborative Transportation System for Delivering Medical Resources",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 76.65,
+      "match_points": [
+        "命中概念: uav、drone、truck、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "多无人机多卡车协同运输系统配送医疗应急物资，与主题完全吻合",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 98.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_6311b383fb6cee46",
+      "title": "无人机配送研究：关于技术、效益及应用的系统综述",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 76.2,
+      "match_points": [
+        "命中概念: 协同配送、无人机、应急、应急物流",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 90.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "无人机配送系统综述，覆盖车辆协同与应急物流两大主题，与研究主题高度相关。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 90.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_0ff6884301f8b442",
+      "title": "Vehicle-UAV Integrated Routing Optimization Problem for Emergency Delivery of Medical Supplies",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 76.05,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 98.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 95.0"
+      ],
+      "reason": "车辆与无人机协同的应急医疗物资配送路径优化，核心研究对象高度吻合。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 98.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 95.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_5b8f623e99fa8b3a",
+      "title": "Reinforcement learning for humanitarian relief distribution with trucks and UAVs under travel time uncertainty",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 75.0,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、truck、delivery vehicle、vehicle routing problem",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 95.0",
+        "结论参考价值 90.0"
+      ],
+      "reason": "直接研究卡车与无人机协同的应急人道主义物资配送，强化学习方法高度相关。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 95.0,
+        "method_applicability": 95.0,
+        "conclusion_value": 90.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_4b25e7994dc9c86f",
+      "title": "基于无人机的应急物资配送设施选址及路径优化研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 74.95,
+      "match_points": [
+        "命中概念: 无人机、应急物资配送、路径优化、应急",
+        "关键词重合度 80.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "研究无人机应急物资配送选址与路径优化，研究对象一致但缺少卡车协同环节。",
+      "dimensions": {
+        "keyword_overlap": 80.0,
+        "field_match": 72.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_53df67904f971446",
+      "title": "受扰情况下卡车—无人机协同配送路径优化研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 74.3,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 82.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 78.0"
+      ],
+      "reason": "卡车-无人机协同配送且涉及时效与物资品质、动态扰动恢复，贴近应急场景",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 82.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 78.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_d01e00322f589b0e",
+      "title": "卡车-无人机协同救灾物资避障配送问题研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 74.3,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 92.0"
+      ],
+      "reason": "卡车-无人机协同救灾物资配送，直接命中卡车协同+应急物资主题，含避障与两阶段算法",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 92.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_d460381f50a90569",
+      "title": "考虑疫情影响的卡车无人机协同配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 73.85,
+      "match_points": [
+        "命中概念: 协同配送、卡车无人机协同、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 82.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 75.0"
+      ],
+      "reason": "卡车-无人机协同配送，疫情属突发事件应急场景，模型与方法可直接借鉴",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 82.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 75.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_a492c3c447bd0068",
+      "title": "基于GALNS的车辆与无人机协同运输路径规划",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 73.7,
+      "match_points": [
+        "命中概念: 无人机、卡车、应急、应急救援",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "地震灾害下车辆与无人机协同运输路径规划，属典型应急配送问题。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_94bd221ba9415c8e",
+      "title": "面向“最后一公里”的卡车-无人机协同配送优化建模综述",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 73.25,
+      "match_points": [
+        "命中概念: 协同配送、车机协同、无人机、卡车、应急",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 80.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 75.0"
+      ],
+      "reason": "综述涵盖快递、即时与应急等场景的车机协同，含应急配送内容。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 80.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 75.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_03a6174aecbd40be",
+      "title": "Exact and heuristic approaches to Truck–Drone Delivery Problems",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 72.6,
+      "match_points": [
+        "命中概念: collaborative delivery、drone、truck",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 90.0",
+        "研究方法适用性 92.0",
+        "结论参考价值 88.0"
+      ],
+      "reason": "卡车-无人机协同配送问题（MIP与启发式），直接对应研究主题",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 90.0,
+        "method_applicability": 92.0,
+        "conclusion_value": 88.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_952ccc9345fea0b9",
+      "title": "多级应急物流网络中无人机升降站点选址优化模型",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 72.0,
+      "match_points": [
+        "命中概念: 无人机、应急物资运输、应急、应急物流、应急救援",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 82.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 72.0"
+      ],
+      "reason": "多级应急物流网络中车辆与无人机协同选址，属应急配送邻域问题。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 82.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 72.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_a5df52e2aa435309",
+      "title": "无人机与卡车协同配送的多维度研究综述",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 70.7,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、车辆路径问题",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "无人机与卡车协同配送综述，属核心研究对象上/下位概念，可作基础参考。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 72.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_07930576fc285607",
+      "title": "考虑超时风险的多目标卡车-无人机协同配送鲁棒优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 70.1,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 78.0",
+        "研究方法适用性 82.0",
+        "结论参考价值 62.0"
+      ],
+      "reason": "卡车-无人机协同配送路径鲁棒优化模型与方法可借鉴，场景为次日达物流。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 78.0,
+        "method_applicability": 82.0,
+        "conclusion_value": 62.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_533e2e405a545e5d",
+      "title": "考虑超重超远客户的卡车无人机协同配送研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 70.1,
+      "match_points": [
+        "命中概念: 协同配送、卡车无人机协同、无人机、卡车、drone、truck",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "卡车-无人机协同配送模式与建模算法，但场景为一般配送而非应急",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 72.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_5c7cb85d2bad6a2f",
+      "title": "考虑时间窗的卡车无人机协同配送路径优化研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 70.1,
+      "match_points": [
+        "命中概念: 协同配送、卡车无人机协同、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 73.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 68.0"
+      ],
+      "reason": "考虑时间窗的卡车-无人机协同配送模型与算法，但面向末端物流",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 73.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 68.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_f9174a4adbe350ef",
+      "title": "限制区下货车联合无人机配送路径问题研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 69.6,
+      "match_points": [
+        "命中概念: 联合配送、无人机、车辆路径问题",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 78.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 68.0"
+      ],
+      "reason": "限制区（含灾区）货车联合无人机配送，与应急场景卡车协同高度相关",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 78.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 68.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_d01cb4134378954d",
+      "title": "面向多车多无人机协同配送路径优化的双链启发式算法",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 69.5,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 70.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "多车多无人机协同配送路径优化，研究对象与卡车-无人机协同配送一致，方法可直接迁移至应急场景",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 70.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_0c5b00df0c3f4cfd",
+      "title": "时变拥堵下卡车与无人机协同配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 69.4,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 78.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 60.0"
+      ],
+      "reason": "时变拥堵下卡车-无人机协同配送方法可参考，非应急但场景接近。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 78.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 60.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_d7ae2e5c4508ebc1",
+      "title": "考虑动态同步的卡车-无人机协同配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 68.6,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 68.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 68.0"
+      ],
+      "reason": "卡车-无人机动态同步协同配送路径优化，方法可迁移至应急物资配送场景",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 68.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 68.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_6faf1cd37a6764fa",
+      "title": "卡车-多无人机动态协同的配送路径优化研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 68.3,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 82.0",
+        "结论参考价值 62.0"
+      ],
+      "reason": "卡车-多无人机动态协同配送，模型算法可借鉴至应急物资配送场景。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 72.0,
+        "method_applicability": 82.0,
+        "conclusion_value": 62.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_b7b5915e4c6a9e17",
+      "title": "Truck-Drone Delivery Optimization Based on Multi-Agent Reinforcement Learning",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 68.2,
+      "match_points": [
+        "命中概念: collaborative delivery、unmanned aerial vehicle、drone、truck、carrier",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 82.0",
+        "研究方法适用性 88.0",
+        "结论参考价值 80.0"
+      ],
+      "reason": "基于多智能体强化学习的卡车无人机协同配送优化，方法高度可借鉴。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 82.0,
+        "method_applicability": 88.0,
+        "conclusion_value": 80.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_0f131950a7e482e4",
+      "title": "基于集群作业的车载无人机联合配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 68.1,
+      "match_points": [
+        "命中概念: 协同配送、联合配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 60.0"
+      ],
+      "reason": "车载无人机集群联合配送模型与DRL-ALNS算法可借鉴，属末端配送。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 75.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 60.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_6e573bedeb6519a6",
+      "title": "考虑卡车无人机协同配送模式下的车辆路径问题研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 68.0,
+      "match_points": [
+        "命中概念: 协同配送、卡车无人机协同、无人机、卡车、车辆路径问题",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 70.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 60.0"
+      ],
+      "reason": "卡车-无人机协同配送路径问题，研究对象相同，可作为背景参考。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 70.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 60.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_09ab31d2d0720991",
+      "title": "碳排放约束下无人机-卡车联合配送问题",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 67.35,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "无人机-卡车联合配送模型与算法可参考，场景为社区最后一公里配送。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 75.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_16ca9dc30be32721",
+      "title": "考虑动态碳排放的电动卡车-无人机协同配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 67.35,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "电动卡车-无人机协同配送模型与算法可参考，属低碳物流场景。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 75.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_c35f0f60523521ac",
+      "title": "农村地区卡车与无人机协同配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 67.25,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "卡车-无人机协同配送路径优化模型与两阶段算法可借鉴至应急场景。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 65.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_31fdc6f4f01be6c7",
+      "title": "A Reinforcement Learning Model of Multiple UAVs for Transporting Emergency Relief Supplies",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 67.25,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、truck、emergency、emergency relief",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 85.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "研究多无人机运输应急救援物资,直接涉及无人机应急配送,使用强化学习方法,但未含卡车协同。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 85.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_f4d2babd31d55b95",
+      "title": "基于无人机与卡车协作的封控社区生活物资配送方法",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 66.75,
+      "match_points": [
+        "命中概念: 协作配送、无人机、卡车",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 85.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 75.0"
+      ],
+      "reason": "研究无人机与卡车协作的封控社区生活物资配送，属突发公共卫生事件下的应急协同配送，主题高度相关。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 85.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 75.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_755e78d02007cb6b",
+      "title": "ALNS求解车辆无人机联合配送路径优化问题",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 66.5,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 60.0"
+      ],
+      "reason": "卡车-无人机联合配送路径优化，与主题研究对象一致，但应用场景为普通物流而非应急。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 65.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 60.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_bc8067c04bcb8e65",
+      "title": "考虑等待成本的卡车与多无人机联合配送农村物流路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 66.5,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "卡车-多无人机联合配送模型与算法可直接迁移至应急物资配送场景。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 60.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_5c551ec5e06f54d8",
+      "title": "区域限制下无人机-地面运输车辆联合配送路径优化",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 66.3,
+      "match_points": [
+        "命中概念: 协同配送、联合配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 68.0",
+        "研究方法适用性 78.0",
+        "结论参考价值 62.0"
+      ],
+      "reason": "卡车-无人机联合配送路径优化模型，场景为电商末端配送而非应急",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 68.0,
+        "method_applicability": 78.0,
+        "conclusion_value": 62.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_3e1c97fdaf7cd280",
+      "title": "基于车载模式的战场物资多无人机联合配送任务分配研究",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 66.25,
+      "match_points": [
+        "命中概念: 联合配送、无人机、车辆路径问题",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 70.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "车载模式多无人机联合配送战场物资,属卡车-无人机协同应急物资配送场景。",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 70.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_ddd25231553b13d9",
+      "title": "多模式下的车辆和无人机联合配送模型与优化算法",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 66.25,
+      "match_points": [
+        "命中概念: 协同配送、车机协同、联合配送、无人机、卡车、路径优化",
+        "关键词重合度 60.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "车辆与无人机联合配送多模式模型，虽非应急场景但卡车-无人机协同方法可迁移",
+      "dimensions": {
+        "keyword_overlap": 60.0,
+        "field_match": 65.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_4d629b979071f1b5",
+      "title": "The electric vehicle routing problem with drones: An energy minimization approach for aerial deliveries",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 64.0,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、delivery vehicle、vrp、vehicle routing problem",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "电动车与无人机协同配送路径问题,与卡车-无人机协同机制高度相关。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 75.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_15954ee476054138",
+      "title": "Possibilities of Using UAVs in Pre-Hospital Security for Medical Emergencies",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 57.9,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 78.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "综述无人机在医疗应急物资配送中的应用,与无人机应急物资配送直接相关,但未涉及卡车协同。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 78.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_7cd0c1f5b49b0067",
+      "title": "A mixed method impact assessment of the use of aerial logistics to improve maternal health and emergencies outcomes in the Ashanti Region of Ghana.",
+      "grade": "medium",
+      "grade_label": "中相关",
+      "total": 50.25,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 45.0"
+      ],
+      "reason": "Zipline无人机加纳妇幼健康空中物流，与无人机应急配送高度相关",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 65.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 45.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_a3d25cc447f00d72",
+      "title": "Integrated scheduling of truck and drone fleets for cargo transportation in post-disaster relief: A two-stage stochastic optimization approach",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 71.3,
+      "match_points": [
+        "命中概念: drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 100.0",
+        "研究方法适用性 98.0",
+        "结论参考价值 98.0"
+      ],
+      "reason": "研究灾后救援中卡车与无人机协同调度,直接对应研究主题,使用两阶段随机优化方法。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 100.0,
+        "method_applicability": 98.0,
+        "conclusion_value": 98.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_11668456eedcb704",
+      "title": "A multi-agent approach to the truck multi-drone routing problem",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 66.25,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 95.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "直接研究卡车与多无人机协同的路径规划问题（TmDTL），与主题核心问题完全一致。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 95.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_6f134b09704f2624",
+      "title": "Hybrid Truck-Drone Delivery Systems: A Systematic Literature Review",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 63.75,
+      "match_points": [
+        "命中概念: drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 90.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 85.0"
+      ],
+      "reason": "卡车-无人机混合配送系统系统综述,与研究主题直接高度相关。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 90.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 85.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_f4fb5b55a6b8e742",
+      "title": "Deep Reinforcement Learning for Truck-Drone Delivery Problem",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 60.7,
+      "match_points": [
+        "命中概念: drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 80.0",
+        "研究方法适用性 90.0",
+        "结论参考价值 78.0"
+      ],
+      "reason": "深度强化学习求解卡车无人机协同配送问题，方法可直接参考。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 80.0,
+        "method_applicability": 90.0,
+        "conclusion_value": 78.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_5b95289ba84ac604",
+      "title": "Autonomous aerial robotics for package delivery: A technical review",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 60.6,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 82.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 80.0"
+      ],
+      "reason": "综述无人机包裹配送，明确涵盖无人机-卡车协同操作及动态平台着陆，与主题高度相关。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 82.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 80.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_6effbb6d245331b6",
+      "title": "The Orienteering Problem with Drones",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 58.5,
+      "match_points": [
+        "命中概念: drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 80.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "研究卡车与多无人机协同完成定向运动问题,模型与方法可迁移至应急物资协同配送。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 80.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_4a4ea9bbef49908f",
+      "title": "A New Truck-Drone Routing Problem for Parcel Delivery Services Aided by Parking Lots",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 57.75,
+      "match_points": [
+        "命中概念: drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 75.0"
+      ],
+      "reason": "卡车与无人机协同的末端配送路径优化问题，方法可借鉴但场景为常规包裹。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 75.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 75.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_2f989ada19f70756",
+      "title": "Drones for relief logistics under uncertainty after an earthquake",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 53.25,
+      "match_points": [
+        "命中概念: drone",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 70.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "灾后无人机应急物资配送,属直接相关子问题,但仅含无人机不含卡车协同。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 75.0,
+        "method_applicability": 70.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_48c0bfa059777ab7",
+      "title": "Humanitarian Drones: A Review and Research Agenda",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 53.0,
+      "match_points": [
+        "命中概念: drone",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 65.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "系统综述人道主义无人机应用，涵盖运输配送能力，与应急物资配送属直接上位概念。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 75.0,
+        "method_applicability": 65.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_6c4483eb1e868b68",
+      "title": "Autonomous Delivery Solutions for Last-Mile Logistics Operations: A Literature Review and Research Agenda",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 52.8,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 70.0",
+        "结论参考价值 68.0"
+      ],
+      "reason": "综述涵盖自主配送机器人、无人机及双层/多层系统,与卡车-无人机协同配送模式直接相关。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 72.0,
+        "method_applicability": 70.0,
+        "conclusion_value": 68.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_fb86869831939b77",
+      "title": "A tailored Benders decomposition approach for last-mile delivery with autonomous robots",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 49.2,
+      "match_points": [
+        "未命中任何概念变体",
+        "关键词重合度 0.0%",
+        "研究领域匹配度 78.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 72.0"
+      ],
+      "reason": "卡车将包裹运至设施后由自主设备进行最后一公里配送,属典型双层卡车-无人机/机器人协同结构。",
+      "dimensions": {
+        "keyword_overlap": 0.0,
+        "field_match": 78.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 72.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_7e3686fca8b6ecf7",
+      "title": "Urban drone stations siting optimization based on hybrid algorithm of MILP and machine learning.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 48.5,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 60.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "城市无人机应急站点选址优化，属无人机应急物流基础设施",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 60.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_adc6bbfac137624f",
+      "title": "Drones reduce the time to defibrillation in a highly visited non-urban area: A randomized simulation-based trial.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 48.25,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 55.0",
+        "结论参考价值 45.0"
+      ],
+      "reason": "无人机AED配送非城区随机试验，与无人机应急配送相关",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 55.0,
+        "conclusion_value": 45.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_8fa40def97bddc1c",
+      "title": "Adopting drone technology for blood delivery: a feasibility study to evaluate its efficiency and sustainability.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 48.0,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "无人机血液配送可行性研究，属无人机应急医疗物资配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 60.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_9b3648b48d0e81fb",
+      "title": "Optimization in multimodal freight transportation problems: A Survey",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 48.0,
+      "match_points": [
+        "未命中任何概念变体",
+        "关键词重合度 0.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 70.0"
+      ],
+      "reason": "多式联运货运优化综述，无人机与卡车属多模式组合，可作为方法参考。",
+      "dimensions": {
+        "keyword_overlap": 0.0,
+        "field_match": 75.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 70.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_6861a1b42a04b019",
+      "title": "Revolutionizing Disaster Management: A Scoping Review of Drone Technology and Informatics in Humanitarian Response.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 47.0,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 45.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "无人机在灾害救援与人道物流的范围综述，与无人机应急配送直接相关",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 60.0,
+        "method_applicability": 45.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_43ee7cf169055be2",
+      "title": "Drone-based medical delivery in the extreme conditions of Himalayan region: a feasibility study.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 47.0,
+      "match_points": [
+        "命中概念: unmanned aerial vehicle、drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 45.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "喜马拉雅极端条件下无人机医疗物资配送，属无人机应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 60.0,
+        "method_applicability": 45.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_ba25245d1cf1baae",
+      "title": "Application of Unmanned Aerial Vehicles in Logistics: A Literature Review",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.75,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 60.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "综述无人机物流应用，涵盖最后一公里配送与路径优化，属邻近上位概念。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 65.0,
+        "method_applicability": 60.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_b4aa6fa2eec23df8",
+      "title": "Flight testing of drone-delivered automated external defibrillators for simulated out-of-hospital cardiac arrest in suburban Thailand.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.5,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "泰国郊区无人机AED配送飞行测试，属无人机应急配送上位概念",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_f7cce92fecf39808",
+      "title": "Semi-autonomous drone delivering automated external defibrillators for real out-of-hospital cardiac arrest: A Danish feasibility study.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.5,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "丹麦真实场景无人机AED配送可行性，属无人机应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_e25710d558b9095a",
+      "title": "Combinations of First Responder and Drone Delivery to Achieve 5-Minute AED Deployment in OHCA.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.5,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "急救员与无人机协同AED部署建模，涉协同应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_0823d03022d45617",
+      "title": "Effect of unmanned aerial vehicle (drone) delivery on blood product delivery time and wastage in Rwanda: a retrospective, cross-sectional study and time series analysis",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.0,
+      "match_points": [
+        "命中概念: unmanned aerial vehicle、drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 40.0",
+        "结论参考价值 50.0"
+      ],
+      "reason": "研究无人机血液制品配送时效，属应急医疗物资配送，但仅无人机未涉卡车协同。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 40.0,
+        "conclusion_value": 50.0
+      }
+    }
+  ],
+  "excluded_low_relevance": [
+    {
+      "lit_id": "lit_cnki_4d8381b19157bae9",
+      "title": "基于无人机交换的多卡车-无人机协同轨迹优化研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 55.35,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 85.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "研究多卡车-无人机协同轨迹优化，协同机制直接可借鉴，但应用场景为最后一英里非应急。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 72.0,
+        "method_applicability": 85.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_9cb53d62665d067d",
+      "title": "低空无人机物流配送研究与应用综述",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 53.75,
+      "match_points": [
+        "命中概念: 无人机",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 70.0",
+        "研究方法适用性 80.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "综述含无人机与货车协同运输优化模块，属上/下位概念，可作背景参考。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 70.0,
+        "method_applicability": 80.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_125a39aa1e611854",
+      "title": "农村山区物流基于卡车-无人机协同取送货作业优化研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 51.85,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "卡车-无人机农村山区协同取送货模型与算法可借鉴，山区地形与应急场景接近。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 72.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_12a291a487e0054a",
+      "title": "卡车与无人机协同的无接触式配送问题的双层启发式算法",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 51.25,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 72.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "卡车-无人机无接触式配送（疫情背景）双层模型与算法可借鉴。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 72.0,
+        "method_applicability": 72.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_60289b7f865d5314",
+      "title": "新零售背景下卡车与无人机协同的电商物流末端配送优化",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 51.15,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 82.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "卡车-无人机协同配送路径规划，建模与算法可迁移到应急物资配送，但应用场景为电商。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 65.0,
+        "method_applicability": 82.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_bb31f1c23131aebf",
+      "title": "电动汽车-无人机联合救援系统协调调度模型",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 50.25,
+      "match_points": [
+        "命中概念: 无人机、uav",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 70.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "电动汽车替代卡车作为无人机基站，紧急搜救与物资配送场景下的车-机协同，可参考其调度建模方法。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 65.0,
+        "method_applicability": 70.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_1926ab5f3ed59f60",
+      "title": "基于启发式算法的具有无人机的物流配送问题研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 49.1,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 72.0",
+        "研究方法适用性 65.0",
+        "结论参考价值 50.0"
+      ],
+      "reason": "卡车-无人机物流配送启发式算法研究，可作方法参考，场景为一般物流。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 72.0,
+        "method_applicability": 65.0,
+        "conclusion_value": 50.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_fc6fc5fa28be0f97",
+      "title": "基于卡车与无人机协同配送的乡村物流优化",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 48.4,
+      "match_points": [
+        "命中概念: 协同配送、无人机、卡车",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 58.0",
+        "结论参考价值 42.0"
+      ],
+      "reason": "卡车-无人机协同配送机制相同，但场景为乡村物流非应急",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 58.0,
+        "conclusion_value": 42.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_8222c95f339978e1",
+      "title": "卡车-无人机联合取送货模式下物流优化",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 48.35,
+      "match_points": [
+        "命中概念: 无人机、卡车、配送车辆",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 65.0",
+        "研究方法适用性 68.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "卡车-无人机联合取送货模式优化，核心对象一致，但非应急场景。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 65.0,
+        "method_applicability": 68.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_63f070c74203df41",
+      "title": "货车联合无人机的农村电商物流运输路径规划",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 47.5,
+      "match_points": [
+        "命中概念: 无人机",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 75.0",
+        "结论参考价值 50.0"
+      ],
+      "reason": "货车-无人机协同路径规划，同属卡车-无人机协同配送的邻近场景，方法可借鉴。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 60.0,
+        "method_applicability": 75.0,
+        "conclusion_value": 50.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_45735cc2bacb6921",
+      "title": "低空经济助推应急物资空地一体化调配的模式及对策",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 47.25,
+      "match_points": [
+        "命中概念: 应急、突发事件",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 75.0",
+        "研究方法适用性 40.0",
+        "结论参考价值 65.0"
+      ],
+      "reason": "讨论低空经济赋能应急物资空地一体化调配，涉及空地协同但侧重模式与对策而非路径优化。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 75.0,
+        "method_applicability": 40.0,
+        "conclusion_value": 65.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_fe875787b1e0d57e",
+      "title": "基于集群的卡车与无人机联合配送调度研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.9,
+      "match_points": [
+        "命中概念: 联合配送、无人机、卡车",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 52.0",
+        "研究方法适用性 55.0",
+        "结论参考价值 42.0"
+      ],
+      "reason": "卡车与无人机联合配送调度，机制可借鉴但场景为农村非应急",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 52.0,
+        "method_applicability": 55.0,
+        "conclusion_value": 42.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_5cba69d5b493a47d",
+      "title": "面向森林火灾救援的无人机物资精准投送系统",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 46.75,
+      "match_points": [
+        "命中概念: 无人机、应急、应急救援",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 55.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "研究无人机应急物资投送但无卡车协同，属于应急配送的邻近上位概念，方法可部分借鉴。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 55.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_a09562d48a2c9bf8",
+      "title": "The impact of drone delivery of an automated external defibrillator: a simulation feasibility study.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 45.75,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "无人机AED配送仿真可行性，属无人机应急配送上位概念",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_6e668476dbe5122c",
+      "title": "低空物流背景下湖南省农村车机协同配送模式研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 45.3,
+      "match_points": [
+        "命中概念: 协同配送、车机协同、无人机",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 35.0",
+        "结论参考价值 42.0"
+      ],
+      "reason": "车机协同配送模式研究，配送对象一致但场景为农村非应急，定性分析为主。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 60.0,
+        "method_applicability": 35.0,
+        "conclusion_value": 42.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_61db2842080f99c3",
+      "title": "复杂约束下应急救援无人机路径的熵增强量子涟漪协同算法",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 45.25,
+      "match_points": [
+        "命中概念: 无人机、应急、应急救援",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 50.0",
+        "研究方法适用性 55.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "应急救援无人机路径规划算法，无卡车协同，算法可部分借鉴但研究场景为救援非配送。",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 50.0,
+        "method_applicability": 55.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_e6b9752d76802d7c",
+      "title": "山区生鲜物流卡车-无人机联合集货路径规划",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 43.9,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 50.0",
+        "研究方法适用性 72.0",
+        "结论参考价值 50.0"
+      ],
+      "reason": "卡车-无人机联合集货路径,山区生鲜场景,协同模式与算法可借鉴",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 50.0,
+        "method_applicability": 72.0,
+        "conclusion_value": 50.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_0bebc97419bcf77f",
+      "title": "A Systematic Review of Drone Customization and Application in Public Health Innovation.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 43.75,
+      "match_points": [
+        "命中概念: uav、unmanned aerial vehicle、drone、disaster response",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 40.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "无人机在公共卫生领域应用的系统综述，含医疗物资配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 40.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_c5a12c9e43365b0a",
+      "title": "Study on medical professionals' acceptance of and factors influencing drone delivery for medical supplies.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 43.75,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 40.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "医护人员对无人机医疗物资配送接受度研究，属无人机应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 40.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_bb7572cb3a32f3cf",
+      "title": "Intricacies of medical drones in healthcare delivery: Implications for Africa",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 43.25,
+      "match_points": [
+        "命中概念: unmanned aerial vehicle、drone、truck",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 60.0",
+        "研究方法适用性 50.0",
+        "结论参考价值 55.0"
+      ],
+      "reason": "综述医疗无人机应用，涉及紧急医疗物资配送，提及与卡车对比。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 60.0,
+        "method_applicability": 50.0,
+        "conclusion_value": 55.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_ab614de124b638d5",
+      "title": "EMS Service Integration in American Indian and Native Alaskan Rural Communities.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 42.75,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 35.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "农村EMS整合涉及无人机配送关键药品，属无人机应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 35.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_203941595b877c09",
+      "title": "Innovative blood transfusion strategies to address global blood deserts: a consensus statement from the Blood Delivery via Emerging Strategies for Emergency Remote Transfusion (Blood DESERT) Coalition.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 42.75,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 35.0",
+        "结论参考价值 35.0"
+      ],
+      "reason": "血液配送创新策略共识声明，含无人机血液应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 55.0,
+        "method_applicability": 35.0,
+        "conclusion_value": 35.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_e7723b96a3a9c53b",
+      "title": "成渝地区卡车与无人机区域物流配送成本管理机制研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 42.35,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 50.0",
+        "研究方法适用性 68.0",
+        "结论参考价值 45.0"
+      ],
+      "reason": "卡车-无人机区域物流配送成本研究,协同模式与成本管理可参考",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 50.0,
+        "method_applicability": 68.0,
+        "conclusion_value": 45.0
+      }
+    },
+    {
+      "lit_id": "lit_openalex_cd5f6b0b195992fa",
+      "title": "Last-Mile Drone Delivery: Past, Present, and Future",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 42.0,
+      "match_points": [
+        "命中概念: drone",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 55.0",
+        "研究方法适用性 55.0",
+        "结论参考价值 50.0"
+      ],
+      "reason": "综述无人机最后一公里配送路由与优化，与卡车协同配送属邻近概念。",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 55.0,
+        "method_applicability": 55.0,
+        "conclusion_value": 50.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_218be9f2ea41fff5",
+      "title": "Bystanders' attitudes towards drone delivered Automated External Defibrillators for out-of-hospital cardiac arrest: A qualitative interview study.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 40.5,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 50.0",
+        "研究方法适用性 35.0",
+        "结论参考价值 30.0"
+      ],
+      "reason": "研究无人机配送AED应急医疗物资的态度，属无人机应急配送上位概念",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 50.0,
+        "method_applicability": 35.0,
+        "conclusion_value": 30.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_8369a3b76960d621",
+      "title": "Perceptions of older people regarding drone-delivered defibrillators for out-of-hospital cardiac arrest: a qualitative study.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 40.5,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 50.0",
+        "研究方法适用性 35.0",
+        "结论参考价值 30.0"
+      ],
+      "reason": "老年人对无人机AED配送认知，属无人机应急配送邻域",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 50.0,
+        "method_applicability": 35.0,
+        "conclusion_value": 30.0
+      }
+    },
+    {
+      "lit_id": "lit_pubmed_d963ebf364b8a3ee",
+      "title": "Dispatcher nurses' experiences of handling drones equipped with automated external defibrillators in suspected out-of-hospital cardiac arrest - a qualitative study.",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 40.5,
+      "match_points": [
+        "命中概念: drone、emergency",
+        "关键词重合度 40.0%",
+        "研究领域匹配度 50.0",
+        "研究方法适用性 35.0",
+        "结论参考价值 30.0"
+      ],
+      "reason": "调度护士对无人机AED配送体验质性研究，属无人机应急配送",
+      "dimensions": {
+        "keyword_overlap": 40.0,
+        "field_match": 50.0,
+        "method_applicability": 35.0,
+        "conclusion_value": 30.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_fdff41c9a2df1649",
+      "title": "基于卡车和无人机联合运输下的末端配送算法研究",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 39.6,
+      "match_points": [
+        "命中概念: 无人机、卡车",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 52.0",
+        "研究方法适用性 55.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "卡车-无人机末端配送算法，但应用场景为城市末端非应急",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 52.0,
+        "method_applicability": 55.0,
+        "conclusion_value": 40.0
+      }
+    },
+    {
+      "lit_id": "lit_cnki_e479cf236677d8f0",
+      "title": "基于配送模式的无人机城市配送路径规划",
+      "grade": "low",
+      "grade_label": "低相关",
+      "total": 38.5,
+      "match_points": [
+        "命中概念: 无人机、uav、unmanned aerial vehicle",
+        "关键词重合度 20.0%",
+        "研究领域匹配度 45.0",
+        "研究方法适用性 60.0",
+        "结论参考价值 40.0"
+      ],
+      "reason": "论述无人机配送模式含机车协同模式,路径规划方法可部分参考",
+      "dimensions": {
+        "keyword_overlap": 20.0,
+        "field_match": 45.0,
+        "method_applicability": 60.0,
+        "conclusion_value": 40.0
+      }
+    }
+  ]
+}

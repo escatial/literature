@@ -1,0 +1,2350 @@
+{
+  "topic": "无人机卡车协同配送应急物资",
+  "history_id": 7,
+  "input_count": 100,
+  "writing_pool_count": 80,
+  "groups": [
+    {
+      "name": "应急配送协同优化",
+      "lit_ids": [
+        "lit_cnki_abfa7f9cb45fdaa2",
+        "lit_cnki_59659f33bae1d3b7",
+        "lit_cnki_cf389f1ca795cc0d",
+        "lit_cnki_905efa5708acd86b",
+        "lit_cnki_c2d7ae5d876ca7b9",
+        "lit_cnki_a99fe5fa4056e329",
+        "lit_cnki_0c577fce8df731e0",
+        "lit_cnki_ca6d48175f9df4eb",
+        "lit_cnki_4f0fdce2a9d138be",
+        "lit_cnki_6ff879f575603830",
+        "lit_cnki_e0af50f73cdf6a12",
+        "lit_cnki_096049489666a4b1",
+        "lit_cnki_903c6f447833999b",
+        "lit_cnki_a5a8d3f0dc723373",
+        "lit_cnki_b71f9a924fb40e65",
+        "lit_cnki_31dab29970e5619c",
+        "lit_cnki_bc2cc26f30d1a658",
+        "lit_cnki_940bee1868901856",
+        "lit_cnki_1c2206736e3b1632",
+        "lit_cnki_4e3242520c958e97",
+        "lit_cnki_32b0bd96a143965c",
+        "lit_cnki_e48879139831c6e0",
+        "lit_cnki_f5848f8fb99294bd",
+        "lit_cnki_fafb7d239ff51b00",
+        "lit_cnki_21d2453f1292100f",
+        "lit_cnki_1439edeae6d500ee",
+        "lit_cnki_cbabd88767e962d8",
+        "lit_cnki_8f850c14af0a7af1",
+        "lit_cnki_0ab597af6949b08d",
+        "lit_cnki_21d86ef86a6df596",
+        "lit_cnki_75daa40a4eb27e02",
+        "lit_cnki_51b58c5ceafe2ca0",
+        "lit_cnki_ba74c32ff864708b",
+        "lit_cnki_cf398ce77e441d53",
+        "lit_cnki_443f283bfd152681",
+        "lit_cnki_71d3e0650effd7ed",
+        "lit_cnki_5318a3f68b8250e7",
+        "lit_cnki_3cf58fb8776d4f01",
+        "lit_cnki_f00d4201bc7550f9",
+        "lit_cnki_6311b383fb6cee46",
+        "lit_cnki_4b25e7994dc9c86f",
+        "lit_cnki_53df67904f971446",
+        "lit_cnki_d01e00322f589b0e",
+        "lit_cnki_d460381f50a90569",
+        "lit_cnki_a492c3c447bd0068",
+        "lit_cnki_94bd221ba9415c8e",
+        "lit_cnki_952ccc9345fea0b9",
+        "lit_cnki_a5df52e2aa435309",
+        "lit_cnki_07930576fc285607",
+        "lit_cnki_533e2e405a545e5d",
+        "lit_cnki_5c7cb85d2bad6a2f",
+        "lit_cnki_f9174a4adbe350ef",
+        "lit_cnki_d01cb4134378954d",
+        "lit_cnki_0c5b00df0c3f4cfd"
+      ]
+    },
+    {
+      "name": "协同配送路径优化",
+      "lit_ids": [
+        "lit_openalex_f44a21ca4c6cdb99",
+        "lit_openalex_9e5b2dcffdbc03b9",
+        "lit_openalex_05de48100ce3c574",
+        "lit_openalex_0ff6884301f8b442",
+        "lit_openalex_5b8f623e99fa8b3a",
+        "lit_openalex_03a6174aecbd40be",
+        "lit_openalex_b7b5915e4c6a9e17",
+        "lit_openalex_31fdc6f4f01be6c7",
+        "lit_openalex_4d629b979071f1b5",
+        "lit_openalex_15954ee476054138",
+        "lit_pubmed_7cd0c1f5b49b0067",
+        "lit_openalex_a3d25cc447f00d72",
+        "lit_openalex_11668456eedcb704",
+        "lit_openalex_6f134b09704f2624",
+        "lit_openalex_f4fb5b55a6b8e742",
+        "lit_openalex_5b95289ba84ac604",
+        "lit_openalex_6effbb6d245331b6",
+        "lit_openalex_4a4ea9bbef49908f",
+        "lit_openalex_2f989ada19f70756",
+        "lit_openalex_48c0bfa059777ab7",
+        "lit_openalex_6c4483eb1e868b68",
+        "lit_openalex_fb86869831939b77",
+        "lit_pubmed_7e3686fca8b6ecf7",
+        "lit_pubmed_adc6bbfac137624f",
+        "lit_pubmed_8fa40def97bddc1c",
+        "lit_openalex_9b3648b48d0e81fb"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "key": "theme_1",
+      "title": "一、应急配送协同优化",
+      "content": "灾后道路损毁与运输时效性之间的尖锐矛盾,使得传统以地面车辆为主的应急配送模式面临严峻挑战,而卡车-无人机协同配送凭借\"运载量与灵活性的互补\"迅速成为研究热点。早在新冠疫情期间,彭勇与黎元钧(2020)便针对疫情地区提出\"卡车-无人机\"协同模式,将客户细分为仅卡车服务、仅无人机服务与两者均可服务三类,验证了无人机在规避接触传染风险方面的可行性[1]。刘长石等(2022)进一步在中高风险疫区推行\"无接触式\"无人机配送、低风险区卡车配送的分区模式,以总配送时间最短为目标构建动态协同路径模型,凸显了风险分级与车机分工的研究范式[2]。胡大伟等(2024)从应急响应初期视角,基于经典VRP-D框架提出联合配送路径模型,通过与LINGO求解器和遗传算法的对比验证了变邻域搜索算法在求解速度与稳定性上的优势,奠定了早期应急场景下协同路径优化的方法基础[3]。\n\n在模型目标层面,相关研究呈现出由单目标向多目标、由经济成本向\"经济-时效-人文\"复合成本演进的明显趋势。蒋桥桥等(2026)将货车视为移动中转站,允许无人机在货车行驶路径上任一点起降与补给,以最小化货车行驶时间、无人机飞行时间及二者相互等待时间的总任务负荷为目标,体现\"路段中补给\"策略对系统效率的结构性改善[4]。张林静与丁溢(2025)在目标函数中引入剥夺成本以量化灾民因物资延迟获取而承受的心理痛苦,通过改进INSGA-Ⅱ求解双目标模型,揭示出协同模式在缓解灾民痛苦方面所具有的超越纯经济成本的附加价值[5]。赵林林和梁杰(2026)则进一步引入临时中转点机制以拓展无人机作业范围,并通过精英NSGA-Ⅱ-ACO融合算法同时优化经济成本与心理成本,借助2023年土耳其地震实例为人本导向的应急物流转型提供了方法支撑[6]。三者体现出多目标化与人文化目标嵌入的逐步深化,模型从\"效率导向\"扩展至\"效率与人本兼顾\"。\n\n协同模式的多样化是另一显著特征。刘长石等(2023)研究通行受限情景下需求可拆分的卡车-多无人机协同配送,允许卡车途中发射与接收无人机,且无人机单次起飞可服务多个需求点,从而有效缩短飞行距离与协同时间[7]。周愉峰等(2026)则将协同拓展至\"卡车-摩托车-无人机\"三级网络,综合考虑山区路网结构、火势蔓延风险与物资集散点多阶段动态选址,以配送满意度最大为目标,论证了多载具协同在山区复杂场景下的必要性[8]。于丽娜等(2026)引入氢燃料电池无人机以突破锂电池续航瓶颈,针对灾后氢气可能引发的二次灾害风险进行量化建模,构建最小化运输成本、剥夺成本与系统风险的多目标模型,展示了机型创新与风险量化的耦合思路[9]。这种从\"二载具\"到\"多载具\"再到\"新型机型引入\"的拓展,反映出研究对现实应急场景异质性的回应不断加深。\n\n在约束条件刻画上,研究越来越贴合应急场景的特殊性。张圣忠与庞振凯(2026)将道路中断、无人机续航与载重、软时间窗惩罚成本同时纳入模型,以最小化平均服务时间与延误成本为目标,基于大邻域搜索设计了\"聚类-贪心插入-破坏-重建\"的动态调整机制,提升了应对突发中断的能力[10]。王培栋与汪玲(2025)从受灾点需求紧迫度出发,运用层次分析法对紧迫度指标赋权,构建紧迫度排序指数最大化与延时惩罚总成本最小化的双目标模型,强调公平与效率的兼顾[11]。曹允春等(2025)则将\"灾民心理成本\"显式纳入目标函数,设计了融合改进修复与动态局部搜索的NSGA-Ⅲ变体,在不同规模算例上较对比算法平均降低成本5.61%至23.92%,凸显人本目标对决策质量的实质提升[12]。韩晶与刘艳秋(2025)将受灾点公平性嵌入协同路径优化模型,采用混合黑猩猴算法求解,进一步将公平维度推进至模型内核[13]。四者共同构成了应急场景约束刻画从\"硬约束\"走向\"软约束与人本约束\"并重的演进路径。\n\n动态与不确定性建模是该领域近年来的前沿方向。刘兴等(2026)综合运用指数型、幂型与逻辑型函数刻画灾后道路损毁率在时空维度上的特征,借助蒙特卡洛仿真多个路况场景,以仿真中的配送时间均值与最大值为优化目标构建鲁棒模型,显著提升了协同方案对路况不确定性的适应能力[14]。高振明等(2026)聚焦灾后需求动态涌现的现实挑战,提出基于\"虚拟起始点\"与\"系统状态快照\"的事件驱动动态重规划框架,实现对突发请求的即时响应,并通过自适应重加温模拟退火机制规避局部最优[15]。陈兆芳等(2025)则引入需求不确定水平参数构建鲁棒路径优化模型,借助自适应大规模邻域搜索算法保证受灾点在需求波动下卡车-无人机路径的可行性[16]。三项研究从\"路网不确定\"、\"事件驱动\"与\"需求不确定\"三个维度丰富了动态建模的理论工具。\n\n在算法层面,研究普遍采用精确算法与元启发式算法并行演进的策略。章可怡等(2025)针对NP难特性,融合遗传算法与动态规划的优势提出HGADP混合算法,在不同规模算例上验证了相较Gurobi求解器的效率优势[17]。宋百玲等(2024)在地震背景下设计GALNS自适应变邻域遗传算法,实验表明其在车辆行驶距离、总时间和总成本上较GA、PSO与ALNS实现显著降低[18]。杨双鹏等(2022)针对新冠期间的\"无接触\"场景,提出三阶段求解方法,采用改进K-means聚类卡车配送点后,利用尾部客户判断法改进模拟退火算法确定无人机飞行路径,体现了分阶段启发式策略的实用价值[19]。需要指出的是,尽管算法创新持续推进,但不同算法间的横向比较仍缺乏统一基准,制约了结论的可比性与可推广性。\n\n在文献梳理层面,唐立等(2026)从城市、应急、农村山区和创新服务模式四个典型场景梳理协同配送的建模思路,指出应急场景侧重快速响应,创新服务模式则追求快速高效,算法在动态不确定问题上更具优势[20]。崔海鹏等(2026)基于Web of Science核心合集386篇文献开展计量分析,构建\"问题类型-模型构建-算法求解-应用场景\"框架,揭示出研究对象由单卡车-单无人机向多车多机、灵活起降、动态响应拓展的演进脉络[21]。徐泽水等(2026)从\"场景驱动-参数刻画-建模基础-模型拓展\"四个维度对最后一公里协同配送进行综述,指出当前研究在参数静态同质、对气象与空域波动响应不足、多维目标权衡刻画不充分等方面仍存在关键短板[22]。邸振等(2025)同样基于113篇中英文文献,将问题归纳为带无人机的旅行商问题、多无人机旅行商问题及带无人机的车辆路径问题三大类,识别出动态环境适应性与异构车队深度协同方面的研究局限[23]。这四篇综述为定位本研究在领域中的位置提供了重要参照。\n\n综上,现有研究在模型目标多元化、协同模式多样化、约束刻画精细化与不确定性建模动态化方面取得了显著进展,但对于极端环境适应性、异构车队深度协同以及动态事件实时驱动等方面的研究仍相对有限。下一节将进一步聚焦协同配送中的车辆路径核心模型,深入剖析不同模型在约束体系与求解策略上的差异。",
+      "citations": [
+        "lit_cnki_d460381f50a90569",
+        "lit_cnki_905efa5708acd86b",
+        "lit_cnki_c2d7ae5d876ca7b9",
+        "lit_cnki_abfa7f9cb45fdaa2",
+        "lit_cnki_21d86ef86a6df596",
+        "lit_cnki_cf389f1ca795cc0d",
+        "lit_cnki_ca6d48175f9df4eb",
+        "lit_cnki_59659f33bae1d3b7",
+        "lit_cnki_0c577fce8df731e0",
+        "lit_cnki_a99fe5fa4056e329",
+        "lit_cnki_4f0fdce2a9d138be",
+        "lit_cnki_31dab29970e5619c",
+        "lit_cnki_4e3242520c958e97",
+        "lit_cnki_903c6f447833999b",
+        "lit_cnki_0ab597af6949b08d",
+        "lit_cnki_e0af50f73cdf6a12",
+        "lit_cnki_096049489666a4b1",
+        "lit_cnki_a492c3c447bd0068",
+        "lit_cnki_e48879139831c6e0",
+        "lit_cnki_71d3e0650effd7ed",
+        "lit_cnki_5318a3f68b8250e7",
+        "lit_cnki_94bd221ba9415c8e",
+        "lit_cnki_a5df52e2aa435309"
+      ],
+      "dropped_citations": []
+    },
+    {
+      "key": "theme_2",
+      "title": "二、协同配送路径优化",
+      "content": "协同配送路径优化是无人机-卡车联合配送研究的核心议题，其目标是在兼顾时间、能耗、负载与不确定性的前提下，为卡车与无人机分配任务并规划各自的行驶与飞行路径。Wang等对无人机应急配送与地面转运调度所涉及的八大核心研究领域进行了系统梳理，明确指出路径优化是连接空中投递能力与地面接驳网络的关键技术纽带。由于应急场景对时效性、可靠性与可达性的要求远高于常规物流，近年来该方向从经典车辆路径问题的变体逐步演化为具有鲜明应急特征的新问题族，并在建模目标、约束类型与求解方法上呈现出与商用最后一公里配送明显不同的研究路径。\n\n在问题范式层面，Madani与Ndiaye(2022)对混合卡车-无人机配送系统进行了涵盖95篇文献的系统综述，将既有协同路径问题归纳为两大范式：一类以旅行商问题为基础引入无人机子回路约束，另一类以车辆路径问题为基础允许多车多机协同[24]； 该综述同时指出，面向灾后救援、突发公共卫生事件等应急背景的研究比例明显偏低。这一结构性的研究缺口，正是近年来协同配送路径优化研究重心向人道主义物流倾斜的重要原因。在此基础上，Lin等(2022)针对疫情封控期间封闭社区与偏远地区的医疗物资投递需求，构建了多无人机-多卡车协同运输的离散优化模型，将无人机续航、载重、卡车接驳点选择等约束统一纳入整数规划框架，并通过对比实验证实协同模式在响应时间与覆盖范围上均优于单一卡车配送[25]。在算法层面，Freitas等(2022)对卡车-无人机配送问题(TDDP)中的精确算法与元启发式算法进行了系统的对比研究，指出尽管分支定价、切割平面等精确方法在小规模实例上能够给出最优解，但当问题规模扩展到实际应急配送网络时，自适应大邻域搜索、禁忌搜索等元启发式方法在求解效率与解的质量上的综合表现更为可取[26]。两条研究路线从不同维度共同印证了\"算法选择应与问题规模、约束复杂度相匹配\"的共识，也凸显出精确方法在应急大规模场景中仍面临可扩展性瓶颈。\n\n应急场景下道路中断、通信中断和需求突变导致路径优化面临高度不确定性，这直接推动了鲁棒优化与随机优化方法在协同路径建模中的引入。Faiz等(2024)提出了灾后人道主义物流中两阶段车辆-无人机路径的鲁棒优化框架，将运输网络中断、能耗波动等不确定因素纳入最坏情形分析，求解得到对扰动具有免疫力的协同路径方案[27]。Yang等则采用两阶段随机优化方法，将卡车行驶时间不确定性建模为有限场景集，第一阶段确定无人机飞行路径，第二阶段在观测到实际路况后再对卡车路线进行调整，从而将不确定性的影响推迟到第二阶段决策中以降低期望总成本。Dükkancı等(2023)进一步针对地震后道路被瓦砾阻塞、无人机成为主要运输方式的情形，构建了不确定性下以无人机为主的救济配送模型，强调应急路径决策对道路可通行性实时信息的强依赖性[28]。两类方法在处理不确定性的哲学上存在显著差异：前者强调最坏情形下的可行性，后者强调期望意义下的经济性，这种方法论分歧至今尚未收敛，构成当前协同配送路径优化领域需要进一步讨论的核心议题之一。\n\n不确定性同样推动了强化学习方法在该领域的应用。Steenbergen等(2023)针对灾后道路受损、卡车行驶时间高度不确定的情形，将卡车-无人机协同最后一公里救济物资配送建模为马尔可夫决策过程，采用强化学习求解路径策略，结果表明所学策略在不确定环境下相较传统确定性优化方案具有更稳健的性能[29]。Bi等(2024)进一步将卡车-无人机协同配送建模为多智能体强化学习问题，由卡车与每架无人机分别作为独立智能体进行协同决策，通过共享价值函数提升整体配送效率[30]； Bi等(2023)则在前序工作中将深度强化学习引入端到端的卡车-无人机配送路径求解，证明该方法在解的质量与训练效率上均具竞争力[31]。Hachiya等(2022)针对大规模地震与海啸后多架无人机投送救济物资的场景，构建了基于强化学习的多无人机调度模型，强调多机协同在面对广域分散需求时的可扩展性[32]。强化学习相较数学规划的优势在于能够在线适应环境变化，更契合应急场景\"边响应、边调整\"的实际需求；其不足则在于训练样本需求大、策略可解释性差，难以直接满足应急指挥系统对方案审计与回溯的要求。\n\n为更贴合复杂应急网络，学者们在基础协同路径模型之上引入了多种扩展结构。Leon-Blanco等(2022)研究了卡车-多无人机团队物流问题(TmDTL)，允许一辆卡车搭载并协调多架无人机并行投递，将经典单无人机伴随旅行商问题(mFSTSP)拓展为多机版本，并通过基于冲突的协同进化算法加以求解[33]。Gómez-Lagos等(2021)提出借助停车场的卡车-无人机协同路径新问题，允许卡车在行驶途中多次停靠停车场作为无人机起降与换电节点，从而缓解卡车续航对无人机活动半径的约束[34]。Kyriakakis等(2022)从能耗视角切入，构建了电动车与无人机协同配送路径问题(EVRPD)，将无人机空中能耗与电动卡车地面能耗统一纳入目标函数，凸显了应急配送在能源受限环境下对碳排放与续航管理的双重考量[35]。上述三类扩展共同体现出研究由\"单卡车-单无人机、单一接力点\"向\"多机协同、多段接力、复杂拓扑、能耗耦合\"逐步深化的演进趋势。\n\n在面向医疗应急物资的路径优化方面，Ghaffar等(2024)针对自然灾害与突发公共卫生事件中医疗物资配送面临的特殊挑战，构建了车辆-无人机一体化路径优化模型，重点考虑了医疗物资的时效性、冷链要求与多类物资的优先级差异，并通过混合整数规划求解验证了协同模式在缩短送达时间方面的效果[36]。Robakowska等(2022)从院前急救角度分析了无人机在医疗紧急事件中投递除颤器、血液制品与药品的可行性，指出路径设计中必须将急救响应时间窗口作为硬约束而非软目标加以处理[37]。Saunders等(2023)从自主空中机器人技术层面梳理了包裹投递的关键技术，包括路径跟踪、避障与多机协调，进一步印证了路径优化在工程控制层与决策优化层之间的耦合关系[38]。\n\n综合来看，现有协同配送路径优化研究在模型层面已覆盖从基础协同旅行商到两阶段随机/鲁棒优化、从单目标到多目标、从单无人机到多无人机协同的主要扩展形态；在算法层面则形成了数学规划、启发式/元启发式与强化学习三足鼎立的格局。然而，多数研究仍将应急场景简化为参数化的扰动或有限场景集，对需求侧的不确定性（如受灾点数量、伤员分布、物资需求量随时间的演变）以及多救援机构之间的协同关注仍然不足；同时，路径优化结果与上层任务分配、库存调度的耦合也尚未得到充分建模。这些不足为后续章节从需求不确定性与系统耦合视角进一步展开讨论留下了空间。",
+      "citations": [
+        "lit_openalex_6f134b09704f2624",
+        "lit_openalex_05de48100ce3c574",
+        "lit_openalex_03a6174aecbd40be",
+        "lit_openalex_9e5b2dcffdbc03b9",
+        "lit_openalex_2f989ada19f70756",
+        "lit_openalex_5b8f623e99fa8b3a",
+        "lit_openalex_b7b5915e4c6a9e17",
+        "lit_openalex_f4fb5b55a6b8e742",
+        "lit_openalex_31fdc6f4f01be6c7",
+        "lit_openalex_11668456eedcb704",
+        "lit_openalex_4a4ea9bbef49908f",
+        "lit_openalex_4d629b979071f1b5",
+        "lit_openalex_0ff6884301f8b442",
+        "lit_openalex_15954ee476054138",
+        "lit_openalex_5b95289ba84ac604"
+      ],
+      "dropped_citations": []
+    },
+    {
+      "key": "comment",
+      "title": "三、文献述评",
+      "content": "综合来看，无人机与卡车协同配送的研究经过近十年的发展已经形成了较为清晰的研究脉络，国内外学者围绕建模方法、算法设计与应用场景等方面开展了大量工作，但聚焦于应急物资配送这一特殊情境的研究仍显不足，理论与实践之间尚存在若干亟需弥合的断层。\n\n从建模工具的选择来看，现有文献呈现出两种较为典型的路径。一部分研究延续经典车辆路径问题的建模思路，将无人机视为依附于卡车的服务节点，通过引入时间同步约束、载荷耦合约束与能量限制，构建混合整数规划或网络流模型以追求精确解或紧致界；另一部分研究则更注重工程实用性，广泛采用遗传算法、禁忌搜索、变邻域搜索、粒子群算法等元启发式方法，以应对实际路网规模下的NP-hard求解挑战。精确方法的优势在于中小规模问题上能够给出可验证的最优性保证，元启发式方法则在计算效率与可扩展性方面表现更佳。然而，两类方法在处理动态扰动方面均存在明显短板：当道路因灾中断、需求因灾突变或无人机因天气失效时，模型的鲁棒性论证往往缺乏系统性的理论支撑，敏感性分析也大多停留在参数层面而非结构性扰动层面。\n\n在应用场景方面，现有研究主要围绕常规物流展开，涵盖电商末端配送、偏远地区物资投送、即时零售等典型情境。相比之下，应急物资配送所内含的时间紧迫性、需求高度不确定性、道路通行条件恶化等特征，在既有模型中尚未得到充分表达。应急物资在品类、优先级、保鲜要求等方面与普通快递存在本质差异，例如医疗血液与药品的冷链约束、救灾帐篷的体积与重量特征、救援队伍对响应时效的近乎苛刻的要求，这些维度的引入会对协同模式的选择产生实质性影响，但相关讨论在现有文献中仍较为有限。\n\n从优化目标的维度审视，最小化总配送时间或总运营成本仍是绝大多数研究的核心取向，部分研究开始将能耗、碳排放或人力成本纳入考量。值得注意的是，应急场景下\"公平性\"目标的相关讨论相对薄弱，例如不同受灾社区之间响应时间的均衡、弱势群体与重点保护区域的优先覆盖、不同灾害等级区域之间的资源分配公平等问题，虽然在人道主义物流领域已有一定理论基础，但在无人机-卡车协同配送的框架下进行系统化建模与量化分析仍属空白。这种单维度目标导向在一定程度上限制了研究成果向应急管理实践的直接转化。\n\n在协同运行机制的设计层面，现有研究主要对比了若干典型模式，包括卡车全程伴随式、固定节点汇合式以及并行独立式等，并在常规物流情境下给出了相应的适用条件与性能差异。然而，在应急情境中，由于道路塌方、通信中断、空域管制等因素的影响，上述模式的可行性边界会发生显著变化。例如，固定节点汇合模式在道路中断时可能面临卡车无法按时抵达预设节点的困境，而无人机独立飞行的空域申请在灾后紧急状态下也面临审批程序的制约。这些现实约束在多数现有研究中以理想化方式处理，与实际应急部署条件之间存在不可忽视的差距。\n\n综合上述分析可以判断，现有研究在理论建模与算法设计层面已奠定坚实基础，但在面向应急物资配送这一特定情境时仍存在若干明显的研究空白：其一，缺乏对时间窗口紧迫性、需求突变与道路中断等多重扰动因素的系统整合模型；其二，在效率与公平的多目标协同优化方面讨论不足，尤其是不同受灾区域之间的均衡响应机制亟待构建；其三，现有研究多依赖仿真或合成数据进行验证，基于真实灾害事件数据的实证检验仍较为鲜见，模型的外部效度有待进一步验证。这些不足构成本研究的逻辑起点，即在既有协同配送理论框架的基础上，引入应急情境的关键约束变量，构建更具现实针对性的多目标优化模型，并设计相应的求解算法，以期为应急物流系统的快速响应与公平覆盖提供可行的理论与方法支撑。",
+      "citations": [],
+      "dropped_citations": []
+    }
+  ],
+  "reference_list": "[1] 彭勇,黎元钧.考虑疫情影响的卡车无人机协同配送路径优化[J].中国公路学报,2020,33(11):73-82.DOI:10.19721/j.cnki.1001-7372.2020.11.008.\n[2] 刘长石,吴张,周愉峰,等.疫区应急物资供应的卡车-无人机动态协同配送路径优化[J].系统科学与数学,2022,42(11):3027-3043.\n[3] 胡大伟,张世鹏,刘慧甜,等.应急响应初期“卡车-无人机”联合配送路径问题[J].长安大学学报(自然科学版),2024,44(1):105-119.DOI:10.19721/j.cnki.1671-8879.2024.01.010.\n[4] 蒋桥桥,祁明亮,潘超然.应急物资配送车辆与多批次无人机协同调度优化模型[J].工业工程,2026,29(1):36-45.\n[5] 张林静,丁溢.基于卡车-无人机协同配送的双目标应急物资运送优化[J].系统管理学报,2025,34(1):81-95.\n[6] 赵林林,梁杰.考虑心理成本的应急物流卡车——无人机协同配送路径优化研究[J/OL].公路,2026,(9):258-269[2026-09-09].https://link.cnki.net/urlid/11.1668.U.20260907.1124.064.\n[7] 刘长石,吴张,马祖军,等.通行受限下需求可拆分的应急物资卡车-多无人机协同配送路径优化[J].系统科学与数学,2023,43(11):2930-2948.\n[8] 周愉峰,程佳豪,刘长石,等.山区森林火灾应急物资配送定位–路径优化[J].系统工程学报,2026,41(3):452-471.DOI:10.13383/j.cnki.jse.2026.03.003.\n[9] 于丽娜,林洁,吴心萍,等.灾后卡车-氢能无人机协同配送多目标路径优化[J].深圳大学学报(理工版),2026,43(4):417-427.\n[10] 张圣忠,庞振凯.考虑道路中断的应急物资卡车-无人机协同配送路径优化[J].物流科技,2026,49(14):60-63+70.DOI:10.13714/j.cnki.1002-3100.2026.14.014.\n[11] 王培栋,汪玲.考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化[J].科学技术与工程,2025,25(28):12231-12240.\n[12] 曹允春,翟一冰,耿劭卿.考虑灾民心理的震后卡车-无人机协同配送路径优化研究[J].安全与环境学报,2025,25(12):4787-4798.DOI:10.13637/j.issn.1009-6094.2025.0315.\n[13] 韩晶,刘艳秋.考虑道路受损和公平性的卡车无人机协同配送路径优化研究[J].运筹与管理,2025,34(6):55-62.\n[14] 刘兴,盛心誉,郝墨卿,等.考虑灾后路况时空不确定的卡车-无人机协同应急配送路径优化[J/OL].中国管理科学,1-16[2026-09-09].https://doi.org/10.16381/j.cnki.issn1003-207x.2025.0834.\n[15] 高振明,叶春明,刘勤明.事件驱动下考虑优先级的卡车-无人机应急调度研究[J/OL].计算机工程与应用,1-15[2026-09-09].https://link.cnki.net/urlid/11.2127.TP.20260513.1129.022.\n[16] 陈兆芳,李文静,黄文翰.需求不确定下卡车-无人机协同的路径优化研究[J].铁道运输与经济,2025,47(10):60-72.DOI:10.16668/j.cnki.issn.1003-1421.2025.10.06.\n[17] 章可怡,石咏,郭海湘,等.基于卡车-无人机协同的山区自然灾害应急物资调度优化决策研究[J].中国管理科学,2025,33(2):150-160.DOI:10.16381/j.cnki.issn1003-207x.2023.1278.\n[18] 宋百玲,牟俊麒,李星禹.基于GALNS的车辆与无人机协同运输路径规划[J].自动化与仪表,2024,39(12):37-41+46.DOI:10.19557/j.cnki.1001-9944.2024.12.008.\n[19] 杨双鹏,郭秀萍,高娇娇.无接触式“卡车+无人机”联合配送问题研究[J].工业工程与管理,2022,27(1):184-194.DOI:10.19495/j.cnki.1007-5429.2022.01.021.\n[20] 唐立,尹瑶琳,蒲科先,等.场景驱动的卡车-无人机协同配送问题研究综述[J].交通运输工程与信息学报,2026,24(4):103-119.DOI:10.19961/j.cnki.1672-4747.2025.10.028.\n[21] 崔海鹏,李欢,张旭欣,等.卡车-无人机协同路径规划研究进展[J].深圳大学学报(理工版),2026,43(4):377-396.\n[22] 徐泽水,白杨,盛心誉,等.面向“最后一公里”的卡车-无人机协同配送优化建模综述[J/OL].控制与决策,1-24[2026-09-09].https://doi.org/10.13195/j.kzyjc.2026.0005.\n[23] 邸振,黎晓芬,石俊刚.无人机与卡车协同配送的多维度研究综述[J].交通运输研究,2025,11(6):165-180.DOI:10.16503/j.cnki.2095-9931.2025.06.013.\n[24] Madani B，Ndiaye M. Hybrid Truck-Drone Delivery Systems: A Systematic Literature Review[J/OL]. IEEE Access，2022. DOI:10.1109/access.2022.3202895.\n[25] Lin M，Chen Y，Han R，et al.. Discrete Optimization on Truck‐Drone Collaborative Transportation System for Delivering Medical Resources[J/OL]. Discrete Dynamics in Nature and Society，2022. DOI:10.1155/2022/1811288.\n[26] Freitas J C de，Penna P H V，Toffolo T A M. Exact and heuristic approaches to Truck–Drone Delivery Problems[J/OL]. EURO Journal on Transportation and Logistics，2022. DOI:10.1016/j.ejtl.2022.100094.\n[27] Faiz T I，Vogiatzis C，Liu J，et al.. A robust optimization framework for two‐echelon vehicle and UAV routing for post‐disaster humanitarian logistics operations[J/OL]. Networks，2024. DOI:10.1002/net.22233.\n[28] Dükkancı O，Koberstein A，Kara B Y. Drones for relief logistics under uncertainty after an earthquake[J/OL]. European Journal of Operational Research，2023. DOI:10.1016/j.ejor.2023.02.038.\n[29] Steenbergen R van，Mes M，Heeswijk W van. Reinforcement learning for humanitarian relief distribution with trucks and UAVs under travel time uncertainty[J/OL]. Transportation Research Part C Emerging Technologies，2023. DOI:10.1016/j.trc.2023.104401.\n[30] Bi Z，Guo X，Wang J，et al.. Truck-Drone Delivery Optimization Based on Multi-Agent Reinforcement Learning[J/OL]. Drones，2024. DOI:10.3390/drones8010027.\n[31] Bi Z，Guo X，Wang J，et al.. Deep Reinforcement Learning for Truck-Drone Delivery Problem[J/OL]. Drones，2023. DOI:10.3390/drones7070445.\n[32] Hachiya D，Mas E，Koshimura S. A Reinforcement Learning Model of Multiple UAVs for Transporting Emergency Relief Supplies[J/OL]. Applied Sciences，2022. DOI:10.3390/app122010427.\n[33] Leon-Blanco J M，Gonzalez-R P L，Andrade-Pineda J L，et al.. A multi-agent approach to the truck multi-drone routing problem[J/OL]. Expert Systems with Applications，2022. DOI:10.1016/j.eswa.2022.116604.\n[34] Gómez-Lagos J，Candia-Véjar A，Encina F. A New Truck-Drone Routing Problem for Parcel Delivery Services Aided by Parking Lots[J/OL]. IEEE Access，2021. DOI:10.1109/access.2021.3050658.\n[35] Kyriakakis N A，Stamadianos T，Marinaki M，et al.. The electric vehicle routing problem with drones: An energy minimization approach for aerial deliveries[J/OL]. Cleaner Logistics and Supply Chain，2022. DOI:10.1016/j.clscn.2022.100041.\n[36] Ghaffar M A，Peng L，Aslam M U，et al.. Vehicle-UAV Integrated Routing Optimization Problem for Emergency Delivery of Medical Supplies[J/OL]. Electronics，2024. DOI:10.3390/electronics13183650.\n[37] Robakowska M，Ślęzak D，Żuratyński P，et al.. Possibilities of Using UAVs in Pre-Hospital Security for Medical Emergencies[J/OL]. International Journal of Environmental Research and Public Health，2022. DOI:10.3390/ijerph191710754.\n[38] Saunders J，Saeedi S，Li W. Autonomous aerial robotics for package delivery: A technical review[J/OL]. Journal of Field Robotics，2023. DOI:10.1002/rob.22231.",
+  "qa": {
+    "summary": {
+      "overall": "pass",
+      "pass_rate": 1.0,
+      "required_pass_rate": 1.0,
+      "elapsed_ms": 138,
+      "results": [
+        {
+          "check_id": "article_lint_001",
+          "name": "文章正文可读性体检",
+          "status": "pass",
+          "metrics": {
+            "sections": 3,
+            "issues_count": 0,
+            "fail_count": 0,
+            "warn_count": 0,
+            "auto_repairs": [
+              {
+                "section_key": "theme_2",
+                "changes": [
+                  "姓名标点归一化",
+                  "作者年份句边界修复",
+                  "链接间距修复"
+                ]
+              }
+            ]
+          },
+          "issues": [],
+          "notes": []
+        },
+        {
+          "check_id": "accuracy_001",
+          "name": "文献引用准确性核查",
+          "status": "pass",
+          "metrics": {
+            "inspected": 80,
+            "by_source": {
+              "cnki": 54,
+              "openalex": 22,
+              "pubmed": 4
+            },
+            "max_year_allowed": 2026,
+            "issues_count": 0,
+            "fail_count": 0,
+            "warn_count": 0
+          },
+          "issues": [],
+          "notes": [
+            "全部入选文献元数据完整、来源可溯"
+          ]
+        },
+        {
+          "check_id": "binding_001",
+          "name": "正文-文献关联一致性核查",
+          "status": "pass",
+          "metrics": {
+            "sections": 3,
+            "inspected_papers": 80,
+            "reference_list_size": 5248,
+            "anchors_total": 38,
+            "unique_cited": 38,
+            "pool_coverage": 0.475,
+            "reference_count": 38,
+            "issues_count": 0,
+            "fail_count": 0,
+            "warn_count": 0
+          },
+          "issues": [],
+          "notes": [
+            "正文与文献双向绑定完整、无错配"
+          ]
+        },
+        {
+          "check_id": "quota_001",
+          "name": "文献数量合规性核查",
+          "status": "pass",
+          "metrics": {
+            "total_count": 80,
+            "thresholds": {
+              "total_min": 70,
+              "total_max": 90,
+              "chinese_ratio_min": 0.6666666666666666,
+              "english_ratio_max": 0.3333333333333333,
+              "core_ratio_min": 0.5,
+              "recent_years": 5,
+              "recent_ratio_min": 0.6
+            },
+            "chinese_count": 54,
+            "english_count": 26,
+            "chinese_ratio": 0.675,
+            "english_ratio": 0.325,
+            "by_source": {
+              "cnki": 54,
+              "openalex": 22,
+              "pubmed": 4
+            },
+            "issues_count": 0,
+            "fail_count": 0,
+            "warn_count": 0
+          },
+          "issues": [],
+          "notes": [
+            "文献数量与结构满足预设合规阈值"
+          ]
+        },
+        {
+          "check_id": "citation_format_001",
+          "name": "引用格式规范性核查",
+          "status": "pass",
+          "metrics": {
+            "inspected": 80,
+            "style": "china-national-standard-gb-t-7714-2025-numeric",
+            "by_source": {
+              "cnki": 54,
+              "openalex": 22,
+              "pubmed": 4
+            },
+            "rendered_chars_total": 10431,
+            "rendered_chars_by_lang": {
+              "chinese": 5149,
+              "english": 5282
+            },
+            "issues_count": 0,
+            "fail_count": 0,
+            "warn_count": 0
+          },
+          "issues": [],
+          "notes": [
+            "全部 80 条文献符合 china-national-standard-gb-t-7714-2025-numeric"
+          ]
+        }
+      ],
+      "failed_checks": [],
+      "issues": []
+    },
+    "markdown_report": "# 文献综述全流程核查报告\n\n- 总体状态:**通过**\n- 通过率:`100.00%` (要求 ≥ 100%)\n- 耗时:138 ms\n- 生成时间(UTC):2026-09-15T17:39:05.434781+00:00\n\n## 核查项汇总\n\n| 编号 | 名称 | 状态 | 失败 | 告警 |\n| --- | --- | --- | --- | --- |\n| article_lint_001 | 文章正文可读性体检 | 通过 | 0 | 0 |\n| accuracy_001 | 文献引用准确性核查 | 通过 | 0 | 0 |\n| binding_001 | 正文-文献关联一致性核查 | 通过 | 0 | 0 |\n| quota_001 | 文献数量合规性核查 | 通过 | 0 | 0 |\n| citation_format_001 | 引用格式规范性核查 | 通过 | 0 | 0 |\n\n## article_lint_001 文章正文可读性体检\n\n状态:**通过**\n\n### 关键指标\n- sections: 3\n- issues_count: 0\n- fail_count: 0\n- warn_count: 0\n- auto_repairs: [{\"section_key\": \"theme_2\", \"changes\": [\"姓名标点归一化\", \"作者年份句边界修复\", \"链接间距修复\"]}]\n\n## accuracy_001 文献引用准确性核查\n\n状态:**通过**\n\n### 关键指标\n- inspected: 80\n- by_source: {\"cnki\": 54, \"openalex\": 22, \"pubmed\": 4}\n- max_year_allowed: 2026\n- issues_count: 0\n- fail_count: 0\n- warn_count: 0\n\n### 备注\n- 全部入选文献元数据完整、来源可溯\n\n## binding_001 正文-文献关联一致性核查\n\n状态:**通过**\n\n### 关键指标\n- sections: 3\n- inspected_papers: 80\n- reference_list_size: 5248\n- anchors_total: 38\n- unique_cited: 38\n- pool_coverage: 0.475\n- reference_count: 38\n- issues_count: 0\n- fail_count: 0\n- warn_count: 0\n\n### 备注\n- 正文与文献双向绑定完整、无错配\n\n## quota_001 文献数量合规性核查\n\n状态:**通过**\n\n### 关键指标\n- total_count: 80\n- thresholds: {\"total_min\": 70, \"total_max\": 90, \"chinese_ratio_min\": 0.6666666666666666, \"english_ratio_max\": 0.3333333333333333, \"core_ratio_min\": 0.5, \"recent_years\": 5, \"recent_ratio_min\": 0.6}\n- chinese_count: 54\n- english_count: 26\n- chinese_ratio: 0.675\n- english_ratio: 0.325\n- by_source: {\"cnki\": 54, \"openalex\": 22, \"pubmed\": 4}\n- issues_count: 0\n- fail_count: 0\n- warn_count: 0\n\n### 备注\n- 文献数量与结构满足预设合规阈值\n\n## citation_format_001 引用格式规范性核查\n\n状态:**通过**\n\n### 关键指标\n- inspected: 80\n- style: china-national-standard-gb-t-7714-2025-numeric\n- by_source: {\"cnki\": 54, \"openalex\": 22, \"pubmed\": 4}\n- rendered_chars_total: 10431\n- rendered_chars_by_lang: {\"chinese\": 5149, \"english\": 5282}\n- issues_count: 0\n- fail_count: 0\n- warn_count: 0\n\n### 备注\n- 全部 80 条文献符合 china-national-standard-gb-t-7714-2025-numeric\n",
+    "json_report": "{\n  \"generated_at\": \"2026-09-15T17:39:05.434923+00:00\",\n  \"overall\": \"pass\",\n  \"pass_rate\": 1.0,\n  \"required_pass_rate\": 1.0,\n  \"elapsed_ms\": 138,\n  \"results\": [\n    {\n      \"check_id\": \"article_lint_001\",\n      \"name\": \"文章正文可读性体检\",\n      \"status\": \"pass\",\n      \"metrics\": {\n        \"sections\": 3,\n        \"issues_count\": 0,\n        \"fail_count\": 0,\n        \"warn_count\": 0,\n        \"auto_repairs\": [\n          {\n            \"section_key\": \"theme_2\",\n            \"changes\": [\n              \"姓名标点归一化\",\n              \"作者年份句边界修复\",\n              \"链接间距修复\"\n            ]\n          }\n        ]\n      },\n      \"issues\": [],\n      \"notes\": []\n    },\n    {\n      \"check_id\": \"accuracy_001\",\n      \"name\": \"文献引用准确性核查\",\n      \"status\": \"pass\",\n      \"metrics\": {\n        \"inspected\": 80,\n        \"by_source\": {\n          \"cnki\": 54,\n          \"openalex\": 22,\n          \"pubmed\": 4\n        },\n        \"max_year_allowed\": 2026,\n        \"issues_count\": 0,\n        \"fail_count\": 0,\n        \"warn_count\": 0\n      },\n      \"issues\": [],\n      \"notes\": [\n        \"全部入选文献元数据完整、来源可溯\"\n      ]\n    },\n    {\n      \"check_id\": \"binding_001\",\n      \"name\": \"正文-文献关联一致性核查\",\n      \"status\": \"pass\",\n      \"metrics\": {\n        \"sections\": 3,\n        \"inspected_papers\": 80,\n        \"reference_list_size\": 5248,\n        \"anchors_total\": 38,\n        \"unique_cited\": 38,\n        \"pool_coverage\": 0.475,\n        \"reference_count\": 38,\n        \"issues_count\": 0,\n        \"fail_count\": 0,\n        \"warn_count\": 0\n      },\n      \"issues\": [],\n      \"notes\": [\n        \"正文与文献双向绑定完整、无错配\"\n      ]\n    },\n    {\n      \"check_id\": \"quota_001\",\n      \"name\": \"文献数量合规性核查\",\n      \"status\": \"pass\",\n      \"metrics\": {\n        \"total_count\": 80,\n        \"thresholds\": {\n          \"total_min\": 70,\n          \"total_max\": 90,\n          \"chinese_ratio_min\": 0.6666666666666666,\n          \"english_ratio_max\": 0.3333333333333333,\n          \"core_ratio_min\": 0.5,\n          \"recent_years\": 5,\n          \"recent_ratio_min\": 0.6\n        },\n        \"chinese_count\": 54,\n        \"english_count\": 26,\n        \"chinese_ratio\": 0.675,\n        \"english_ratio\": 0.325,\n        \"by_source\": {\n          \"cnki\": 54,\n          \"openalex\": 22,\n          \"pubmed\": 4\n        },\n        \"issues_count\": 0,\n        \"fail_count\": 0,\n        \"warn_count\": 0\n      },\n      \"issues\": [],\n      \"notes\": [\n        \"文献数量与结构满足预设合规阈值\"\n      ]\n    },\n    {\n      \"check_id\": \"citation_format_001\",\n      \"name\": \"引用格式规范性核查\",\n      \"status\": \"pass\",\n      \"metrics\": {\n        \"inspected\": 80,\n        \"style\": \"china-national-standard-gb-t-7714-2025-numeric\",\n        \"by_source\": {\n          \"cnki\": 54,\n          \"openalex\": 22,\n          \"pubmed\": 4\n        },\n        \"rendered_chars_total\": 10431,\n        \"rendered_chars_by_lang\": {\n          \"chinese\": 5149,\n          \"english\": 5282\n        },\n        \"issues_count\": 0,\n        \"fail_count\": 0,\n        \"warn_count\": 0\n      },\n      \"issues\": [],\n      \"notes\": [\n        \"全部 80 条文献符合 china-national-standard-gb-t-7714-2025-numeric\"\n      ]\n    }\n  ],\n  \"failed_checks\": [],\n  \"issues\": []\n}"
+  },
+  "blueprint": {
+    "research_question": "无人机卡车协同配送应急物资",
+    "scope": {
+      "time_range": [
+        2020,
+        2026
+      ],
+      "sources": [
+        "cnki",
+        "openalex",
+        "pubmed"
+      ],
+      "included_count": 100,
+      "screened_out_count": 0
+    },
+    "inclusion_criteria": [
+      "与研究主题存在实质关联",
+      "具备可核查的题名、作者或摘要信息",
+      "能够支撑主题比较或研究现状判断"
+    ],
+    "exclusion_criteria": [
+      "主题无实质关联",
+      "摘要与元数据不足以判断研究内容",
+      "重复记录或无法核验的条目"
+    ],
+    "organization": {
+      "mode": "主题式",
+      "principle": "以主题/研究对象聚类，在章节内部比较方法、结论与局限",
+      "groups": [
+        {
+          "name": "应急配送协同优化",
+          "count": 67,
+          "lit_ids": [
+            "lit_cnki_abfa7f9cb45fdaa2",
+            "lit_cnki_59659f33bae1d3b7",
+            "lit_cnki_cf389f1ca795cc0d",
+            "lit_cnki_905efa5708acd86b",
+            "lit_cnki_c2d7ae5d876ca7b9",
+            "lit_cnki_a99fe5fa4056e329",
+            "lit_cnki_0c577fce8df731e0",
+            "lit_cnki_ca6d48175f9df4eb",
+            "lit_cnki_4f0fdce2a9d138be",
+            "lit_cnki_6ff879f575603830",
+            "lit_cnki_e0af50f73cdf6a12",
+            "lit_cnki_096049489666a4b1",
+            "lit_cnki_903c6f447833999b",
+            "lit_cnki_a5a8d3f0dc723373",
+            "lit_cnki_b71f9a924fb40e65",
+            "lit_cnki_31dab29970e5619c",
+            "lit_cnki_bc2cc26f30d1a658",
+            "lit_cnki_940bee1868901856",
+            "lit_cnki_1c2206736e3b1632",
+            "lit_cnki_4e3242520c958e97",
+            "lit_cnki_32b0bd96a143965c",
+            "lit_cnki_e48879139831c6e0",
+            "lit_cnki_f5848f8fb99294bd",
+            "lit_cnki_fafb7d239ff51b00",
+            "lit_cnki_21d2453f1292100f",
+            "lit_cnki_1439edeae6d500ee",
+            "lit_cnki_cbabd88767e962d8",
+            "lit_cnki_8f850c14af0a7af1",
+            "lit_cnki_0ab597af6949b08d",
+            "lit_cnki_21d86ef86a6df596",
+            "lit_cnki_75daa40a4eb27e02",
+            "lit_cnki_51b58c5ceafe2ca0",
+            "lit_cnki_ba74c32ff864708b",
+            "lit_cnki_cf398ce77e441d53",
+            "lit_cnki_443f283bfd152681",
+            "lit_cnki_71d3e0650effd7ed",
+            "lit_cnki_5318a3f68b8250e7",
+            "lit_cnki_3cf58fb8776d4f01",
+            "lit_cnki_f00d4201bc7550f9",
+            "lit_cnki_6311b383fb6cee46",
+            "lit_cnki_4b25e7994dc9c86f",
+            "lit_cnki_53df67904f971446",
+            "lit_cnki_d01e00322f589b0e",
+            "lit_cnki_d460381f50a90569",
+            "lit_cnki_a492c3c447bd0068",
+            "lit_cnki_94bd221ba9415c8e",
+            "lit_cnki_952ccc9345fea0b9",
+            "lit_cnki_a5df52e2aa435309",
+            "lit_cnki_07930576fc285607",
+            "lit_cnki_533e2e405a545e5d",
+            "lit_cnki_5c7cb85d2bad6a2f",
+            "lit_cnki_f9174a4adbe350ef",
+            "lit_cnki_d01cb4134378954d",
+            "lit_cnki_0c5b00df0c3f4cfd",
+            "lit_cnki_d7ae2e5c4508ebc1",
+            "lit_cnki_6faf1cd37a6764fa",
+            "lit_cnki_0f131950a7e482e4",
+            "lit_cnki_6e573bedeb6519a6",
+            "lit_cnki_09ab31d2d0720991",
+            "lit_cnki_16ca9dc30be32721",
+            "lit_cnki_c35f0f60523521ac",
+            "lit_cnki_f4d2babd31d55b95",
+            "lit_cnki_755e78d02007cb6b",
+            "lit_cnki_bc8067c04bcb8e65",
+            "lit_cnki_5c551ec5e06f54d8",
+            "lit_cnki_3e1c97fdaf7cd280",
+            "lit_cnki_ddd25231553b13d9"
+          ],
+          "shared_problem_terms": [
+            "最后",
+            "结果表明",
+            "卡车",
+            "无人机",
+            "首先"
+          ],
+          "boundary": "围绕“最后、结果表明、卡车”共同问题归组",
+          "comparison_axes": [
+            "研究问题",
+            "方法与数据",
+            "结论差异"
+          ],
+          "relation_hint": "可比较方法：仿真、实验、案例、算法"
+        },
+        {
+          "name": "协同配送路径优化",
+          "count": 33,
+          "lit_ids": [
+            "lit_openalex_f44a21ca4c6cdb99",
+            "lit_openalex_9e5b2dcffdbc03b9",
+            "lit_openalex_05de48100ce3c574",
+            "lit_openalex_0ff6884301f8b442",
+            "lit_openalex_5b8f623e99fa8b3a",
+            "lit_openalex_03a6174aecbd40be",
+            "lit_openalex_b7b5915e4c6a9e17",
+            "lit_openalex_31fdc6f4f01be6c7",
+            "lit_openalex_4d629b979071f1b5",
+            "lit_openalex_15954ee476054138",
+            "lit_pubmed_7cd0c1f5b49b0067",
+            "lit_openalex_a3d25cc447f00d72",
+            "lit_openalex_11668456eedcb704",
+            "lit_openalex_6f134b09704f2624",
+            "lit_openalex_f4fb5b55a6b8e742",
+            "lit_openalex_5b95289ba84ac604",
+            "lit_openalex_6effbb6d245331b6",
+            "lit_openalex_4a4ea9bbef49908f",
+            "lit_openalex_2f989ada19f70756",
+            "lit_openalex_48c0bfa059777ab7",
+            "lit_openalex_6c4483eb1e868b68",
+            "lit_openalex_fb86869831939b77",
+            "lit_pubmed_7e3686fca8b6ecf7",
+            "lit_pubmed_adc6bbfac137624f",
+            "lit_pubmed_8fa40def97bddc1c",
+            "lit_openalex_9b3648b48d0e81fb",
+            "lit_pubmed_6861a1b42a04b019",
+            "lit_pubmed_43ee7cf169055be2",
+            "lit_openalex_ba25245d1cf1baae",
+            "lit_pubmed_b4aa6fa2eec23df8",
+            "lit_pubmed_f7cce92fecf39808",
+            "lit_pubmed_e25710d558b9095a",
+            "lit_openalex_0823d03022d45617"
+          ],
+          "shared_problem_terms": [
+            "delivery",
+            "drones",
+            "drone",
+            "logistics",
+            "problem"
+          ],
+          "boundary": "围绕“delivery、drones、drone”共同问题归组",
+          "comparison_axes": [
+            "研究问题",
+            "方法与数据",
+            "结论差异"
+          ],
+          "relation_hint": "可比较方法：qualitative、quantitative"
+        }
+      ]
+    },
+    "matrix": [
+      {
+        "lit_id": "lit_cnki_abfa7f9cb45fdaa2",
+        "title": "应急物资配送车辆与多批次无人机协同调度优化模型",
+        "authors": [
+          "蒋桥桥",
+          "祁明亮",
+          "潘超然"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "应急物资配送车辆与多批次无人机协同调度优化模型 应急物资配送效率是灾后救援成效的核心影响因素，而突发灾害引发的道路损毁问题严重制约传统地面运输效率。因此，无人机与货车协同配送模式被广泛应用于灾后救援、医疗物资配送等紧急场景。为优化灾害场景下的物资调度效率，本文聚焦货车-无人机协同配送模式，根据村庄可达性差异，提出以货车为移动中转站、无人机执行多批次作业的协同配送模式，以最小化货车行驶时间、无人机飞行时间及二者等待时间的总任务负荷为目标，综合考虑车辆容量、无人机载重、任务时间窗等约束，建立一个混合整数规划模型。相比传统模型，该模型放松了仅限固定节点起降的约束，允许无人机在货车行驶路径上任一点进行起降与补给。针对模型设计双阶段混合启发式算法，首阶段通过遗传算法优化货车与无人机的基础行驶路径和汇合点，次阶段利用动态规划求解无人机与货车运输村庄的最优规划。数值分析结果显示，“路段中补给”策略中的无人机飞行时间和货车无人机相互等待时间至少降低了8.3%，至多降低了31.72%。对比“仅限村庄点补给”策略，本研究提供了兼顾时效性与可行性的调度决策方案，拓展了应急管理的协同优化理论。",
+        "theory_or_concept": "提出以货车为移动中转站、无人机执行多批次作业的协同配送模式",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "应急物资配送车辆与多批次无人机协同调度优化模型 应急物资配送效率是灾后救援成效的核心影响因素，而突发灾害引发的道路损毁问题严重制约传统地面运输效率。因此，无人机与货车协同配送模式被广泛应用于灾后救援、医疗物资配送等紧急场景。为优化灾害场景下的物资调度效率，本文聚焦货车-无人机协同配送模式，根据村庄可达性差异，提出以货车为移动中转站、无人机执行多批次作业的协同配送模式，以最小化货车行驶时间、无人机飞行时间及二者等待时间的总任务负荷为目标，综合考虑车辆容量、无人机载重、任务时间窗等约束，建立一个混合整数规划模型。相比传统模型，该模型放松了仅限固定节点起降的约束，允许无人机在货车行驶路径上任一点进行起降与补给。针对模型设计双阶段混合启发式算法，首阶段通过遗传算法优化货车与无人机的基础行驶路径和汇合点，次阶段利用动态规划求解无人机与货车运输村庄的最优规划。数值分析结果显示，“路段中补给”策略中的无人机飞行时间和货车无人机相互等待时间至少降低了8.3%，至多降低了31.72%。对比“仅限村庄点补给”策略，本研究提供了兼顾时效性与可行性的调度决策方案，拓展了应急管理的协同优化理论。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_59659f33bae1d3b7",
+        "title": "山区森林火灾应急物资配送定位–路径优化",
+        "authors": [
+          "周愉峰",
+          "程佳豪",
+          "刘长石"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "构建了卡车–摩托车–无人机协同的山区森林火灾应急物资配送定位–路径优化模型；提出的模型和算法能有效给出山区森林火灾应急物资配送选址–路径决策方案,且改进禁忌搜索",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "山区森林火灾应急物资配送定位–路径优化 结合山区环境下森林火灾应急物资保障问题的特性,考虑山区路网结构,摩托车与无人机参与协同配送,火势蔓延风险与物资集散点多阶段动态定位等因素,以应急物资配送满意度最大为目标,构建了卡车–摩托车–无人机协同的山区森林火灾应急物资配送定位–路径优化模型;设计了一种带修复算子的整数多向量编码改进禁忌搜索算法求解模型,并与遗传算法、模拟退火算法、变领域搜索算法和鲸鱼优化算法进行了比较.结果表明:提出的模型和算法能有效给出山区森林火灾应急物资配送选址–路径决策方案,且改进禁忌搜索算法具有更优的性能;选择适当载重类型的无人机,可增加满意度;摩托车适合山区路网环境,增加其数量,有利于提升配送满意度.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_cf389f1ca795cc0d",
+        "title": "考虑心理成本的应急物流卡车——无人机协同配送路径优化研究",
+        "authors": [
+          "赵林林",
+          "梁杰"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑心理成本的应急物流卡车——无人机协同配送路径优化研究 在全球极端天气与地缘冲突叠加导致灾害频发的背景下,针对灾后道路损毁制约应急物资配送、且传统规划忽视受灾群众心理关怀的问题,构建了卡车—无人机协同配送体系,建立了以经济成本与心理成本最小化为目标的优化模型,并通过引入临时中转点机制拓展无人机作业范围。为高效求解该NP-chard问题,设计了融合分层协作与双重精英策略的精英非支配排序遗传—蚁群融合算法(精英NSGA-cⅡ-cACO),有效结合了遗传算法的全局搜索能力与蚁群算法的局部寻优优势。基于不同规模的模拟算例及2023年土耳其地震实例的验证表明,所提算法在经济成本、心理成本与计算效率上均显著优于对比算法,且问题规模越大优势越明显;灵敏度分析进一步明确了兼顾系统经济性与人文关怀的关键参数区间,从而为应急物流从“效率导向”向“人本导向”转型提供了理论与方法支持。",
+        "theory_or_concept": "构建了卡车—无人机协同配送体系,建立了以经济成本与心理成本最小化为目标的优化模型,并；引入临时中转点机制拓展无人机作业范围；基于不同规模的模拟算例及2023年土耳其地震实例的验证表明,所提算法在经济成本、心理",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑心理成本的应急物流卡车——无人机协同配送路径优化研究 在全球极端天气与地缘冲突叠加导致灾害频发的背景下,针对灾后道路损毁制约应急物资配送、且传统规划忽视受灾群众心理关怀的问题,构建了卡车—无人机协同配送体系,建立了以经济成本与心理成本最小化为目标的优化模型,并通过引入临时中转点机制拓展无人机作业范围。为高效求解该NP-chard问题,设计了融合分层协作与双重精英策略的精英非支配排序遗传—蚁群融合算法(精英NSGA-cⅡ-cACO),有效结合了遗传算法的全局搜索能力与蚁群算法的局部寻优优势。基于不同规模的模拟算例及2023年土耳其地震实例的验证表明,所提算法在经济成本、心理成本与计算效率上均显著优于对比算法,且问题规模越大优势越明显;灵敏度分析进一步明确了兼顾系统经济性与人文关怀的关键参数区间,从而为应急物流从“效率导向”向“人本导向”转型提供了理论与方法支持。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_905efa5708acd86b",
+        "title": "疫区应急物资供应的卡车-无人机动态协同配送路径优化",
+        "authors": [
+          "刘长石",
+          "吴张",
+          "周愉峰"
+        ],
+        "year": 2022,
+        "source": "cnki",
+        "research_question": "疫区应急物资供应的卡车-无人机动态协同配送路径优化 研究传染性公共卫生事件发生后疫区的应急物资供应问题,为避免传染,对中高风险疫区采用“无接触式”的无人机配送方式、低风险疫区采用卡车配送方式,在此基础上设计疫区应急物资供应的卡车-无人机动态协同配送模式.综合考虑疫区风险级别、无人机容量、飞行距离、卡车容量等因素,以应急物资总配送时间最短为目标,构建卡车-无人机动态协同配送路径规划模型,并设计一种自适应遗传算法求解.实验结果表明:文章方法能在非常短的时间内求解出符合决策者目标的卡车-无人机动态协同路径规划方案,有效缩短应急物资总配送时间,能为政府部门在重大传染性公共卫生事件下的应急物资配送提供决策参考.",
+        "theory_or_concept": "采用“无接触式”的无人机配送方式、低风险疫区采用卡车配送方式,在此基础上设计疫区应急；构建卡车-无人机动态协同配送路径规划模型,并设计一种自适应遗传算法求解.实验结果表明",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "疫区应急物资供应的卡车-无人机动态协同配送路径优化 研究传染性公共卫生事件发生后疫区的应急物资供应问题,为避免传染,对中高风险疫区采用“无接触式”的无人机配送方式、低风险疫区采用卡车配送方式,在此基础上设计疫区应急物资供应的卡车-无人机动态协同配送模式.综合考虑疫区风险级别、无人机容量、飞行距离、卡车容量等因素,以应急物资总配送时间最短为目标,构建卡车-无人机动态协同配送路径规划模型,并设计一种自适应遗传算法求解.实验结果表明:文章方法能在非常短的时间内求解出符合决策者目标的卡车-无人机动态协同路径规划方案,有效缩短应急物资总配送时间,能为政府部门在重大传染性公共卫生事件下的应急物资配送提供决策参考.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_c2d7ae5d876ca7b9",
+        "title": "应急响应初期“卡车-无人机”联合配送路径问题",
+        "authors": [
+          "胡大伟",
+          "张世鹏",
+          "刘慧甜"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "应急响应初期“卡车-无人机”联合配送路径问题 为了在应急响应初期，将应急物资及时送达受灾地区、降低人员伤亡以及减少财产损失，结合卡车相对运量大、无人机运行速度快等特点，提出“卡车-无人机”联合配送应急物资模式，构建以车辆路径问题为基础，总配送时间最短为目标的“卡车-无人机”路径问题模型(vehicle routing problem-drones, VRP-D)。采用小规模算例，使用LINGO优化求解器对模型求解进行了有效性验证，并与传统应急物资配送车辆路径问题(vehicle routing problem, VRP)进行了对比分析。设计变邻域搜索算法(variable neighborhood search, VNS)对模型进行求解，并与传统遗传算法(genetic algorithm, GA)进行了对比分析。对无人机续航里程和最大载质量进行灵敏度分析。结果表明：VNS算法求解本文模型时在求解速度、精度以及稳定性方面具有一定优势；VNS算法解的质量比GA算法最大可改善7.24%;VRP-D模型比VRP模型解的质量最大可改善63.57%。故在应急响应初期，采用“卡车-无人机”联合配送应急物资的配送效率更高。当无人机续航里程增加到70 min后，受灾点总等待时间不再减少；当无人机最大载质量增加到35 kg后，受灾点总等待时间也不再减少，反映出无人机续航里程和最大载质量之间相互制约的内在关系。该研究为创新应急物资配送新模式提供了理论依据。",
+        "theory_or_concept": "提出“卡车-无人机”联合配送应急物资模式；构建以车辆路径问题为基础；采用小规模算例",
+        "method": "算法、优化、模型、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "应急响应初期“卡车-无人机”联合配送路径问题 为了在应急响应初期，将应急物资及时送达受灾地区、降低人员伤亡以及减少财产损失，结合卡车相对运量大、无人机运行速度快等特点，提出“卡车-无人机”联合配送应急物资模式，构建以车辆路径问题为基础，总配送时间最短为目标的“卡车-无人机”路径问题模型(vehicle routing problem-drones, VRP-D)。采用小规模算例，使用LINGO优化求解器对模型求解进行了有效性验证，并与传统应急物资配送车辆路径问题(vehicle routing problem, VRP)进行了对比分析。设计变邻域搜索算法(variable neighborhood search, VNS)对模型进行求解，并与传统遗传算法(genetic algorithm, GA)进行了对比分析。对无人机续航里程和最大载质量进行灵敏度分析。结果表明：VNS算法求解本文模型时在求解速度、精度以及稳定性方面具有一定优势；VNS算法解的质量比GA算法最大可改善7.24%;VRP-D模型比VRP模型解的质量最大可改善63.57%。故在应急响应初期，采用“卡车-无人机”联合配送应急物资的配送效率更高。当无人机续航里程增加到70 min后，受灾点总等待时间不再减少；当无人机最大载质量增加到35 kg后，受灾点总等待时间也不再减少，反映出无人机续航里程和最大载质量之间相互制约的内在关系。该研究为创新应急物资配送新模式提供了理论依据。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_a99fe5fa4056e329",
+        "title": "考虑道路中断的应急物资卡车-无人机协同配送路径优化",
+        "authors": [
+          "张圣忠",
+          "庞振凯"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑道路中断的应急物资卡车-无人机协同配送路径优化 在灾害突发的环境下，道路中断等因素使得传统应急物资运输方式难以及时满足受灾区域的配送需求。因此，文章以末端应急配送场景为背景，综合考虑道路中断、无人机续航与载重约束、软时间窗惩罚成本等实际因素，构建了以最小化平均服务时间与延误成本为目标的优化模型。同时，设计了一种基于大邻域搜索的启发式算法，通过“聚类—贪心插入—破坏—重建”的机制对协同路径进行动态调整。以雅安地震灾害医药物资应急配送为算例进行仿真分析，结果表明所提出方法能够有效提升配送效率，降低延误风险，为应急物流系统的协同调度提供理论依据与实践参考。",
+        "theory_or_concept": "构建了以最小化平均服务时间与延误成本为目标的优化模型；基于大邻域搜索的启发式算法；提出方法能够有效提升配送效率",
+        "method": "仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑道路中断的应急物资卡车-无人机协同配送路径优化 在灾害突发的环境下，道路中断等因素使得传统应急物资运输方式难以及时满足受灾区域的配送需求。因此，文章以末端应急配送场景为背景，综合考虑道路中断、无人机续航与载重约束、软时间窗惩罚成本等实际因素，构建了以最小化平均服务时间与延误成本为目标的优化模型。同时，设计了一种基于大邻域搜索的启发式算法，通过“聚类—贪心插入—破坏—重建”的机制对协同路径进行动态调整。以雅安地震灾害医药物资应急配送为算例进行仿真分析，结果表明所提出方法能够有效提升配送效率，降低延误风险，为应急物流系统的协同调度提供理论依据与实践参考。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_0c577fce8df731e0",
+        "title": "灾后卡车-氢能无人机协同配送多目标路径优化",
+        "authors": [
+          "于丽娜",
+          "林洁",
+          "吴心萍"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "引入氢燃料电池无人机；构建最小化运输成本、剥夺成本与系统风险的多目标混合整数规划模型．针对模型复杂的时空耦；构建中的机型选型与规划提供指导",
+        "method": "算法、优化、模型、algorithm",
+        "data_or_sample": "数据集路网算例验证模型与算法的有效性．结果表明，INSGA-Ⅱ能有效引导种群向可行解收敛，相比传统算法总成本与系统风险分别降低37.23%和68.13%，且氢燃料电池",
+        "core_findings": "灾后卡车-氢能无人机协同配送多目标路径优化 卡车与无人机协同配送是提升灾后应急物资配送时效的重要模式，但传统锂电池无人机续航能力有限，制约了系统整体效率．引入氢燃料电池无人机，针对灾后道路受损条件下，氢气可能引发的二次灾害风险进行量化建模，构建最小化运输成本、剥夺成本与系统风险的多目标混合整数规划模型．针对模型复杂的时空耦合特性，设计一种改进的第2代非支配排序遗传算法（improved non-dominated sorting genetic algorithmⅡ，INSGA-Ⅱ）进行求解，并利用标准数据集路网算例验证模型与算法的有效性．结果表明，INSGA-Ⅱ能有效引导种群向可行解收敛，相比传统算法总成本与系统风险分别降低37.23%和68.13%，且氢燃料电池无人机凭借其长续航优势在降本增效方面优势显著，为应急网络构建中的机型选型与规划提供指导，实现资源利用与救援安全的协同优化．",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_ca6d48175f9df4eb",
+        "title": "通行受限下需求可拆分的应急物资卡车-多无人机协同配送路径优化",
+        "authors": [
+          "刘长石",
+          "吴张",
+          "马祖军"
+        ],
+        "year": 2023,
+        "source": "cnki",
+        "research_question": "通行受限下需求可拆分的应急物资卡车-多无人机协同配送路径优化 研究通行受限情景下需求可拆分的应急物资卡车-多无人机协同配送路径优化问题,综合考虑灾区路网状况、卡车可途中发射/接受无人机、无人机单次起飞可配送多个需求点、需求可拆分等因素,以应急物资配送任务完成时间最短为目标,构建卡车-多无人机协同配送路径优化模型.根据问题与模型特征设计一种改进蚁群算法求解.实验结果表明:文章方法能合理分配卡车与无人机的配送任务,科学规划通行受限情景下需求可拆分的应急物资卡车-多无人机协同配送路径;卡车途中发射/接收无人机方式能有效缩短无人机飞行距离,减少卡车与无人机的协同时间,缩短通行受限情景下的应急物资配送时间,具有可行性、合理性与有效性.",
+        "theory_or_concept": "构建卡车-多无人机协同配送路径优化模型.根据问题与模型特征设计一种改进蚁群算法求解.",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "通行受限下需求可拆分的应急物资卡车-多无人机协同配送路径优化 研究通行受限情景下需求可拆分的应急物资卡车-多无人机协同配送路径优化问题,综合考虑灾区路网状况、卡车可途中发射/接受无人机、无人机单次起飞可配送多个需求点、需求可拆分等因素,以应急物资配送任务完成时间最短为目标,构建卡车-多无人机协同配送路径优化模型.根据问题与模型特征设计一种改进蚁群算法求解.实验结果表明:文章方法能合理分配卡车与无人机的配送任务,科学规划通行受限情景下需求可拆分的应急物资卡车-多无人机协同配送路径;卡车途中发射/接收无人机方式能有效缩短无人机飞行距离,减少卡车与无人机的协同时间,缩短通行受限情景下的应急物资配送时间,具有可行性、合理性与有效性.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_4f0fdce2a9d138be",
+        "title": "考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化",
+        "authors": [
+          "王培栋",
+          "汪玲"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化 面对现今频发的自然灾害，从系统全局角度出发，研究如何兼顾灾后应急物资配送的公平与效率对于高效实施灾后救援具有重要意义。运用层次分析法对需求紧迫度测算指标进行赋权，以受灾点需求紧迫度排序指数最大、带有延时惩罚的配送总成本最小为目标，构建考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化模型，并采用改进非支配排序遗传算法Ⅱ(nondominated sorting genetic algorithmⅡ,NSGA-Ⅱ)进行求解。结果表明：该模型能够满足不同紧迫程度下受灾点应急物资的配送需求，改进NSGA-Ⅱ算法对目标函数优化效果较好，可以为决策者制定应急物资的合理配送方案提供科学参考。",
+        "theory_or_concept": "构建考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化模型；采用改进非支配排序遗传算法Ⅱ(nondominated sorting geneti",
+        "method": "算法、优化、模型、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化 面对现今频发的自然灾害，从系统全局角度出发，研究如何兼顾灾后应急物资配送的公平与效率对于高效实施灾后救援具有重要意义。运用层次分析法对需求紧迫度测算指标进行赋权，以受灾点需求紧迫度排序指数最大、带有延时惩罚的配送总成本最小为目标，构建考虑需求紧迫度的应急物资卡车-无人机联合配送路径优化模型，并采用改进非支配排序遗传算法Ⅱ(nondominated sorting genetic algorithmⅡ,NSGA-Ⅱ)进行求解。结果表明：该模型能够满足不同紧迫程度下受灾点应急物资的配送需求，改进NSGA-Ⅱ算法对目标函数优化效果较好，可以为决策者制定应急物资的合理配送方案提供科学参考。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_6ff879f575603830",
+        "title": "救援与配送结合的洪灾应急多载具多模态多目标调度优化",
+        "authors": [
+          "周愉峰",
+          "涂熳熳",
+          "龚英"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "构建考虑被困人员优先级与任务拆分性、集成卡车-冲锋舟-直升机协同救援与卡车-无人机协；采用混合整数非线性规划描述；引入字典序多目标优化方法",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "救援与配送结合的洪灾应急多载具多模态多目标调度优化 洪灾应急响应中，被困人员救援与应急物资配送是两项核心任务。传统方法往往独立优化救援与配送决策，忽视了两者的集成。本文聚焦洪灾背景，构建考虑被困人员优先级与任务拆分性、集成卡车-冲锋舟-直升机协同救援与卡车-无人机协同配送的“空-地-水”多模态多载具路径优化模型。采用混合整数非线性规划描述，引入字典序多目标优化方法，优先保障人员救援，设计主优化目标为人员救援效果最大，次优化目标为应急物资配送满意度最大。针对模型复杂特征，提出改进禁忌搜索算法（Improved Tabu Search， ITS），引入精细邻域结构与多载具协同编解码机制，提升算法性能。以河南“7·20”特大暴雨洪灾为背景构建现实算例，并设计12个不同规模的模拟算例，分别测试模型与算法的有效性。结果表明：（1）优先级与任务拆分机制显著提高被困人员的脱困效率；（2）动态协同配送策略优于静态策略，在时效性与灵活性方面更具优势；（3）ITS性能优于遗传算法、模拟退火算法、分层自适应大邻域搜索算法和蚁群算法，其救援效果分别提升8.95%、7.44%、13.54%与6.97%。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_e0af50f73cdf6a12",
+        "title": "需求不确定下卡车-无人机协同的路径优化研究",
+        "authors": [
+          "陈兆芳",
+          "李文静",
+          "黄文翰"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "需求不确定下卡车-无人机协同的路径优化研究 针对突发事件发生后，部分受灾点的应急物资需求呈现波动性，为提高应急物资配送效率，对需求不确定下的卡车-无人机协同的路径优化问题进行研究。首先，引入需求不确定水平参数，建立卡车与无人机协同配送的鲁棒路径优化模型；其次，提出一种改进的自适应大规模邻域搜索算法(IALNS)，通过设计多样化的删除与修复算子以增强解的多样性，同时通过模拟退火过程更新解，保证解的收敛性；然后，利用Solomon算例验证算法的有效性，并与传统的遗传算法(GA)和粒子群算法(PSO)进行比较，GA、PSO与IALNS算法的平均GAP分别为15.18%,12.91%，验证了算法的可靠性；最后，对需求不确定水平参数、无人机载重以及续航里程进行灵敏度分析。实验结果表明，鲁棒优化模型和IALNS算法可以保证受灾点在需求波动下卡车-无人机路径的可行性。",
+        "theory_or_concept": "引入需求不确定水平参数；提出一种改进的自适应大规模邻域搜索算法(IALNS)",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "需求不确定下卡车-无人机协同的路径优化研究 针对突发事件发生后，部分受灾点的应急物资需求呈现波动性，为提高应急物资配送效率，对需求不确定下的卡车-无人机协同的路径优化问题进行研究。首先，引入需求不确定水平参数，建立卡车与无人机协同配送的鲁棒路径优化模型；其次，提出一种改进的自适应大规模邻域搜索算法(IALNS)，通过设计多样化的删除与修复算子以增强解的多样性，同时通过模拟退火过程更新解，保证解的收敛性；然后，利用Solomon算例验证算法的有效性，并与传统的遗传算法(GA)和粒子群算法(PSO)进行比较，GA、PSO与IALNS算法的平均GAP分别为15.18%,12.91%，验证了算法的可靠性；最后，对需求不确定水平参数、无人机载重以及续航里程进行灵敏度分析。实验结果表明，鲁棒优化模型和IALNS算法可以保证受灾点在需求波动下卡车-无人机路径的可行性。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_096049489666a4b1",
+        "title": "基于卡车-无人机协同的山区自然灾害应急物资调度优化决策研究",
+        "authors": [
+          "章可怡",
+          "石咏",
+          "郭海湘"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "基于卡车-无人机协同的山区自然灾害应急物资调度优化决策研究 应急物资调度是灾后应急响应的关键环节，其调度效率直接影响救援效果。突发自然灾害经常伴随着道路损毁，严重制约着应急物资的运输。在应急物资调度中，卡车载重量大、行驶距离长；无人机运输不依赖于地面路况但受到电池和载重约束，二者协同能够实现优势互补。为提升应急物资的调度效率，本文研究了卡车-无人机协同的灾后应急物资调度策略。以卡车和无人机完成所有物资运输并回到配送中心的时间最短为目标，考虑卡车和无人机的载重和里程约束、道路损毁和道路拥堵限制，建立了混合整数规划模型。针对所提出的模型属于NP难问题，融合遗传算法和动态规划算法的优点，提出了新的混合算法（hybrid method based on genetic algorithm and dynamic programming, HGADP）。本文针对提出的管理问题场景，设计了小、中、大三种不同规模的算例，通过将本文提出的算法与Gurobi求解器和前人提出的算法对比，验证了本文提出算法的有效性。通过算例结果分析，发现相比于传统车辆运输模型，本文提出的卡车-无人机协同运输模型可大幅地节省物资运输时间。最后，本文对无人机载重和续航里程进行灵敏性分析，分析了参数变化对应急物资调度效率的影响。本研究拓展了应急物资调度策略，为应急管理部门的应急物资调度决策提供了决策依据。",
+        "theory_or_concept": "基于卡车-无人机协同的山区自然灾害应急物资调度优化决策研究 应急物资调度是灾后应急响；提出的模型属于NP难问题；提出了新的混合算法（hybrid method based on genetic a",
+        "method": "算法、优化、模型、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "基于卡车-无人机协同的山区自然灾害应急物资调度优化决策研究 应急物资调度是灾后应急响应的关键环节，其调度效率直接影响救援效果。突发自然灾害经常伴随着道路损毁，严重制约着应急物资的运输。在应急物资调度中，卡车载重量大、行驶距离长；无人机运输不依赖于地面路况但受到电池和载重约束，二者协同能够实现优势互补。为提升应急物资的调度效率，本文研究了卡车-无人机协同的灾后应急物资调度策略。以卡车和无人机完成所有物资运输并回到配送中心的时间最短为目标，考虑卡车和无人机的载重和里程约束、道路损毁和道路拥堵限制，建立了混合整数规划模型。针对所提出的模型属于NP难问题，融合遗传算法和动态规划算法的优点，提出了新的混合算法（hybrid method based on genetic algorithm and dynamic programming, HGADP）。本文针对提出的管理问题场景，设计了小、中、大三种不同规模的算例，通过将本文提出的算法与Gurobi求解器和前人提出的算法对比，验证了本文提出算法的有效性。通过算例结果分析，发现相比于传统车辆运输模型，本文提出的卡车-无人机协同运输模型可大幅地节省物资运输时间。最后，本文对无人机载重和续航里程进行灵敏性分析，分析了参数变化对应急物资调度效率的影响。本研究拓展了应急物资调度策略，为应急管理部门的应急物资调度决策提供了决策依据。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_903c6f447833999b",
+        "title": "考虑灾后路况时空不确定的卡车-无人机协同应急配送路径优化",
+        "authors": [
+          "刘兴",
+          "盛心誉",
+          "郝墨卿"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑灾后路况时空不确定的卡车-无人机协同应急配送路径优化 道路受损及其不确定性是灾后应急配送面临的普遍挑战。本文综合运用指数型、幂型和逻辑型函数刻画灾后道路损毁率在时间和空间维度上的特征，并通过正态分布和均匀分布函数描述其概率分布，结合蒙特卡洛方法仿真灾后道路损毁的多个场景。基于此，以最小化所有仿真中的配送时间均值和最大值为优化目标构建卡车-无人机协同应急配送路径优化模型，提高卡车-无人机协同应急配送的效率和鲁棒性。为求解该模型，提出了一种融合k-means聚类、动态规划、变邻域搜索、蒙特卡洛仿真的混合启发式算法。具体而言，首先，基于受灾点的地理位置、应急资源需求量、卡车的负载和里程约束，使用k-means算法对受灾点聚类；接着，结合双层编码方法与多阶段动态规划，明确卡车和无人机的任务分配；然后，利用遗传算子和变邻域搜索算子优势互补，进行混合寻优；最后，在精英解筛选过程中，使用蒙特卡洛方法对路况的时空不确定性进行仿真，以评估个体在多个路况情境下的表现，从而选择最具适应性的解决方案。实验结果表明：（1）灾后应急配送环境中，卡车-无人机协同相较于纯卡车模式表现出明显优势，可平均提升19.21%的优化目标，且随着灾害严重性的增加，其优势愈加明显。（2）同时考虑灾后路况在时空两个维度的不确定性，有助于提升卡车-无人机协同的配送效率和稳健性。（3）卡车的适应性越强，例如能够通过更差的道路或者具备更高的最大载荷，其与无人机协同配送的效率越高。",
+        "theory_or_concept": "构建卡车-无人机协同应急配送路径优化模型；提出了一种融合k-means聚类、动态规划、变邻域搜索、蒙特卡洛仿真的混合启发式算法；基于受灾点的地理位置、应急资源需求量、卡车的负载和里程约束",
+        "method": "实验、仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑灾后路况时空不确定的卡车-无人机协同应急配送路径优化 道路受损及其不确定性是灾后应急配送面临的普遍挑战。本文综合运用指数型、幂型和逻辑型函数刻画灾后道路损毁率在时间和空间维度上的特征，并通过正态分布和均匀分布函数描述其概率分布，结合蒙特卡洛方法仿真灾后道路损毁的多个场景。基于此，以最小化所有仿真中的配送时间均值和最大值为优化目标构建卡车-无人机协同应急配送路径优化模型，提高卡车-无人机协同应急配送的效率和鲁棒性。为求解该模型，提出了一种融合k-means聚类、动态规划、变邻域搜索、蒙特卡洛仿真的混合启发式算法。具体而言，首先，基于受灾点的地理位置、应急资源需求量、卡车的负载和里程约束，使用k-means算法对受灾点聚类；接着，结合双层编码方法与多阶段动态规划，明确卡车和无人机的任务分配；然后，利用遗传算子和变邻域搜索算子优势互补，进行混合寻优；最后，在精英解筛选过程中，使用蒙特卡洛方法对路况的时空不确定性进行仿真，以评估个体在多个路况情境下的表现，从而选择最具适应性的解决方案。实验结果表明：（1）灾后应急配送环境中，卡车-无人机协同相较于纯卡车模式表现出明显优势，可平均提升19.21%的优化目标，且随着灾害严重性的增加，其优势愈加明显。（2）同时考虑灾后路况在时空两个维度的不确定性，有助于提升卡车-无人机协同的配送效率和稳健性。（3）卡车的适应性越强，例如能够通过更差的道路或者具备更高的最大载荷，其与无人机协同配送的效率越高。",
+        "limitation": "考虑灾后路况时空不确定的卡车-无人机协同应急配送路径优化 道路受损及其不确定性是灾后应急配送面临的普遍挑战。本文综合运用指数型、幂型和逻辑型函数刻画灾后道路损毁率在时间和空间维度上的特征，并通过正态分布和均匀分布函数描述其概率分布，结合蒙特卡洛方法仿真灾后道路损毁的多个场景。基于此，以最小化所有仿真中的配送时间均值和最大值为优化目标构建卡车-无人机协同应急配送路径优化模型，提高卡车-无人机协同应急配送的效率和鲁棒性。为求解该模型，提出了一种融合k-means聚类、动态规划、变邻域搜索、蒙特卡洛仿真的混合启发式算法。具体而言，首先，基于受灾点的地理位置、应急资源需求量、卡车的负载和里程约束，使用k-means算法对受灾点聚类；接着，结合双层编码方法与多阶段动态规划，明确卡车和无人机的任务分配；然后，利用遗传算子和变邻域搜索算子优势互补，进行混合寻优；最后，在精英解筛选过程中，使用蒙特卡洛方法对路况的时空不确定性进行仿真，以评估个体在多个路况情境下的表现，从而选择最具适应性的解决方案。实验结果表明：（1）灾后应急配送环境中，卡车-无人机协同相较于纯卡车模式表现出明显优势，可平均提升19.21%的优化目标，且随着灾害严重性的增加，其优势愈加明显。（2）同时考虑灾后路况在时空两个维度的不确定性，有助于提升卡车-无人机协同的配送效率和稳健性。（3）卡车的适应性越强，例如能够通过更差的道路或者具备更高的最大载荷，其与无人机协同配送的效率越高。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_a5a8d3f0dc723373",
+        "title": "应急物资末端配送的卡车与无人机路径优化研究",
+        "authors": [
+          "欧光军",
+          "梁钦"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "应急物资末端配送的卡车与无人机路径优化研究 由于无人机具备灵活性高、配送速度快等优势，为了提高应急物资末端配送效率，引入独立无人机和车载无人机，建立以总交付时间最短为目标的卡车与无人机联合配送模型(TSPJD),并针对问题设计了添加学习操作和精英保留的改进遗传算法(IGA).然后选取3组不同类型的Solomon算例进行小、中、大规模算例分析来证明模型和算法的有效性和稳定性，并在小规模算例分析时使用Gurobi求解器和IGA算法进行对比来证明模型和算法的有效性.最后对无人机飞行半径和飞行速度进行灵敏度分析.结论表明：提出的模型和算法能够显著优化应急物资的配送路径，缩短响应时间，提高配送效率，为应急物资末端配送提供了一种高效的解决方案，具有重要的实际应用价值.",
+        "theory_or_concept": "引入独立无人机和车载无人机；提出的模型和算法能够显著优化应急物资的配送路径",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "应急物资末端配送的卡车与无人机路径优化研究 由于无人机具备灵活性高、配送速度快等优势，为了提高应急物资末端配送效率，引入独立无人机和车载无人机，建立以总交付时间最短为目标的卡车与无人机联合配送模型(TSPJD),并针对问题设计了添加学习操作和精英保留的改进遗传算法(IGA).然后选取3组不同类型的Solomon算例进行小、中、大规模算例分析来证明模型和算法的有效性和稳定性，并在小规模算例分析时使用Gurobi求解器和IGA算法进行对比来证明模型和算法的有效性.最后对无人机飞行半径和飞行速度进行灵敏度分析.结论表明：提出的模型和算法能够显著优化应急物资的配送路径，缩短响应时间，提高配送效率，为应急物资末端配送提供了一种高效的解决方案，具有重要的实际应用价值.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_b71f9a924fb40e65",
+        "title": "基于混合遗传算法的无人机与车辆协同应急物资配送路径优化研究",
+        "authors": [
+          "杨新湦",
+          "张宇菲",
+          "张召悦"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "基于混合遗传算法的无人机与车辆协同应急物资配送路径优化研究 为应对突发事件下的应急物资运输问题，将无人机与车辆协同应用在应急场景的路径优化问题中。考虑到应急场景的特殊性与弱经济性，将受灾点进行分类，并以无人机与车辆到达受灾点累计服务时间最小化为目标建立路径优化模型，同时加入无人机自身续航和载重约束、无人机与车辆的协同性约束等，更符合实际应用情况；通过结合遗传算法和自适应大规模邻域搜索算法，设计混合遗传算法进行模型的求解，通过算例验证模型和算法的有效性。算例结果表明：混合遗传算法能够提升求解精度以及求解速度，可为应对突发事件下的应急物资运输提供有效支撑。",
+        "theory_or_concept": "基于混合遗传算法的无人机与车辆协同应急物资配送路径优化研究 为应对突发事件下的应急物",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "基于混合遗传算法的无人机与车辆协同应急物资配送路径优化研究 为应对突发事件下的应急物资运输问题，将无人机与车辆协同应用在应急场景的路径优化问题中。考虑到应急场景的特殊性与弱经济性，将受灾点进行分类，并以无人机与车辆到达受灾点累计服务时间最小化为目标建立路径优化模型，同时加入无人机自身续航和载重约束、无人机与车辆的协同性约束等，更符合实际应用情况；通过结合遗传算法和自适应大规模邻域搜索算法，设计混合遗传算法进行模型的求解，通过算例验证模型和算法的有效性。算例结果表明：混合遗传算法能够提升求解精度以及求解速度，可为应对突发事件下的应急物资运输提供有效支撑。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_31dab29970e5619c",
+        "title": "考虑灾民心理的震后卡车-无人机协同配送路径优化研究",
+        "authors": [
+          "曹允春",
+          "翟一冰",
+          "耿劭卿"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "考虑灾民心理的震后卡车-无人机协同配送路径优化研究 空地协同应急调度方式在灾后救援中起着至关重要的作用，特别是在地震导致的道路损毁情况下，传统的地面运输工具难以快速有效地完成物资配送。对此提出卡车-无人机协同配送模式，构建以最小化心理成本和物流成本为目标的卡车-无人机协同配送多目标规划模型，并设计了融合改进型修复与动态局部搜索的非支配排序遗传算法Ⅲ变体(Repair-based Local Search-Non-dominated Sorting Genetic AlgorithmⅢ,RLS-NSGA-Ⅲ)求解该复杂问题。通过标准算例集验证表明，该协同配送方案能显著降低总配送成本，在不同规模算例中较对比的多目标算法分别平均降低成本5.61%、11.05%、23.92%和9.79%,且优势随问题规模的增加而更加明显。解集质量评估显示，该算法在大规模问题中帕累托前沿误差接近0,超面积比接近理论最优值1.00,同时保持较高的分布均匀性和计算效率。此外，通过对无人机载重、飞行速度、续航里程及单车携带无人机数量的灵敏度分析，揭示了各参数对配送效率的非线性影响规律，确定了无人机载重20～30 kg、航程约20 km、飞行速度70～90 km/h及每辆车配备1～2架无人机的配置为较优参数组合，为震后应急配送资源的合理配置提供了决策依据。研究明确了模型适用边界和局限性，并提出未来可在需求点可拆分、灾民心理的异质性以及极端环境下的飞行不确定性等方面深入研究，以进一步推动卡车-无人机协同配送模式在实际救援中的有效应用。",
+        "theory_or_concept": "提出卡车-无人机协同配送模式；构建以最小化心理成本和物流成本为目标的卡车-无人机协同配送多目标规划模型；提出未来可在需求点可拆分、灾民心理的异质性以及极端环境下的飞行不确定性等方面深入研究",
+        "method": "算法、优化、模型、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑灾民心理的震后卡车-无人机协同配送路径优化研究 空地协同应急调度方式在灾后救援中起着至关重要的作用，特别是在地震导致的道路损毁情况下，传统的地面运输工具难以快速有效地完成物资配送。对此提出卡车-无人机协同配送模式，构建以最小化心理成本和物流成本为目标的卡车-无人机协同配送多目标规划模型，并设计了融合改进型修复与动态局部搜索的非支配排序遗传算法Ⅲ变体(Repair-based Local Search-Non-dominated Sorting Genetic AlgorithmⅢ,RLS-NSGA-Ⅲ)求解该复杂问题。通过标准算例集验证表明，该协同配送方案能显著降低总配送成本，在不同规模算例中较对比的多目标算法分别平均降低成本5.61%、11.05%、23.92%和9.79%,且优势随问题规模的增加而更加明显。解集质量评估显示，该算法在大规模问题中帕累托前沿误差接近0,超面积比接近理论最优值1.00,同时保持较高的分布均匀性和计算效率。此外，通过对无人机载重、飞行速度、续航里程及单车携带无人机数量的灵敏度分析，揭示了各参数对配送效率的非线性影响规律，确定了无人机载重20～30 kg、航程约20 km、飞行速度70～90 km/h及每辆车配备1～2架无人机的配置为较优参数组合，为震后应急配送资源的合理配置提供了决策依据。研究明确了模型适用边界和局限性，并提出未来可在需求点可拆分、灾民心理的异质性以及极端环境下的飞行不确定性等方面深入研究，以进一步推动卡车-无人机协同配送模式在实际救援中的有效应用。",
+        "limitation": "考虑灾民心理的震后卡车-无人机协同配送路径优化研究 空地协同应急调度方式在灾后救援中起着至关重要的作用，特别是在地震导致的道路损毁情况下，传统的地面运输工具难以快速有效地完成物资配送。对此提出卡车-无人机协同配送模式，构建以最小化心理成本和物流成本为目标的卡车-无人机协同配送多目标规划模型，并设计了融合改进型修复与动态局部搜索的非支配排序遗传算法Ⅲ变体(Repair-based Local Search-Non-dominated Sorting Genetic AlgorithmⅢ,RLS-NSGA-Ⅲ)求解该复杂问题。通过标准算例集验证表明，该协同配送方案能显著降低总配送成本，在不同规模算例中较对比的多目标算法分别平均降低成本5.61%、11.05%、23.92%和9.79%,且优势随问题规模的增加而更加明显。解集质量评估显示，该算法在大规模问题中帕累托前沿误差接近0,超面积比接近理论最优值1.00,同时保持较高的分布均匀性和计算效率。此外，通过对无人机载重、飞行速度、续航里程及单车携带无人机数量的灵敏度分析，揭示了各参数对配送效率的非线性影响规律，确定了无人机载重20～30 kg、航程约20 km、飞行速度70～90 km/h及每辆车配备1～2架无人机的配置为较优参数组合，为震后应急配送资源的合理配置提供了决策依据。研究明确了模型适用边界和局限性，并提出未来可在需求点可拆分、灾民心理的异质性以及极端环境下的飞行不确定性等方面深入研究，以进一步推动卡车-无人机协同配送模式在实际救援中的有效应用。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_bc2cc26f30d1a658",
+        "title": "应急物流下货车-无人机协同配送路径优化研究",
+        "authors": [
+          "李世熙",
+          "王超峰",
+          "张强"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "应急物流下货车-无人机协同配送路径优化研究 针对自然灾害发生后，道路运输网络破坏导致物资难以到达受灾点的问题，优化应急物流末端配送模式、提高配送效率、缩短配送时间成为应急物流领域亟待解决的问题。基于货车-无人机协同配送模式，考虑应急物流配送特点，构建以受灾点总等待时间最小化为目标的混合整数规划模型，并运用模拟退火算法求解该模型。算例仿真结果表明，相较于货车与无人机独立配送模式，协同配送能有效借助无人机跨越障碍能力，显著缩短总配送时间，提升救援效率。",
+        "theory_or_concept": "基于货车-无人机协同配送模式；构建以受灾点总等待时间最小化为目标的混合整数规划模型",
+        "method": "仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "应急物流下货车-无人机协同配送路径优化研究 针对自然灾害发生后，道路运输网络破坏导致物资难以到达受灾点的问题，优化应急物流末端配送模式、提高配送效率、缩短配送时间成为应急物流领域亟待解决的问题。基于货车-无人机协同配送模式，考虑应急物流配送特点，构建以受灾点总等待时间最小化为目标的混合整数规划模型，并运用模拟退火算法求解该模型。算例仿真结果表明，相较于货车与无人机独立配送模式，协同配送能有效借助无人机跨越障碍能力，显著缩短总配送时间，提升救援效率。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_940bee1868901856",
+        "title": "卡车-无人机协同的洪灾应急选址-路径鲁棒优化问题",
+        "authors": [
+          "龚英",
+          "涂熳熳",
+          "周愉峰"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "卡车-无人机协同的洪灾应急选址-路径鲁棒优化问题 为提高洪灾应急物资配送效率,提出卡车-无人机动态协同配送应急物资。考虑洪灾环境特征,以应急物资配送的总时间最短为目标,构建卡车-无人机动态协同的应急物资配送选址-路径鲁棒优化模型。使用改进的禁忌搜索算法求解模型。在改进算法中,设计了多种交叉、逆转的邻域算子来扩大邻域搜索范围,并加入修复算子以保证路径可行且实现选址决策。实验结果表明:提出的模型能有效解决洪灾应急物资配送选址-路径问题;鲁棒优化模型可有效保证卡车行驶时间波动下路径的可行性;与遗传算法、模拟退火算法以及粒子群算法相比,改进禁忌搜索算法具有更优的性能。",
+        "theory_or_concept": "提出卡车-无人机动态协同配送应急物资；构建卡车-无人机动态协同的应急物资配送选址-路径鲁棒优化模型；提出的模型能有效解决洪灾应急物资配送选址-路径问题",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "卡车-无人机协同的洪灾应急选址-路径鲁棒优化问题 为提高洪灾应急物资配送效率,提出卡车-无人机动态协同配送应急物资。考虑洪灾环境特征,以应急物资配送的总时间最短为目标,构建卡车-无人机动态协同的应急物资配送选址-路径鲁棒优化模型。使用改进的禁忌搜索算法求解模型。在改进算法中,设计了多种交叉、逆转的邻域算子来扩大邻域搜索范围,并加入修复算子以保证路径可行且实现选址决策。实验结果表明:提出的模型能有效解决洪灾应急物资配送选址-路径问题;鲁棒优化模型可有效保证卡车行驶时间波动下路径的可行性;与遗传算法、模拟退火算法以及粒子群算法相比,改进禁忌搜索算法具有更优的性能。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_1c2206736e3b1632",
+        "title": "灾后应急救援背景下卡车-无人机协同配送路径规划",
+        "authors": [
+          "安子轩"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "灾后应急救援背景下卡车-无人机协同配送路径规划 无人机因其具有不受道路条件和交通拥堵影响的特点而被应用于物流配送，因此针对灾后道路损毁严重，卡车无法及时配送救援物资的问题，提出利用“卡车-无人机”协同配送的模式进行救援物资的配送。文章对多辆卡车多架无人机灾后协同配送物资的路径规划问题进行了研究，考虑到受灾群众对救援物资的需求紧迫性，受灾群众满意度会随着救援物资送达时间的延长而降低，因此以最大化受灾群众满意度为目标建立了卡车-无人机协同物资配送模型，并使用了自适应大邻域搜索算法对模型进行求解。最后，通过卡车-无人机协同配送和卡车单独配送两种情况下的对比实验验证了无人机在灾后救援物资配送中的有效性。",
+        "theory_or_concept": "提出利用“卡车-无人机”协同配送的模式进行救援物资的配送",
+        "method": "实验、算法、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "无人机因其具有不受道路条件和交通拥堵影响的特点而被应用于物流配送，因此针对灾后道路损毁严重，卡车无法及时配送救援物资的问题，提出利用“卡车-无人机”协同配送的模式进行救援物资的配送。文章对多辆卡车多架无人机灾后协同配送物资的路径规划问题进行了研究，考虑到受灾群众对救援物资的需求紧迫性，受灾群众满意度会随着救援物资送达时间的延长而降低，因此以最大化受灾群众满意度为目标建立了卡车-无人机协同物资配送模型，并使用了自适应大邻域搜索算法对模型进行求解。最后，通过卡车-无人机协同配送和",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_4e3242520c958e97",
+        "title": "考虑道路受损和公平性的卡车无人机协同配送路径优化研究",
+        "authors": [
+          "韩晶",
+          "刘艳秋"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "考虑道路受损和公平性的卡车无人机协同配送路径优化研究 应急物流系统面临着很多的挑战，如道路受损、需求量不确定和受灾地区的“不公平感”。在这种复杂情形下，选择恰当的运输方式和科学规划路径成为亟需解决的问题之一。为了应对这一挑战，本文建立了考虑受灾点公平性的卡车和无人机协同配送路径优化模型，提出了一种混合黑猩猩优化算法(Hybrid Chimp Optimization Algorithm, HChoA)求解，并通过算例进行了仿真实验。结果表明，HChoA算法相比Gurobi在运行时间上有明显优势，且达到了相同甚至更好的结果。HChoA算法在局部搜索能力和计算精度方面都有所提高，算法的有效性得以验证。最后，对两个关键参数进行了灵敏度分析。",
+        "theory_or_concept": "提出了一种混合黑猩猩优化算法(Hybrid Chimp Optimization A",
+        "method": "实验、仿真、算法、优化、模型、optimization、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑道路受损和公平性的卡车无人机协同配送路径优化研究 应急物流系统面临着很多的挑战，如道路受损、需求量不确定和受灾地区的“不公平感”。在这种复杂情形下，选择恰当的运输方式和科学规划路径成为亟需解决的问题之一。为了应对这一挑战，本文建立了考虑受灾点公平性的卡车和无人机协同配送路径优化模型，提出了一种混合黑猩猩优化算法(Hybrid Chimp Optimization Algorithm, HChoA)求解，并通过算例进行了仿真实验。结果表明，HChoA算法相比Gurobi在运行时间上有明显优势，且达到了相同甚至更好的结果。HChoA算法在局部搜索能力和计算精度方面都有所提高，算法的有效性得以验证。最后，对两个关键参数进行了灵敏度分析。",
+        "limitation": "考虑道路受损和公平性的卡车无人机协同配送路径优化研究 应急物流系统面临着很多的挑战，如道路受损、需求量不确定和受灾地区的“不公平感”。在这种复杂情形下，选择恰当的运输方式和科学规划路径成为亟需解决的问题之一。为了应对这一挑战，本文建立了考虑受灾点公平性的卡车和无人机协同配送路径优化模型，提出了一种混合黑猩猩优化算法(Hybrid Chimp Optimization Algorithm, HChoA)求解，并通过算例进行了仿真实验。结果表明，HChoA算法相比Gurobi在运行时间上有明显优势，且达到了相同甚至更好的结果。HChoA算法在局部搜索能力和计算精度方面都有所提高，算法的有效性得以验证。最后，对两个关键参数进行了灵敏度分析。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_32b0bd96a143965c",
+        "title": "考虑受灾点权重的卡车-无人机协同配送应急物资路径规划研究",
+        "authors": [
+          "高振明",
+          "叶春明"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑受灾点权重的卡车-无人机协同配送应急物资路径规划研究 文章针对自然灾害发生后的应急物资配送问题，并考虑各受灾点的重要程度，以最大化所有受灾点的满意度为优化目标，构建了混合整数规划模型。为求解该模型，文章在遗传算法的基础上融合加权空间聚类、2-opt局部搜索以及无人机任务调度规划方法，形成一种混合遗传算法，在保证解的质量的同时提高了求解速度。文章通过数值实验验证了所提模型及算法的有效性，另外还通过敏感性分析实验提出了一些无人机参数对于实验结果的影响结论。",
+        "theory_or_concept": "构建了混合整数规划模型；提出了一些无人机参数对于实验结果的影响结论",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑受灾点权重的卡车-无人机协同配送应急物资路径规划研究 文章针对自然灾害发生后的应急物资配送问题，并考虑各受灾点的重要程度，以最大化所有受灾点的满意度为优化目标，构建了混合整数规划模型。为求解该模型，文章在遗传算法的基础上融合加权空间聚类、2-opt局部搜索以及无人机任务调度规划方法，形成一种混合遗传算法，在保证解的质量的同时提高了求解速度。文章通过数值实验验证了所提模型及算法的有效性，另外还通过敏感性分析实验提出了一些无人机参数对于实验结果的影响结论。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_e48879139831c6e0",
+        "title": "无接触式“卡车+无人机”联合配送问题研究",
+        "authors": [
+          "杨双鹏",
+          "郭秀萍",
+          "高娇娇"
+        ],
+        "year": 2022,
+        "source": "cnki",
+        "research_question": "无接触式“卡车+无人机”联合配送问题研究 新型冠状病毒（简称“新冠”）因其高传染性，在隔离措施下进行应急物资配送时避免接触是一大难题。考虑无人机具有无人参与，可做到无接触的特点，提出“卡车+无人机”联合配送模式。构造三阶段求解方法，第一阶段，采用改进K-means算法对客户点进行归类，选出卡车配送点；第二阶段，采用模拟退火算法以旅行商问题为背景对卡车配送路线进行确定；第三阶段提出尾部客户判断法改进模拟退火算法对无人机飞行路线进行确定。三个阶段均采用C++编程进行实现。算例测算结果表明，“卡车+无人机”联合配送模式相较于卡车单独配送可有效提高配送效率，减少配送成本；尾部客户判断法可显著提高算法收敛速度。",
+        "theory_or_concept": "提出“卡车+无人机”联合配送模式；采用改进K-means算法对客户点进行归类；采用模拟退火算法以旅行商问题为背景对卡车配送路线进行确定",
+        "method": "算法",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "无接触式“卡车+无人机”联合配送问题研究 新型冠状病毒（简称“新冠”）因其高传染性，在隔离措施下进行应急物资配送时避免接触是一大难题。考虑无人机具有无人参与，可做到无接触的特点，提出“卡车+无人机”联合配送模式。构造三阶段求解方法，第一阶段，采用改进K-means算法对客户点进行归类，选出卡车配送点；第二阶段，采用模拟退火算法以旅行商问题为背景对卡车配送路线进行确定；第三阶段提出尾部客户判断法改进模拟退火算法对无人机飞行路线进行确定。三个阶段均采用C++编程进行实现。算例测算结果表明，“卡车+无人机”联合配送模式相较于卡车单独配送可有效提高配送效率，减少配送成本；尾部客户判断法可显著提高算法收敛速度。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_f5848f8fb99294bd",
+        "title": "考虑物资储备点调用的铁路应急物资车机协同配送优化研究",
+        "authors": [
+          "李超",
+          "陈艳春",
+          "王霄"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑物资储备点调用的铁路应急物资车机协同配送优化研究 铁路应急物资配送效率与储备点启用状态及车机协同组织方式密切相关。为解决灾后道路受阻导致的卡车配送效率下降、轻小急需物资响应滞后的问题，研究既有应急物资储备点调用与卡车—无人机协同配送的联合优化方法。根据铁路抢险物资保障的组织过程，将配送决策分为2个阶段：储备点调用阶段综合考虑抢险点物资需求、储备点保障能力和调用预算，确定参与抢险任务的应急物资储备点；在车机协同配送阶段生成卡车主送路径、无人机先遣补投任务及其发射—补投—回收衔接关系。以储备点调用成本、卡车运输成本、无人机补投成本和响应时间惩罚成本构成的系统综合成本最小为目标，构建两阶段混合整数规划模型，并设计自适应大规模邻域搜索算法求解。研究表明：算法结构、接受准则与算子权重更新均对求解质量有贡献；所设计算法的平均综合成本较遗传算法和固定权重大规模邻域搜索算法分别降低约3.32%和3.95%，差异显著，与模拟退火算法表现相当且求解更稳定；在10至50个抢险点的多规模算例中，算法均能快速求得可行方案，验证了模型与算法的适用性。正常道路条件下，车机协同模式较仅卡车主送模式的综合成本降低16.63%，平均先遣响应时间降低40.92%；道路受阻条件下二者分别降低0.72%和12.14%。敏感性分析表明，增大无人机续航距离或卡车数量可降低系统综合成本，但存在边际递减；无人机数量对系统综合成本的影响呈非线性，随数量增加综合成本先升后降；提高响应时间惩罚系数会促使方案更多采用无人机先遣补投、缩短响应时间但推高综合成本，体现了时效与成本的权衡。该研究致力于保证主体抢修物资送达的前提下提高轻小急需物资的响应效率，可为铁路抢险应急物资储备点调用、灾后配送组织和车机协同调度提供方法参考。",
+        "theory_or_concept": "构建两阶段混合整数规划模型；采用无人机先遣补投、缩短响应时间但推高综合成本",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑物资储备点调用的铁路应急物资车机协同配送优化研究 铁路应急物资配送效率与储备点启用状态及车机协同组织方式密切相关。为解决灾后道路受阻导致的卡车配送效率下降、轻小急需物资响应滞后的问题，研究既有应急物资储备点调用与卡车—无人机协同配送的联合优化方法。根据铁路抢险物资保障的组织过程，将配送决策分为2个阶段：储备点调用阶段综合考虑抢险点物资需求、储备点保障能力和调用预算，确定参与抢险任务的应急物资储备点；在车机协同配送阶段生成卡车主送路径、无人机先遣补投任务及其发射—补投—回收衔接关系。以储备点调用成本、卡车运输成本、无人机补投成本和响应时间惩罚成本构成的系统综合成本最小为目标，构建两阶段混合整数规划模型，并设计自适应大规模邻域搜索算法求解。研究表明：算法结构、接受准则与算子权重更新均对求解质量有贡献；所设计算法的平均综合成本较遗传算法和固定权重大规模邻域搜索算法分别降低约3.32%和3.95%，差异显著，与模拟退火算法表现相当且求解更稳定；在10至50个抢险点的多规模算例中，算法均能快速求得可行方案，验证了模型与算法的适用性。正常道路条件下，车机协同模式较仅卡车主送模式的综合成本降低16.63%，平均先遣响应时间降低40.92%；道路受阻条件下二者分别降低0.72%和12.14%。敏感性分析表明，增大无人机续航距离或卡车数量可降低系统综合成本，但存在边际递减；无人机数量对系统综合成本的影响呈非线性，随数量增加综合成本先升后降；提高响应时间惩罚系数会促使方案更多采用无人机先遣补投、缩短响应时间但推高综合成本，体现了时效与成本的权衡。该研究致力于保证主体抢修物资送达的前提下提高轻小急需物资的响应效率，可为铁路抢险应急物资储备点调用、灾后配送组织和车机协同调度提供方法参考。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_fafb7d239ff51b00",
+        "title": "疫区卡车-无人机协同配送路径规划:风险与效率兼顾",
+        "authors": [
+          "刘长石",
+          "刘涛",
+          "马敬仪"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "基于传染病的传播动力学模型构建“基本再生数”函数量化各需求点的疫情感染人数；构建卡车-无人机协同配送应急物资的路径规划模型；采用多类型算例开展试验",
+        "method": "算法、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "疫区卡车-无人机协同配送路径规划:风险与效率兼顾 为有效降低疫区应急物流“最后一公里”的疫情传染风险，首先，设计卡车-无人机协同配送模式，基于传染病的传播动力学模型构建“基本再生数”函数量化各需求点的疫情感染人数；然后，以最小化所有需求点的疫情感染人数、最小化总配送时间为目标，构建卡车-无人机协同配送应急物资的路径规划模型，并结合模型多目标、非线性的特性，设计一种改进的多目标人工蜂群算法(IMOABCA)求解；最后，采用多类型算例开展试验。结果表明：IMOABCA能综合考虑疫区疫情、需求点分布与人口数量等情况，科学规划卡车-无人机协同配送应急物资的路径方案，不但能有效降低疫情传染风险，并能保障应急物资配送的时效性。与基础多目标人工蜂群算法(MOABCA)、非支配排序遗传算法-II(NSGA-II)求得的配送路径方案相比，IMOABCA求得规划方案的总感染人数分别减少922和746人，总配送时间分别节省3.71%和1.41%,任务完成时间分别缩短14.06%和3.6%。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_21d2453f1292100f",
+        "title": "考虑心理成本的应急物流选址路径问题",
+        "authors": [
+          "彭丽芳",
+          "赵楠楠"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑心理成本的应急物流选址路径问题 将卡车-无人机协同配送模型应用于人道主义物流，以配送时间、系统经济成本和受影响人群心理成本最小化为目标，建立了需求可拆分的卡车无人机协同选址-路径模型。提出带局部搜索算子的改进非支配排序遗传算法，通过一组数值实验验证算法性能。以上海市抗原试剂配送为例，将卡车无人机协同选址-路径模型与仅卡车配模型进行比较，发现该模型物资配送效率方面具有优势。在此基础上，对不同无人机参数对卡车-无人机协同配送效率的影响进行了敏感性分析，阐述了所提出的模型和算法在实际中的应用。",
+        "theory_or_concept": "提出带局部搜索算子的改进非支配排序遗传算法；提出的模型和算法在实际中的应用",
+        "method": "实验、算法、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑心理成本的应急物流选址路径问题 将卡车-无人机协同配送模型应用于人道主义物流，以配送时间、系统经济成本和受影响人群心理成本最小化为目标，建立了需求可拆分的卡车无人机协同选址-路径模型。提出带局部搜索算子的改进非支配排序遗传算法，通过一组数值实验验证算法性能。以上海市抗原试剂配送为例，将卡车无人机协同选址-路径模型与仅卡车配模型进行比较，发现该模型物资配送效率方面具有优势。在此基础上，对不同无人机参数对卡车-无人机协同配送效率的影响进行了敏感性分析，阐述了所提出的模型和算法在实际中的应用。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_1439edeae6d500ee",
+        "title": "应急响应中卡车-无人机协同配送优化策略",
+        "authors": [
+          "张志霞",
+          "张蒙"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "应急响应中卡车-无人机协同配送优化策略 为提升应急配送效率，研究卡车与无人机协同配送问题，针对应急响应的弱经济性及需求的高紧迫性，设计两阶段混合遗传算法求解混合整数规划模型。通过数值实验与其他算法进行对比，验证提出模型的准确性与算法的有效性，表明方案可提升应急物资配送效率。",
+        "theory_or_concept": "提出模型的准确性与算法的有效性",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "应急响应中卡车-无人机协同配送优化策略 为提升应急配送效率，研究卡车与无人机协同配送问题，针对应急响应的弱经济性及需求的高紧迫性，设计两阶段混合遗传算法求解混合整数规划模型。通过数值实验与其他算法进行对比，验证提出模型的准确性与算法的有效性，表明方案可提升应急物资配送效率。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_cbabd88767e962d8",
+        "title": "5G网络环境下的“无人机+车辆”应急物资配送优化方案",
+        "authors": [
+          "刘苏晴"
+        ],
+        "year": 2023,
+        "source": "cnki",
+        "research_question": "5G网络环境下的“无人机+车辆”应急物资配送优化方案 随着我国5G技术的高速发展，相较于以往的车辆运输，无人机在路面交通不畅的灾后现场配送能够有效降低灾区人员伤亡及财产损失，但同时其具有负载小、成本高等短板。因此配送车量与无人机联合配送模式下的路径优化问题将是研究重点。在满足车辆载重、无人机飞行距离和无人机载重的约束条件下，将完成一次整体配送所需时间作为衡量因素，建立分别在“配送车辆”运输模式和“配送车辆-无人机”运输模式下的最优路径模型对模型进行求解。",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "随着我国5G技术的高速发展，相较于以往的车辆运输，无人机在路面交通不畅的灾后现场配送能够有效降低灾区人员伤亡及财产损失，但同时其具有负载小、成本高等短板。因此配送车量与无人机联合配送模式下的路径优化问题将是研究重点。在满足车辆载重、无人机飞行距离和无人机载重的约束条件下，将完成一次整体配送所需时间作为衡量因素，建立分别在“配送车辆”运输模式和“配送车辆-无人机”运输模式下的最优路径模型对模型进行求解。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_8f850c14af0a7af1",
+        "title": "无人机-货车协同应急资源调度多目标优化研究",
+        "authors": [
+          "伊振鹏",
+          "郑满",
+          "孙峣"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "无人机-货车协同应急资源调度多目标优化研究 针对极端天气条件下道路通行能力下降或断导致应急资源调度受阻的问题，提出一种无人机-货车协同配送模式，构建了考虑效率-公平-成本综合目标的混合整数规划模型，针对模型的多目标特性，设计了一种两阶段NSGA-Ⅱ-熵权TOPSIS混合求解框架，并以天津市路网为算例，验证了模型的有效性与优越性。结果表明，相较于纯货车配送模式，无人机-货车协同模式在救援效率、公平性方面均有显著提升。",
+        "theory_or_concept": "提出一种无人机-货车协同配送模式；构建了考虑效率-公平-成本综合目标的混合整数规划模型",
+        "method": "优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "无人机-货车协同应急资源调度多目标优化研究 针对极端天气条件下道路通行能力下降或断导致应急资源调度受阻的问题，提出一种无人机-货车协同配送模式，构建了考虑效率-公平-成本综合目标的混合整数规划模型，针对模型的多目标特性，设计了一种两阶段NSGA-Ⅱ-熵权TOPSIS混合求解框架，并以天津市路网为算例，验证了模型的有效性与优越性。结果表明，相较于纯货车配送模式，无人机-货车协同模式在救援效率、公平性方面均有显著提升。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_0ab597af6949b08d",
+        "title": "事件驱动下考虑优先级的卡车-无人机应急调度研究",
+        "authors": [
+          "高振明",
+          "叶春明",
+          "刘勤明"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "事件驱动下考虑优先级的卡车-无人机应急调度研究 针对灾后救援中道路损毁及需求动态涌现难题，为提升配送时效与精准度，研究事件驱动下考虑优先级的卡车-无人机协同调度问题。首先，综合考量受灾点优先级、道路通行受阻及车机协同约束，建立以最大化系统加权累积满意度为目标的混合整数规划模型。其次，设计基于“虚拟起始点”与“系统状态快照”的事件驱动动态重规划框架，通过实时锁定车机位置并重构任务池，实现对突发请求的即时响应。再次，在标准自适应大规模邻域搜索结合模拟退火（ALNS-SA）算法基础上，提出改进的ALNS-RSA算法。该算法设计协同修复算子以增强解结构多样性，并引入自适应重加温（Reheating Simulated Annealing）机制，利用搜索停滞状态动态回调温度参数以规避局部最优。最后，实验结果表明：改进算法在求解质量与收敛速度上显著优于混合差分进化及标准ALNS-SA算法；相比贪婪、时间驱动策略以及增派策略，所提机制在高动态场景下能显著提升满意度并降低高优先级节点响应延迟。",
+        "theory_or_concept": "基于“虚拟起始点”与“系统状态快照”的事件驱动动态重规划框架；提出改进的ALNS-RSA算法；引入自适应重加温（Reheating Simulated Annealing）机制",
+        "method": "实验、算法、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "事件驱动下考虑优先级的卡车-无人机应急调度研究 针对灾后救援中道路损毁及需求动态涌现难题，为提升配送时效与精准度，研究事件驱动下考虑优先级的卡车-无人机协同调度问题。首先，综合考量受灾点优先级、道路通行受阻及车机协同约束，建立以最大化系统加权累积满意度为目标的混合整数规划模型。其次，设计基于“虚拟起始点”与“系统状态快照”的事件驱动动态重规划框架，通过实时锁定车机位置并重构任务池，实现对突发请求的即时响应。再次，在标准自适应大规模邻域搜索结合模拟退火（ALNS-SA）算法基础上，提出改进的ALNS-RSA算法。该算法设计协同修复算子以增强解结构多样性，并引入自适应重加温（Reheating Simulated Annealing）机制，利用搜索停滞状态动态回调温度参数以规避局部最优。最后，实验结果表明：改进算法在求解质量与收敛速度上显著优于混合差分进化及标准ALNS-SA算法；相比贪婪、时间驱动策略以及增派策略，所提机制在高动态场景下能显著提升满意度并降低高优先级节点响应延迟。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_21d86ef86a6df596",
+        "title": "基于卡车-无人机协同配送的双目标应急物资运送优化",
+        "authors": [
+          "张林静",
+          "丁溢"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "基于卡车-无人机协同配送的双目标应急物资运送优化 鉴于灾害的严重破坏性，社会各界对突发灾害的关注程度逐渐提高，研究高效合理的应急物资运送路径成为应急管理领域的紧迫任务。基于此，将卡车-无人机协同配送模式运用到灾后应急物资运送过程中，以期快速为灾民提供关键物资。首先，通过引入剥夺成本来衡量灾民因缺乏物资而感知的痛苦，进而以卡车-无人机协同配送总物流成本最小和灾民承受的剥夺成本最小为目标构建非线性整数规划模型；其次，采用改进的带精英策略的非支配排序遗传算法(INSGA-Ⅱ)对模型进行求解；最后，通过数值分析和算法比较对所提出模型及算法进行验证。结果表明：卡车-无人机协同配送模式能够有效降低物流成本和灾民痛苦；INSGA-Ⅱ算法比NSGA-Ⅱ算法效果更优。",
+        "theory_or_concept": "基于卡车-无人机协同配送的双目标应急物资运送优化 鉴于灾害的严重破坏性；引入剥夺成本来衡量灾民因缺乏物资而感知的痛苦；构建非线性整数规划模型",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "基于卡车-无人机协同配送的双目标应急物资运送优化 鉴于灾害的严重破坏性，社会各界对突发灾害的关注程度逐渐提高，研究高效合理的应急物资运送路径成为应急管理领域的紧迫任务。基于此，将卡车-无人机协同配送模式运用到灾后应急物资运送过程中，以期快速为灾民提供关键物资。首先，通过引入剥夺成本来衡量灾民因缺乏物资而感知的痛苦，进而以卡车-无人机协同配送总物流成本最小和灾民承受的剥夺成本最小为目标构建非线性整数规划模型；其次，采用改进的带精英策略的非支配排序遗传算法(INSGA-Ⅱ)对模型进行求解；最后，通过数值分析和算法比较对所提出模型及算法进行验证。结果表明：卡车-无人机协同配送模式能够有效降低物流成本和灾民痛苦；INSGA-Ⅱ算法比NSGA-Ⅱ算法效果更优。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_75daa40a4eb27e02",
+        "title": "基于改进ALNS的无人机-车辆应急物流路径规划",
+        "authors": [
+          "唐新贵",
+          "沈正邦"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "基于改进ALNS的无人机-车辆应急物流路径规划 为解决洪涝灾害下传统车辆因道路中断导致的配送效率低下问题，通过优化无人机-车辆协同路径规划来最小化受灾点的最大救援时间。构建融合水深、降雨、风速等动态约束的协同配送模型；提出改进的自适应大规模邻域搜索（ALNS）算法，引入强化学习（RL）代理智能调度ALNS核心步骤，动态集成禁忌搜索（TS）与变邻域搜索（VNS），平衡全局探索与局部开发。基于Solomon RC算例灾情模拟，改进ALNS算法124次迭代达最优202.24 min，显著优于标准ALNS及遗传算法（GA），车辆路径缩短且起降点选择更合理。改进ALNS算法通过RL驱动的多策略协同机制，为应急物流提供了一种可行的决策工具，具有提升救援效率与覆盖范围的应用前景。",
+        "theory_or_concept": "基于改进ALNS的无人机-车辆应急物流路径规划 为解决洪涝灾害下传统车辆因道路中断导；构建融合水深、降雨、风速等动态约束的协同配送模型；提出改进的自适应大规模邻域搜索（ALNS）算法",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "为解决洪涝灾害下传统车辆因道路中断导致的配送效率低下问题，通过优化无人机-车辆协同路径规划来最小化受灾点的最大救援时间。构建融合水深、降雨、风速等动态约束的协同配送模型；提出改进的自适应大规模邻域搜索（ALNS）算法，引入强化学习（RL）代理智能调度ALNS核心步骤，动态集成禁忌搜索（TS）与变邻域搜索（VNS），平衡全局探索与局部开发。基于Solomon RC算例灾情模拟，改进ALNS算法124次迭代达最优202.24 min，显著优于标准ALNS及遗传算法（GA），车辆路",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_51b58c5ceafe2ca0",
+        "title": "考虑动态能耗的“卡车+无人机”应急物资配送优化研究",
+        "authors": [
+          "李励行",
+          "周洋",
+          "何建佳"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑动态能耗的“卡车+无人机”应急物资配送优化研究 随着无人机技术的成熟及应急响应体系的不断完善，卡车与无人机协同运输模式在实践中的应用日益广泛，同时也受到学术界的持续关注。针对“卡车+无人机”应急物资配送路径问题，引入无人机动态能耗因素，构建了以总成本最小化为目标的混合整数规划模型。鉴于该模型属于NP-Hard难题，提出一种基于粒子群优化和自适应大邻域搜索算法的两阶段混合优化算法。该算法提高了初始解的质量，并加快了收敛速度。通过多规模算例验证了算法的有效性，并通过敏感性分析提出了相应管理启示。",
+        "theory_or_concept": "引入无人机动态能耗因素；构建了以总成本最小化为目标的混合整数规划模型；提出一种基于粒子群优化和自适应大邻域搜索算法的两阶段混合优化算法",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "随着无人机技术的成熟及应急响应体系的不断完善，卡车与无人机协同运输模式在实践中的应用日益广泛，同时也受到学术界的持续关注。针对“卡车+无人机”应急物资配送路径问题，引入无人机动态能耗因素，构建了以总成本最小化为目标的混合整数规划模型。鉴于该模型属于NP-Hard难题，提出一种基于粒子群优化和自适应大邻域搜索算法的两阶段混合优化算法。该算法提高了初始解的质量，并加快了收敛速度。通过多规模算例验证了算法的有效性，并通过敏感性分析提出了相应管理启示。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_ba74c32ff864708b",
+        "title": "高寒环境下以热衰减基准为基础的卡车和无人机应急物资协同调度优化",
+        "authors": [
+          "李宗晏",
+          "赵利坤",
+          "徐致轩"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "引入路径规划；提出以卡车为“移动复温舱”的新型调度模式；构建了考虑非线性热衰减的卡车-无人机协同车辆路径模型(TE-TDVRP)",
+        "method": "仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "高寒环境下以热衰减基准为基础的卡车和无人机应急物资协同调度优化 针对高纬度地区极端低温导致常规应急物流失效及无人机电池非线性衰减问题，文章将热力学约束引入路径规划，提出以卡车为“移动复温舱”的新型调度模式。构建了考虑非线性热衰减的卡车-无人机协同车辆路径模型(TE-TDVRP)，并设计了基于真实路网的热感知协同启发式算法。新疆阿勒泰地区仿真表明：在-30℃下，常规协同策略任务完成率降至零；文章机制可完全规避无人机坠机风险，在保证100%送达率的同时，较纯地面越野运输提升近88%的救援效率。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_cf398ce77e441d53",
+        "title": "考虑货车-无人机协同的灾后应急响应策略及调度优化",
+        "authors": [
+          "许钢焱",
+          "龙玉莹",
+          "王欣悦"
+        ],
+        "year": 2023,
+        "source": "cnki",
+        "research_question": "考虑货车-无人机协同的灾后应急响应策略及调度优化 为了弥补现有货车-无人机应用策略在灾后应急响应调度过程中的不足，进一步提高城市应急响应效率，提出了面向灾后救援的货车-无人机协同策略，并对其调度算法进行研究。在对两种货车-无人机协同响应策略进行分析的基础上，考虑城市应急场景道路密度高、中断点多、需求规模大的特点，提出了货车-无人机飞行伙伴响应策略，并以响应时间最小化为目标建立了其调度优化的混合整数规划模型。同时，设计了基于禁忌搜索的三阶段求解算法，并通过试验对该调度策略及算法的应用效果进行了仿真验证。",
+        "theory_or_concept": "提出了面向灾后救援的货车-无人机协同策略；提出了货车-无人机飞行伙伴响应策略；基于禁忌搜索的三阶段求解算法",
+        "method": "仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "为了弥补现有货车-无人机应用策略在灾后应急响应调度过程中的不足，进一步提高城市应急响应效率，提出了面向灾后救援的货车-无人机协同策略，并对其调度算法进行研究。在对两种货车-无人机协同响应策略进行分析的基础上，考虑城市应急场景道路密度高、中断点多、需求规模大的特点，提出了货车-无人机飞行伙伴响应策略，并以响应时间最小化为目标建立了其调度优化的混合整数规划模型。同时，设计了基于禁忌搜索的三阶段求解算法，并通过试验对该调度策略及算法的应用效果进行了仿真验证。",
+        "limitation": "考虑货车-无人机协同的灾后应急响应策略及调度优化 为了弥补现有货车-无人机应用策略在灾后应急响应调度过程中的不足，进一步提高城市应急响应效率，提出了面向灾后救援的货车-无人机协同策略，并对其调度算法进行研究。在对两种货车-无人机协同响应策略进行分析的基础上，考虑城市应急场景道路密度高、中断点多、需求规模大的特点，提出了货车-无人机飞行伙伴响应策略，并以响应时间最小化为目标建立了其调度优化的混合整数规划模型。同时，设计了基于禁忌搜索的三阶段求解算法，并通过试验对该调度策略及算法的应用效果进行了仿真验证。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_443f283bfd152681",
+        "title": "灾害区应急条件下“货车+无人机”协同配送研究",
+        "authors": [
+          "朱刘红",
+          "郑梓萌",
+          "沙孟炽"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "灾害区应急条件下“货车+无人机”协同配送研究 从灾害区应急条件电子商务物流需求出发，针对货车无法到达的障碍区进行“货车+无人机”协同配送研究。首先，应用面积内插模型将灾害区转化为规则的格网区域；其次，运用重心法获取灾害区无人机配送物品中心选址位置；最后，在确保无人机运输安全前提下，结合蚁群算法，对灾害区应急条件下物流系统结构进行优化。这样能够有效破解灾害区物流配送障碍，并推动电子商务行业的完善和发展。",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "从灾害区应急条件电子商务物流需求出发，针对货车无法到达的障碍区进行“货车+无人机”协同配送研究。首先，应用面积内插模型将灾害区转化为规则的格网区域；其次，运用重心法获取灾害区无人机配送物品中心选址位置；最后，在确保无人机运输安全前提下，结合蚁群算法，对灾害区应急条件下物流系统结构进行优化。这样能够有效破解灾害区物流配送障碍，并推动电子商务行业的完善和发展。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_71d3e0650effd7ed",
+        "title": "场景驱动的卡车-无人机协同配送问题研究综述",
+        "authors": [
+          "唐立",
+          "尹瑶琳",
+          "蒲科先"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "场景驱动的卡车-无人机协同配送问题研究综述 【背景】低空经济的兴起为传统物流运输带来了新的发展契机，卡车-无人机协同配送模式因兼具卡车的运载能力和无人机的灵活性，逐渐成为研究热点。【目标】探究卡车-无人机协同配送研究进展，系统梳理相关研究成果，提炼面向不同使用场景的建模重点。【方法】首先介绍了两种基础模型以及四种典型协同方式，进而从城市、应急、农村山区和创新服务模式四个典型场景梳理了现有研究的建模思路，并回顾了当前主要的求解算法。【结果】卡车-无人机协同配送模式在各类应用场景下均有望实现比传统单一配送模式更优的效果。在建模思路方面，场景特征决定了约束条件的差异：城市场景主要关注限制区和时间不确定性约束；应急场景则注重快速响应；农村山区重在考虑地形约束；创新服务模式旨在快速高效。求解算法方面，人工智能算法表现出较强的适应和求解能力，在动态不确定等复杂问题上更具优势。【应用】本综述可为卡车-无人机协同配送在不同应用场景中的建模提供有价值的参考与启示。",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "算法、模型、综述",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "场景驱动的卡车-无人机协同配送问题研究综述 【背景】低空经济的兴起为传统物流运输带来了新的发展契机，卡车-无人机协同配送模式因兼具卡车的运载能力和无人机的灵活性，逐渐成为研究热点。【目标】探究卡车-无人机协同配送研究进展，系统梳理相关研究成果，提炼面向不同使用场景的建模重点。【方法】首先介绍了两种基础模型以及四种典型协同方式，进而从城市、应急、农村山区和创新服务模式四个典型场景梳理了现有研究的建模思路，并回顾了当前主要的求解算法。【结果】卡车-无人机协同配送模式在各类应用场景下均有望实现比传统单一配送模式更优的效果。在建模思路方面，场景特征决定了约束条件的差异：城市场景主要关注限制区和时间不确定性约束；应急场景则注重快速响应；农村山区重在考虑地形约束；创新服务模式旨在快速高效。求解算法方面，人工智能算法表现出较强的适应和求解能力，在动态不确定等复杂问题上更具优势。【应用】本综述可为卡车-无人机协同配送在不同应用场景中的建模提供有价值的参考与启示。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_5318a3f68b8250e7",
+        "title": "卡车-无人机协同路径规划研究进展",
+        "authors": [
+          "崔海鹏",
+          "李欢",
+          "张旭欣"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "卡车-无人机协同路径规划研究进展 为系统梳理卡车-无人机协同路径规划的研究进展，基于Web of Science核心合集检索获取的386篇文献，利用VOSviewer开展文献计量与科学知识图谱分析，并结合代表性文献进行内容归纳．从年度发文、国家及地区分布、来源出版物、文献共被引及关键词共现等5个维度分析该领域的发展脉络与核心知识基础，同时基于关键词共现分析构建“问题类型-模型构建-算法求解-应用场景”的研究框架．结果表明，卡车-无人机协同路径规划基于旅行商问题和车辆路径问题逐步发展，研究对象逐渐由早期单卡车-单无人机协同配送扩展至多车多机、灵活起降、多访问、取送一体及动态响应等复杂场景；模型构建形成以目标函数、网络约束、资源约束、服务约束、协同机制约束及不确定性约束为核心的复合约束体系；求解方法则呈现精确算法、启发式与元启发式方法、学习型方法并行演进的特征；应用场景方面，相关研究已从城市末端配送拓展至偏远区域配送、医疗物流、人道主义物流、农林植保及巡线巡检等领域．随着空地协同运输关键技术的发展，对卡车-无人机路径规划领域研究进展的系统梳理不仅有助于厘清现有研究的技术脉络，亦可为未来真实场景的模型与算法设计提供方向参考，推动理论研究成果向工程实践的转化应用．",
+        "theory_or_concept": "基于Web of Science核心合集检索获取的386篇文献；基于关键词共现分析构建“问题类型-模型构建-算法求解-应用场景”的研究框架．结果表明；基于旅行商问题和车辆路径问题逐步发展",
+        "method": "算法、模型",
+        "data_or_sample": "研究对象逐渐由早期单卡车-单无人机协同配送扩展至多车多机、灵活起降、多访问、取送一体及动态响应等复杂场景",
+        "core_findings": "卡车-无人机协同路径规划研究进展 为系统梳理卡车-无人机协同路径规划的研究进展，基于Web of Science核心合集检索获取的386篇文献，利用VOSviewer开展文献计量与科学知识图谱分析，并结合代表性文献进行内容归纳．从年度发文、国家及地区分布、来源出版物、文献共被引及关键词共现等5个维度分析该领域的发展脉络与核心知识基础，同时基于关键词共现分析构建“问题类型-模型构建-算法求解-应用场景”的研究框架．结果表明，卡车-无人机协同路径规划基于旅行商问题和车辆路径问题逐步发展，研究对象逐渐由早期单卡车-单无人机协同配送扩展至多车多机、灵活起降、多访问、取送一体及动态响应等复杂场景；模型构建形成以目标函数、网络约束、资源约束、服务约束、协同机制约束及不确定性约束为核心的复合约束体系；求解方法则呈现精确算法、启发式与元启发式方法、学习型方法并行演进的特征；应用场景方面，相关研究已从城市末端配送拓展至偏远区域配送、医疗物流、人道主义物流、农林植保及巡线巡检等领域．随着空地协同运输关键技术的发展，对卡车-无人机路径规划领域研究进展的系统梳理不仅有助于厘清现有研究的技术脉络，亦可为未来真实场景的模型与算法设计提供方向参考，推动理论研究成果向工程实践的转化应用．",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_3cf58fb8776d4f01",
+        "title": "应急物资“火车-卡车-无人机”协同运输优化",
+        "authors": [
+          "钟导峰",
+          "尹传忠",
+          "梁亚莉"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "应急物资“火车-卡车-无人机”协同运输优化 针对面向中长距离应急物资的“火车-卡车-无人机”协同运输，以总运输成本最小为目标，构建“火车-卡车-无人机”协同运输的整数规划模型。提出一种由自适应K-means聚类算法和变邻域模拟退火算法构成的两阶段算法进行求解，设计了7种不同规模的算例进行仿真，仿真结果表明，相较于卡车-无人机运输，加入铁路后，减少卡车行驶里程397 km，整体运输成本平均降低26.49%、运输时间平均减少12.06%、卡车行驶里程平均减少62.17%。随着应急物资运输OD距离增加，运输成本和时效性的优势越发显著，位于[900,1000] km时出现了拐点；当铁路运输速度达到130 km/h时，运输的时效性达到最大，表明加强铁路应急货物列车运输组织具有重要实践价值。研究可为铁路融入低空经济提供参考。",
+        "theory_or_concept": "构建“火车-卡车-无人机”协同运输的整数规划模型；提出一种由自适应K-means聚类算法和变邻域模拟退火算法构成的两阶段算法进行求解",
+        "method": "仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "应急物资“火车-卡车-无人机”协同运输优化 针对面向中长距离应急物资的“火车-卡车-无人机”协同运输，以总运输成本最小为目标，构建“火车-卡车-无人机”协同运输的整数规划模型。提出一种由自适应K-means聚类算法和变邻域模拟退火算法构成的两阶段算法进行求解，设计了7种不同规模的算例进行仿真，仿真结果表明，相较于卡车-无人机运输，加入铁路后，减少卡车行驶里程397 km，整体运输成本平均降低26.49%、运输时间平均减少12.06%、卡车行驶里程平均减少62.17%。随着应急物资运输OD距离增加，运输成本和时效性的优势越发显著，位于[900,1000] km时出现了拐点；当铁路运输速度达到130 km/h时，运输的时效性达到最大，表明加强铁路应急货物列车运输组织具有重要实践价值。研究可为铁路融入低空经济提供参考。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_f00d4201bc7550f9",
+        "title": "地震应急救援中卡车-无人机多目标协同调度问题及优化算法",
+        "authors": [
+          "刘勇",
+          "陈卓",
+          "马良"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "地震应急救援中卡车-无人机多目标协同调度问题及优化算法 针对地震应急救援问题，提出了低风险区与高风险区的救援区域划分策略，设计了一种多卡车-多无人机协同调度模式，并构建了以最大化救援满意度和最小化总路径长度为目标的混合整数规划模型。由于该模型属于NP难问题，提出了一种基于新型记忆回溯策略的多目标优化算法。该算法结合多种记忆机制和多阶段搜索策略，增强了局部搜索能力，并通过改进的Metropolis准则提升了全局搜索效率。实验结果通过IGD、HV和SP等性能指标验证了该算法的有效性，且与多种对比算法相比，表现出显著的优势。结果表明，该算法能够有效提高解集的收敛性和多样性。此外还对灾情规模与无人机数量的灵敏度进行了分析，为地震救援物资调度提供了一种新的有效解决方案。",
+        "theory_or_concept": "提出了低风险区与高风险区的救援区域划分策略；构建了以最大化救援满意度和最小化总路径长度为目标的混合整数规划模型；提出了一种基于新型记忆回溯策略的多目标优化算法",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "地震应急救援中卡车-无人机多目标协同调度问题及优化算法 针对地震应急救援问题，提出了低风险区与高风险区的救援区域划分策略，设计了一种多卡车-多无人机协同调度模式，并构建了以最大化救援满意度和最小化总路径长度为目标的混合整数规划模型。由于该模型属于NP难问题，提出了一种基于新型记忆回溯策略的多目标优化算法。该算法结合多种记忆机制和多阶段搜索策略，增强了局部搜索能力，并通过改进的Metropolis准则提升了全局搜索效率。实验结果通过IGD、HV和SP等性能指标验证了该算法的有效性，且与多种对比算法相比，表现出显著的优势。结果表明，该算法能够有效提高解集的收敛性和多样性。此外还对灾情规模与无人机数量的灵敏度进行了分析，为地震救援物资调度提供了一种新的有效解决方案。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_6311b383fb6cee46",
+        "title": "无人机配送研究：关于技术、效益及应用的系统综述",
+        "authors": [
+          "伍景琼",
+          "奠然",
+          "字太升"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "无人机配送研究：关于技术、效益及应用的系统综述 随着电子商务快速发展和即时配送需求的激增，无人机配送作为物流领域的新型解决方案，正引发物流体系的深刻变革。本文系统回顾2015—2024年间发表的74篇相关文献，从关键技术、经济效益、环境可持续性、应用潜力和系统协同等维度，全面梳理无人机配送的研究进展。研究表明，无人机配送主要依赖路径规划算法、能源管理和多机协同等关键技术。相关优化研究已从单一目标优化向多目标协同演进，算法从经典启发式向智能算法发展，能有效减少求解时间和优化成本。但载重和风力的非线性影响，以及恶劣天气适应性仍是瓶颈。无人机配送在提升物流效率、降低配送成本和减少碳排放方面具有显著优势。在经济效益方面，无人机与车辆协同配送系统可通过优化路径规划和资源调度，显著缩短客户等待时间、降低配送成本及人力需求；与公共交通（公交/地铁）系统整合，能有效扩大覆盖服务范围并降低能耗；通过多目标优化模型，动态平衡能耗、成本与时效的关系，进一步提升协同效益；但其经济性受限于载重与航程，在短途轻载和应急货物配送更具优势。环境效益分析表明，无人机配送阶段的碳排放水平明显低于传统运输方式，但需综合考虑其全生命周期环境影响，包括制造、运营和回收等环节。应用层面，无人机配送在医疗物资配送、应急物流和城市“最后一公里”配送等领域展现出独特价值，在偏远地区和紧急场景下优势突出。然而，该技术仍面临安全风险、技术创新不足、社会认知局限和政策法规不完善等挑战。未来研究应聚焦电池技术突破、智能路径规划优化、隐私安全保护机制和跨区域政策协调，加速无人机配送的商业化应用进程。",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "算法、优化、模型、综述",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "无人机配送研究：关于技术、效益及应用的系统综述 随着电子商务快速发展和即时配送需求的激增，无人机配送作为物流领域的新型解决方案，正引发物流体系的深刻变革。本文系统回顾2015—2024年间发表的74篇相关文献，从关键技术、经济效益、环境可持续性、应用潜力和系统协同等维度，全面梳理无人机配送的研究进展。研究表明，无人机配送主要依赖路径规划算法、能源管理和多机协同等关键技术。相关优化研究已从单一目标优化向多目标协同演进，算法从经典启发式向智能算法发展，能有效减少求解时间和优化成本。但载重和风力的非线性影响，以及恶劣天气适应性仍是瓶颈。无人机配送在提升物流效率、降低配送成本和减少碳排放方面具有显著优势。在经济效益方面，无人机与车辆协同配送系统可通过优化路径规划和资源调度，显著缩短客户等待时间、降低配送成本及人力需求；与公共交通（公交/地铁）系统整合，能有效扩大覆盖服务范围并降低能耗；通过多目标优化模型，动态平衡能耗、成本与时效的关系，进一步提升协同效益；但其经济性受限于载重与航程，在短途轻载和应急货物配送更具优势。环境效益分析表明，无人机配送阶段的碳排放水平明显低于传统运输方式，但需综合考虑其全生命周期环境影响，包括制造、运营和回收等环节。应用层面，无人机配送在医疗物资配送、应急物流和城市“最后一公里”配送等领域展现出独特价值，在偏远地区和紧急场景下优势突出。然而，该技术仍面临安全风险、技术创新不足、社会认知局限和政策法规不完善等挑战。未来研究应聚焦电池技术突破、智能路径规划优化、隐私安全保护机制和跨区域政策协调，加速无人机配送的商业化应用进程。",
+        "limitation": "无人机配送研究：关于技术、效益及应用的系统综述 随着电子商务快速发展和即时配送需求的激增，无人机配送作为物流领域的新型解决方案，正引发物流体系的深刻变革。本文系统回顾2015—2024年间发表的74篇相关文献，从关键技术、经济效益、环境可持续性、应用潜力和系统协同等维度，全面梳理无人机配送的研究进展。研究表明，无人机配送主要依赖路径规划算法、能源管理和多机协同等关键技术。相关优化研究已从单一目标优化向多目标协同演进，算法从经典启发式向智能算法发展，能有效减少求解时间和优化成本。但载重和风力的非线性影响，以及恶劣天气适应性仍是瓶颈。无人机配送在提升物流效率、降低配送成本和减少碳排放方面具有显著优势。在经济效益方面，无人机与车辆协同配送系统可通过优化路径规划和资源调度，显著缩短客户等待时间、降低配送成本及人力需求；与公共交通（公交/地铁）系统整合，能有效扩大覆盖服务范围并降低能耗；通过多目标优化模型，动态平衡能耗、成本与时效的关系，进一步提升协同效益；但其经济性受限于载重与航程，在短途轻载和应急货物配送更具优势。环境效益分析表明，无人机配送阶段的碳排放水平明显低于传统运输方式，但需综合考虑其全生命周期环境影响，包括制造、运营和回收等环节。应用层面，无人机配送在医疗物资配送、应急物流和城市“最后一公里”配送等领域展现出独特价值，在偏远地区和紧急场景下优势突出。然而，该技术仍面临安全风险、技术创新不足、社会认知局限和政策法规不完善等挑战。未来研究应聚焦电池技术突破、智能路径规划优化、隐私安全保护机制和跨区域政策协调，加速无人机配送的商业化应用进程。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_4b25e7994dc9c86f",
+        "title": "基于无人机的应急物资配送设施选址及路径优化研究",
+        "authors": [
+          "陈磊",
+          "夏倩雯",
+          "陈斯伊"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "基于无人机的应急物资配送设施选址及路径优化研究 传统应急物资配送多以车辆为主要工具，车辆对道路状况具有较大依赖性，一旦发生灾后道路中断等极端情况，车辆配送效率将大大降低。无人机作为新型运输工具，可以有效降低应急物资配送过程中路面情况的影响，相较于传统直升机则具有成本较低的优势，因此，针对多点分散的受灾区域的应急物资配送具有较大潜力。构建了基于无人机的应急物资配送设施选址及路径优化模型，并利用遗传算法进行求解，以辅助灾后应急物资配送方案的制定。",
+        "theory_or_concept": "基于无人机的应急物资配送设施选址及路径优化研究 传统应急物资配送多以车辆为主要工具；构建了基于无人机的应急物资配送设施选址及路径优化模型",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "传统应急物资配送多以车辆为主要工具，车辆对道路状况具有较大依赖性，一旦发生灾后道路中断等极端情况，车辆配送效率将大大降低。无人机作为新型运输工具，可以有效降低应急物资配送过程中路面情况的影响，相较于传统直升机则具有成本较低的优势，因此，针对多点分散的受灾区域的应急物资配送具有较大潜力。构建了基于无人机的应急物资配送设施选址及路径优化模型，并利用遗传算法进行求解，以辅助灾后应急物资配送方案的制定。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_53df67904f971446",
+        "title": "受扰情况下卡车—无人机协同配送路径优化研究",
+        "authors": [
+          "边泊皓"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "受扰情况下卡车—无人机协同配送路径优化研究 为研究受扰环境下卡车-无人机协同配送路径优化问题，建立了以时效性和物资品质为目标的动态恢复模型，并通过K-means聚类结合解空间缩减策略，提出自适应遗传算法进行求解。算例实验表明，该方法在不同规模下均能生成低扰动调整方案，相比重新调度法更具灵活性，可缩短恢复时间并保障物资品质，为不确定环境下的无人机配送提供了有效规划方案。",
+        "theory_or_concept": "提出自适应遗传算法进行求解",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "受扰情况下卡车—无人机协同配送路径优化研究 为研究受扰环境下卡车-无人机协同配送路径优化问题，建立了以时效性和物资品质为目标的动态恢复模型，并通过K-means聚类结合解空间缩减策略，提出自适应遗传算法进行求解。算例实验表明，该方法在不同规模下均能生成低扰动调整方案，相比重新调度法更具灵活性，可缩短恢复时间并保障物资品质，为不确定环境下的无人机配送提供了有效规划方案。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_d01e00322f589b0e",
+        "title": "卡车-无人机协同救灾物资避障配送问题研究",
+        "authors": [
+          "路世昌",
+          "邵旭伦",
+          "李丹"
+        ],
+        "year": 2023,
+        "source": "cnki",
+        "research_question": "卡车-无人机协同救灾物资避障配送问题研究 针对洪涝灾害中存在积水障碍区的卡车-无人机协同配送的最优路径及最短配送时间问题，建立了一种整数规划模型，并提出了一种两阶段启发式算法，第一阶段将积水障碍区进行二维网格化处理并确定无人机运输救灾物资时卡车的安全等待点以及各等待点无人机运送客户的集合，第二阶段提出阶段性规划算法，结合改进A*算法与非线性收敛因子的模拟退火鲸鱼算法对卡车绕积水障碍区的配送路径进行优化，在确保卡车行使安全的前提下，将A*算法的全局寻优性及鲸鱼算法的局部搜索精确性结合。解决存在积水障碍区的救灾物资配送问题，最后通过实例验证了所提出方法可以快速安全地解决洪涝灾害中救灾物资的避障配送问题。",
+        "theory_or_concept": "提出了一种两阶段启发式算法；提出阶段性规划算法；提出方法可以快速安全地解决洪涝灾害中救灾物资的避障配送问题",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "针对洪涝灾害中存在积水障碍区的卡车-无人机协同配送的最优路径及最短配送时间问题，建立了一种整数规划模型，并提出了一种两阶段启发式算法，第一阶段将积水障碍区进行二维网格化处理并确定无人机运输救灾物资时卡车的安全等待点以及各等待点无人机运送客户的集合，第二阶段提出阶段性规划算法，结合改进A*算法与非线性收敛因子的模拟退火鲸鱼算法对卡车绕积水障碍区的配送路径进行优化，在确保卡车行使安全的前提下，将A*算法的全局寻优性及鲸鱼算法的局部搜索精确性结合。解决存在积水障碍区的救灾物资配送问",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_d460381f50a90569",
+        "title": "考虑疫情影响的卡车无人机协同配送路径优化",
+        "authors": [
+          "彭勇",
+          "黎元钧"
+        ],
+        "year": 2020,
+        "source": "cnki",
+        "research_question": "考虑疫情影响的卡车无人机协同配送路径优化 在新型冠状病毒感染的肺炎(新冠肺炎)疫情蔓延的背景下,提出利用\"卡车-无人机\"协同配送新模式对疫情相对严重的地区进行物流配送,进一步研究该模式对疫情影响下物流配送的价值。考虑无人机最大飞行时间、载重以及道路条件等因素,将客户分为只能由卡车服务的客户、只能由无人机服务的客户以及卡车与无人机均能提供服务的客户3类,以车辆总服务时间最小为目标,建立车辆与无人机协同为客户提供配送服务的数学模型。设计嵌入简单启发式算法的混合邻域搜索算法,通过不同规模算例运算时间及多次运算解的波动性验证算法的有效性;通过对TSP算法、邻域搜索算子的不同组合的分析,找出最优的组合,进而对无人机最大飞行时间、无人机飞行速度载重影响因子进行了灵敏度分析。研究结果表明:计算结果验证了算法的有效性;TSP算法质量直接影响邻域搜索操作得到解的质量,可以通过高效TSP算法设计寻找更好的配送方案;无人机续航能力越强,目标函数就越小,无人机飞行速度载重影响因子越大,导致配送所需的服务时间越多,可以通过选用续航能力强、飞行速度受载重影响小的无人机提升配送服务效率。研究成果可以为城市发生重大灾难或特殊情况时,城市物流配送系统中无人机的应用提供指导和参考价值。",
+        "theory_or_concept": "提出利用\"卡车-无人机\"协同配送新模式对疫情相对严重的地区进行物流配送,进一步研究该",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑疫情影响的卡车无人机协同配送路径优化 在新型冠状病毒感染的肺炎(新冠肺炎)疫情蔓延的背景下,提出利用\"卡车-无人机\"协同配送新模式对疫情相对严重的地区进行物流配送,进一步研究该模式对疫情影响下物流配送的价值。考虑无人机最大飞行时间、载重以及道路条件等因素,将客户分为只能由卡车服务的客户、只能由无人机服务的客户以及卡车与无人机均能提供服务的客户3类,以车辆总服务时间最小为目标,建立车辆与无人机协同为客户提供配送服务的数学模型。设计嵌入简单启发式算法的混合邻域搜索算法,通过不同规模算例运算时间及多次运算解的波动性验证算法的有效性;通过对TSP算法、邻域搜索算子的不同组合的分析,找出最优的组合,进而对无人机最大飞行时间、无人机飞行速度载重影响因子进行了灵敏度分析。研究结果表明:计算结果验证了算法的有效性;TSP算法质量直接影响邻域搜索操作得到解的质量,可以通过高效TSP算法设计寻找更好的配送方案;无人机续航能力越强,目标函数就越小,无人机飞行速度载重影响因子越大,导致配送所需的服务时间越多,可以通过选用续航能力强、飞行速度受载重影响小的无人机提升配送服务效率。研究成果可以为城市发生重大灾难或特殊情况时,城市物流配送系统中无人机的应用提供指导和参考价值。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_a492c3c447bd0068",
+        "title": "基于GALNS的车辆与无人机协同运输路径规划",
+        "authors": [
+          "宋百玲",
+          "牟俊麒",
+          "李星禹"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "基于GALNS的车辆与无人机协同运输路径规划 地震灾害下，道路发生损毁，影响应急救援物资的紧急运输。该文在发生道路中断的背景下，以总成本最小化为目标建立了卡车和无人机协同运输模型，设计了一种基于遗传算法和自适应邻域搜索算法的自适应变邻域遗传算法（GALNS）求解。在算例中进行仿真研究，与GA、PSO、ALNS算法进行对比，GALNS算法求解得到的车辆行驶距离相较于其他3种算法可分别减少24.1%、20.32%、11.63%；总时间相较于其他3种算法可分别减少38.9%、31.43%、20.37%；总成本相较于其他3种算法可分别减少36.07%、28.4%、18.7%；收敛速度和结果均优于其他3种算法。结果表明，GALNS算法可有效减少成本、更加合理的规划路径和节省时间。该研究成果可为地震或其他自然灾害情况下应急救援物资的高效运输提供指导和参考。",
+        "theory_or_concept": "基于GALNS的车辆与无人机协同运输路径规划 地震灾害下；基于遗传算法和自适应邻域搜索算法的自适应变邻域遗传算法（GALNS）求解",
+        "method": "仿真、算法、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "基于GALNS的车辆与无人机协同运输路径规划 地震灾害下，道路发生损毁，影响应急救援物资的紧急运输。该文在发生道路中断的背景下，以总成本最小化为目标建立了卡车和无人机协同运输模型，设计了一种基于遗传算法和自适应邻域搜索算法的自适应变邻域遗传算法（GALNS）求解。在算例中进行仿真研究，与GA、PSO、ALNS算法进行对比，GALNS算法求解得到的车辆行驶距离相较于其他3种算法可分别减少24.1%、20.32%、11.63%；总时间相较于其他3种算法可分别减少38.9%、31.43%、20.37%；总成本相较于其他3种算法可分别减少36.07%、28.4%、18.7%；收敛速度和结果均优于其他3种算法。结果表明，GALNS算法可有效减少成本、更加合理的规划路径和节省时间。该研究成果可为地震或其他自然灾害情况下应急救援物资的高效运输提供指导和参考。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_94bd221ba9415c8e",
+        "title": "面向“最后一公里”的卡车-无人机协同配送优化建模综述",
+        "authors": [
+          "徐泽水",
+          "白杨",
+          "盛心誉"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "面向“最后一公里”的卡车-无人机协同配送优化建模综述 综述面向“最后一公里”的卡车-无人机协同配送优化建模研究进展,构建“场景驱动-参数刻画-建模基础-模型拓展”一体化综述框架.首先,梳理快递、即时与应急等典型配送场景的车机协同特征与差异化需求,揭示不同场景对模型优化目标侧重与约束优先级的影响;其次,总结资源与运行、时间与能耗、路网与需求等核心参数的刻画方式,阐明其对可行域边界、协同强度,以及成本与能耗结构的作用;接着,构建覆盖基础协同模式、优化目标和约束体系的分类框架与建模单元;最后,对多主体、异构、动态、不确定、多点访问、同时取送货、需求可拆分及多配送中心等扩展模型进行对照分析.综述表明,现有研究仍存在若干关键不足:不同配送场景的订单结构、服务承诺与组织流程尚未清晰映射到协同模式、目标口径与约束模块的选择;参数刻画偏静态同质且对交通、气象、空域、需求波动等现实因素的响应不足;运营过程、平台规则、政策监管与多维目标权衡的刻画尚不充分;拓展模型关键假设、同步规则与可行域结构等方面缺少统一表达.未来可面向场景-模型映射、动态与情景相关参数体系、贴近运营的目标-约束一体化建模、关键假设与同步规则的统一表达以及模块化可复用建模构件等方向进行深化.",
+        "theory_or_concept": "构建“场景驱动-参数刻画-建模基础-模型拓展”一体化综述框架.首先,梳理快递、即时与；构建覆盖基础协同模式、优化目标和约束体系的分类框架与建模单元",
+        "method": "优化、模型、综述",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "面向“最后一公里”的卡车-无人机协同配送优化建模综述 综述面向“最后一公里”的卡车-无人机协同配送优化建模研究进展,构建“场景驱动-参数刻画-建模基础-模型拓展”一体化综述框架.首先,梳理快递、即时与应急等典型配送场景的车机协同特征与差异化需求,揭示不同场景对模型优化目标侧重与约束优先级的影响;其次,总结资源与运行、时间与能耗、路网与需求等核心参数的刻画方式,阐明其对可行域边界、协同强度,以及成本与能耗结构的作用;接着,构建覆盖基础协同模式、优化目标和约束体系的分类框架与建模单元;最后,对多主体、异构、动态、不确定、多点访问、同时取送货、需求可拆分及多配送中心等扩展模型进行对照分析.综述表明,现有研究仍存在若干关键不足:不同配送场景的订单结构、服务承诺与组织流程尚未清晰映射到协同模式、目标口径与约束模块的选择;参数刻画偏静态同质且对交通、气象、空域、需求波动等现实因素的响应不足;运营过程、平台规则、政策监管与多维目标权衡的刻画尚不充分;拓展模型关键假设、同步规则与可行域结构等方面缺少统一表达.未来可面向场景-模型映射、动态与情景相关参数体系、贴近运营的目标-约束一体化建模、关键假设与同步规则的统一表达以及模块化可复用建模构件等方向进行深化.",
+        "limitation": "面向“最后一公里”的卡车-无人机协同配送优化建模综述 综述面向“最后一公里”的卡车-无人机协同配送优化建模研究进展,构建“场景驱动-参数刻画-建模基础-模型拓展”一体化综述框架.首先,梳理快递、即时与应急等典型配送场景的车机协同特征与差异化需求,揭示不同场景对模型优化目标侧重与约束优先级的影响;其次,总结资源与运行、时间与能耗、路网与需求等核心参数的刻画方式,阐明其对可行域边界、协同强度,以及成本与能耗结构的作用;接着,构建覆盖基础协同模式、优化目标和约束体系的分类框架与建模单元;最后,对多主体、异构、动态、不确定、多点访问、同时取送货、需求可拆分及多配送中心等扩展模型进行对照分析.综述表明,现有研究仍存在若干关键不足:不同配送场景的订单结构、服务承诺与组织流程尚未清晰映射到协同模式、目标口径与约束模块的选择;参数刻画偏静态同质且对交通、气象、空域、需求波动等现实因素的响应不足;运营过程、平台规则、政策监管与多维目标权衡的刻画尚不充分;拓展模型关键假设、同步规则与可行域结构等方面缺少统一表达.未来可面向场景-模型映射、动态与情景相关参数体系、贴近运营的目标-约束一体化建模、关键假设与同步规则的统一表达以及模块化可复用建模构件等方向进行深化.",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_952ccc9345fea0b9",
+        "title": "多级应急物流网络中无人机升降站点选址优化模型",
+        "authors": [
+          "陆后军",
+          "贺博强",
+          "高银萍"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "多级应急物流网络中无人机升降站点选址优化模型 针对地震等极端灾害场景下地面道路损毁导致车辆难以抵达且无人机受续航等限制无法长距离直达受灾点的困境，提出了建立车辆与无人机协同运输的多级应急物流网络。在该网络框架下，为了保障运输效率以及有效控制成本，构建了兼顾时间与成本的无人机升降点选址多目标优化模型。为了求解该模型，设计了一种数据驱动的遗传算法（Data-Driven Genetic Algorithm, DDGA）。针对传统算法依赖人工手动调参的局限性，该算法通过分析寻优过程中累积的历史试验数据，构建超参数与性能的映射模型，实现对种群规模、交叉率及变异率等关键超参数的自动寻优。通过不同规模算例的数值实验进行分层验证：在小规模算例中，比较模型求解结果与商业求解器Gurobi的解，验证了模型的正确性；在大规模算例中，商业求解器无法在5 400 s内计算出最优解，而DDGA算法能够获得高质量可行解，验证了算法求解大规模问题的高效性与准确性。以某次真实地震场景为背景进行算例分析，获得了应急物流网络总成本为287.79万元、应急救援总时间为404.76 h的升降站选址方案，有效缓解了受灾地区应急物资运输的时效滞后与成本压力。根据研究结果，所构建的车辆与无人机协同运输的多级应急物流网络更加适配极端灾害场景，基于超参数自动寻优的数据驱动遗传算法克服了人工调参试错的低效性与不确定性，突破了大规模选址问题的求解瓶颈，从而为受灾地区无人机升降站布局提供了兼顾时间与成本的科学方案。该研究成果可为无人机在应急物流中的应用提供参考。",
+        "theory_or_concept": "提出了建立车辆与无人机协同运输的多级应急物流网络；构建了兼顾时间与成本的无人机升降点选址多目标优化模型；构建超参数与性能的映射模型",
+        "method": "实验、算法、优化、模型、algorithm",
+        "data_or_sample": "数据驱动的遗传算法（Data-Driven Genetic Algorithm, DDGA）",
+        "core_findings": "多级应急物流网络中无人机升降站点选址优化模型 针对地震等极端灾害场景下地面道路损毁导致车辆难以抵达且无人机受续航等限制无法长距离直达受灾点的困境，提出了建立车辆与无人机协同运输的多级应急物流网络。在该网络框架下，为了保障运输效率以及有效控制成本，构建了兼顾时间与成本的无人机升降点选址多目标优化模型。为了求解该模型，设计了一种数据驱动的遗传算法（Data-Driven Genetic Algorithm, DDGA）。针对传统算法依赖人工手动调参的局限性，该算法通过分析寻优过程中累积的历史试验数据，构建超参数与性能的映射模型，实现对种群规模、交叉率及变异率等关键超参数的自动寻优。通过不同规模算例的数值实验进行分层验证：在小规模算例中，比较模型求解结果与商业求解器Gurobi的解，验证了模型的正确性；在大规模算例中，商业求解器无法在5 400 s内计算出最优解，而DDGA算法能够获得高质量可行解，验证了算法求解大规模问题的高效性与准确性。以某次真实地震场景为背景进行算例分析，获得了应急物流网络总成本为287.79万元、应急救援总时间为404.76 h的升降站选址方案，有效缓解了受灾地区应急物资运输的时效滞后与成本压力。根据研究结果，所构建的车辆与无人机协同运输的多级应急物流网络更加适配极端灾害场景，基于超参数自动寻优的数据驱动遗传算法克服了人工调参试错的低效性与不确定性，突破了大规模选址问题的求解瓶颈，从而为受灾地区无人机升降站布局提供了兼顾时间与成本的科学方案。该研究成果可为无人机在应急物流中的应用提供参考。",
+        "limitation": "多级应急物流网络中无人机升降站点选址优化模型 针对地震等极端灾害场景下地面道路损毁导致车辆难以抵达且无人机受续航等限制无法长距离直达受灾点的困境，提出了建立车辆与无人机协同运输的多级应急物流网络。在该网络框架下，为了保障运输效率以及有效控制成本，构建了兼顾时间与成本的无人机升降点选址多目标优化模型。为了求解该模型，设计了一种数据驱动的遗传算法（Data-Driven Genetic Algorithm, DDGA）。针对传统算法依赖人工手动调参的局限性，该算法通过分析寻优过程中累积的历史试验数据，构建超参数与性能的映射模型，实现对种群规模、交叉率及变异率等关键超参数的自动寻优。通过不同规模算例的数值实验进行分层验证：在小规模算例中，比较模型求解结果与商业求解器Gurobi的解，验证了模型的正确性；在大规模算例中，商业求解器无法在5 400 s内计算出最优解，而DDGA算法能够获得高质量可行解，验证了算法求解大规模问题的高效性与准确性。以某次真实地震场景为背景进行算例分析，获得了应急物流网络总成本为287.79万元、应急救援总时间为404.76 h的升降站选址方案，有效缓解了受灾地区应急物资运输的时效滞后与成本压力。根据研究结果，所构建的车辆与无人机协同运输的多级应急物流网络更加适配极端灾害场景，基于超参数自动寻优的数据驱动遗传算法克服了人工调参试错的低效性与不确定性，突破了大规模选址问题的求解瓶颈，从而为受灾地区无人机升降站布局提供了兼顾时间与成本的科学方案。该研究成果可为无人机在应急物流中的应用提供参考。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_a5df52e2aa435309",
+        "title": "无人机与卡车协同配送的多维度研究综述",
+        "authors": [
+          "邸振",
+          "黎晓芬",
+          "石俊刚"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "无人机与卡车协同配送的多维度研究综述 为梳理无人机与卡车协同配送领域的研究脉络，厘清其问题分类、优化维度与算法趋势，识别研究局限并提出发展方向，基于文献综述法，回顾和分析了2015—2025年的113篇中英文文献。将无人机与卡车协同配送问题归纳为三大核心类型——带无人机的旅行商问题、多无人机旅行商问题及带无人机的车辆路径问题，并从目标函数、约束条件及求解算法等3个维度进行剖析。结果表明，该领域已呈现出多目标、多约束与算法融合的特征：目标函数由单一的成本优化扩展至成本、时间与能耗的综合优化；约束条件涵盖了载重、续航及时间窗等关键因素；求解算法则形成了精确算法、启发式算法与混合算法并存的格局。然而，目前的研究在动态环境适应性及异构车队深度协同等方面仍存在不足，未来应聚焦于多智能体协同决策理论、自适应优化算法及智能实时调度系统等方向，以推动无人机与卡车协同配送技术的成熟与实际应用。",
+        "theory_or_concept": "提出发展方向；基于文献综述法",
+        "method": "算法、优化、综述",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "无人机与卡车协同配送的多维度研究综述 为梳理无人机与卡车协同配送领域的研究脉络，厘清其问题分类、优化维度与算法趋势，识别研究局限并提出发展方向，基于文献综述法，回顾和分析了2015—2025年的113篇中英文文献。将无人机与卡车协同配送问题归纳为三大核心类型——带无人机的旅行商问题、多无人机旅行商问题及带无人机的车辆路径问题，并从目标函数、约束条件及求解算法等3个维度进行剖析。结果表明，该领域已呈现出多目标、多约束与算法融合的特征：目标函数由单一的成本优化扩展至成本、时间与能耗的综合优化；约束条件涵盖了载重、续航及时间窗等关键因素；求解算法则形成了精确算法、启发式算法与混合算法并存的格局。然而，目前的研究在动态环境适应性及异构车队深度协同等方面仍存在不足，未来应聚焦于多智能体协同决策理论、自适应优化算法及智能实时调度系统等方向，以推动无人机与卡车协同配送技术的成熟与实际应用。",
+        "limitation": "无人机与卡车协同配送的多维度研究综述 为梳理无人机与卡车协同配送领域的研究脉络，厘清其问题分类、优化维度与算法趋势，识别研究局限并提出发展方向，基于文献综述法，回顾和分析了2015—2025年的113篇中英文文献。将无人机与卡车协同配送问题归纳为三大核心类型——带无人机的旅行商问题、多无人机旅行商问题及带无人机的车辆路径问题，并从目标函数、约束条件及求解算法等3个维度进行剖析。结果表明，该领域已呈现出多目标、多约束与算法融合的特征：目标函数由单一的成本优化扩展至成本、时间与能耗的综合优化；约束条件涵盖了载重、续航及时间窗等关键因素；求解算法则形成了精确算法、启发式算法与混合算法并存的格局。然而，目前的研究在动态环境适应性及异构车队深度协同等方面仍存在不足，未来应聚焦于多智能体协同决策理论、自适应优化算法及智能实时调度系统等方向，以推动无人机与卡车协同配送技术的成熟与实际应用。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_07930576fc285607",
+        "title": "考虑超时风险的多目标卡车-无人机协同配送鲁棒优化",
+        "authors": [
+          "卢婉莹",
+          "石褚巍",
+          "夭梦丽"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "提出了一种卡车-无人机协同配送路径优化问题；引入预算不确定集；构建以总时间成本和超时风险最小化的多目标优化模型",
+        "method": "实验、案例、算法、优化、模型",
+        "data_or_sample": "案例来验证模型及算法的有效性，实验结果表明，在C202算例中，成本偏好下至多能节约26.96%的成本，风险偏好下至多能降低51.23%的风险，所提方法能够为配送中心",
+        "core_findings": "考虑超时风险的多目标卡车-无人机协同配送鲁棒优化 针对“次日达”物流场景中服务时间不确定引发的潜在超时风险，提出了一种卡车-无人机协同配送路径优化问题。综合考虑时间成本与潜在超时风险，并引入预算不确定集，刻画服务时间不确定性，构建以总时间成本和超时风险最小化的多目标优化模型；针对不确定集和多目标特性给出了“非支配排序+理想点”的适应度评估方法；设计了一种基于Pareto支配的双层进化算法，上层采用小生境Pareto遗传算法决策客户的载具分配，下层设计多目标大邻域搜索算法优化配送节点的服务次序，并嵌入一种“非支配排序+拥挤度距离”的邻域解更替策略。设定多组案例来验证模型及算法的有效性，实验结果表明，在C202算例中，成本偏好下至多能节约26.96%的成本，风险偏好下至多能降低51.23%的风险，所提方法能够为配送中心提供多决策偏好下的配送方案。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_533e2e405a545e5d",
+        "title": "考虑超重超远客户的卡车无人机协同配送研究",
+        "authors": [
+          "宋瑞",
+          "边疆",
+          "何世伟"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "考虑超重超远客户的卡车无人机协同配送研究 卡车与无人机配送的母船模式是指卡车搭载无人机至离客户较近的地点后，由无人机起飞配送多个客户点，再与卡车汇合的协同配送方法，是交通工程领域中具有潜力的重要发展方向之一。考虑到现实中存在部分客户点需求量超出无人机最大载重，或所处位置超过无人机最大航程覆盖范围的情况，在母船模式基础上，提出考虑超重超远客户的卡车与无人机协同配送模式(Truck-Drone Joint Delivery with Consideration of Customers with Great Demands and at Great Distances, TDJD-CGDGD)。该模式允许卡车服务超重超远客户，并允许无人机起降于不同地点。该模式下待求解的问题为含无人机的旅行商问题。以最小化总配送成本为目标，构建了混合整数线性规划模型。为高效求解大规模算例，提出了一种融合贪婪随机自适应搜索(GRASP)与自适应大邻域搜索(ALNS)的混合算法。算法首先在附加约束条件下，生成车机共同配送路径，该约束可简化车机路径优化过程。随后放松附加约束，针对性地调整一部分无人机路径，进一步降低总成本。试验结果表明：所提算法具有较好的计算性能；本协同配送模式与仅由卡车配送的传统模式相比可平均节约成本19%;允许无人机在超重客户点处起降与不允许情况相比可平均节约成本5%。",
+        "theory_or_concept": "提出考虑超重超远客户的卡车与无人机协同配送模式(Truck-Drone Joint；构建了混合整数线性规划模型；提出了一种融合贪婪随机自适应搜索(GRASP)与自适应大邻域搜索(ALNS)的混合算",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑超重超远客户的卡车无人机协同配送研究 卡车与无人机配送的母船模式是指卡车搭载无人机至离客户较近的地点后，由无人机起飞配送多个客户点，再与卡车汇合的协同配送方法，是交通工程领域中具有潜力的重要发展方向之一。考虑到现实中存在部分客户点需求量超出无人机最大载重，或所处位置超过无人机最大航程覆盖范围的情况，在母船模式基础上，提出考虑超重超远客户的卡车与无人机协同配送模式(Truck-Drone Joint Delivery with Consideration of Customers with Great Demands and at Great Distances, TDJD-CGDGD)。该模式允许卡车服务超重超远客户，并允许无人机起降于不同地点。该模式下待求解的问题为含无人机的旅行商问题。以最小化总配送成本为目标，构建了混合整数线性规划模型。为高效求解大规模算例，提出了一种融合贪婪随机自适应搜索(GRASP)与自适应大邻域搜索(ALNS)的混合算法。算法首先在附加约束条件下，生成车机共同配送路径，该约束可简化车机路径优化过程。随后放松附加约束，针对性地调整一部分无人机路径，进一步降低总成本。试验结果表明：所提算法具有较好的计算性能；本协同配送模式与仅由卡车配送的传统模式相比可平均节约成本19%;允许无人机在超重客户点处起降与不允许情况相比可平均节约成本5%。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_5c7cb85d2bad6a2f",
+        "title": "考虑时间窗的卡车无人机协同配送路径优化研究",
+        "authors": [
+          "曹靖萱",
+          "何世伟",
+          "丛铭"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑时间窗的卡车无人机协同配送路径优化研究 针对物流末端配送中配送成本较高、客户满意度有待提升的问题，提出考虑客户时间窗的卡车与无人机协同配送问题（Flying Sidekick Traveling Salesman Problem with Time Windows， FSTSPTW）。首先，以最小化总配送成本为目标，考虑卡车与无人机在时间和空间上的协同及客户时间窗约束，建立混合整数规划模型。其次，采用双层编码的方案，定义优势基因结构。考虑到时间窗约束的复杂性，设计了两阶段插入启发式算法生成初始可行解，提出了一种融合自适应邻域搜索的微进化算法（Micro-evolutionary Algorithm with Adaptive Neighborhood Search， MEANS）。再次，设计消融实验对比算法各模块的效果，通过不同规模的算例测试验证模型和算法的有效性。最后，选取江苏省苏州市的某物流中心进行实例分析。研究结果表明：相比于局部路径中访问顺序的调整，客户访问方式的优化对降低配送成本更有效；MEANS与优化求解器GUROBI的求解结果相对误差在4%以内，且求解效率得到了较大提升；MEANS相比于传统遗传算法和自适应大邻域搜索算法在求解质量上分别最高提升了12.67%和7.79%；在较高的客户分布密度下，MEANS结果标准差分别比传统遗传算法和自适应大邻域搜索算法平均降低40.16%和32.96%。",
+        "theory_or_concept": "提出考虑客户时间窗的卡车与无人机协同配送问题（Flying Sidekick Tra；采用双层编码的方案；提出了一种融合自适应邻域搜索的微进化算法（Micro-evolutionary Al",
+        "method": "实验、算法、优化、模型、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑时间窗的卡车无人机协同配送路径优化研究 针对物流末端配送中配送成本较高、客户满意度有待提升的问题，提出考虑客户时间窗的卡车与无人机协同配送问题（Flying Sidekick Traveling Salesman Problem with Time Windows， FSTSPTW）。首先，以最小化总配送成本为目标，考虑卡车与无人机在时间和空间上的协同及客户时间窗约束，建立混合整数规划模型。其次，采用双层编码的方案，定义优势基因结构。考虑到时间窗约束的复杂性，设计了两阶段插入启发式算法生成初始可行解，提出了一种融合自适应邻域搜索的微进化算法（Micro-evolutionary Algorithm with Adaptive Neighborhood Search， MEANS）。再次，设计消融实验对比算法各模块的效果，通过不同规模的算例测试验证模型和算法的有效性。最后，选取江苏省苏州市的某物流中心进行实例分析。研究结果表明：相比于局部路径中访问顺序的调整，客户访问方式的优化对降低配送成本更有效；MEANS与优化求解器GUROBI的求解结果相对误差在4%以内，且求解效率得到了较大提升；MEANS相比于传统遗传算法和自适应大邻域搜索算法在求解质量上分别最高提升了12.67%和7.79%；在较高的客户分布密度下，MEANS结果标准差分别比传统遗传算法和自适应大邻域搜索算法平均降低40.16%和32.96%。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_f9174a4adbe350ef",
+        "title": "限制区下货车联合无人机配送路径问题研究",
+        "authors": [
+          "杨雷博",
+          "周俊"
+        ],
+        "year": 2023,
+        "source": "cnki",
+        "research_question": "限制区下货车联合无人机配送路径问题研究 考虑到在灾区、疫情区等存在限制区的情况，且物流配送中末端配送耗时长、效率低等问题，物流企业尝试结合货车与无人机自身特点，扬长避短，采用“货车+无人机”联合配送模式进行配送。提出了一种在限制区下一辆车携带多架无人机的货车支持无人机配送解决方案，并构造了以最小服务时间为优化目标的双层规划求解方法，第一层，针对货车停靠点的选取，设计了一种结合DBSCAN聚类和K-means聚类不同特点的多阶段融合聚类算法，第二层，以车辆路径问题为基础设计采用蚁群-模拟退火融合算法构造了一车携带多架无人机形式的配送路线；通过对不同算例的求解，验证了算法的计算性能和融合聚类的优越性，以某县物流配送为实例进行求解，结果表明在有效解决区域限制问题的情况下，相比传统配送模式在最终服务时间也缩短了41.4%，有效地提高了末端物流配送的效率。",
+        "theory_or_concept": "采用“货车+无人机”联合配送模式进行配送；提出了一种在限制区下一辆车携带多架无人机的货车支持无人机配送解决方案；采用蚁群-模拟退火融合算法构造了一车携带多架无人机形式的配送路线",
+        "method": "算法、优化",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "限制区下货车联合无人机配送路径问题研究 考虑到在灾区、疫情区等存在限制区的情况，且物流配送中末端配送耗时长、效率低等问题，物流企业尝试结合货车与无人机自身特点，扬长避短，采用“货车+无人机”联合配送模式进行配送。提出了一种在限制区下一辆车携带多架无人机的货车支持无人机配送解决方案，并构造了以最小服务时间为优化目标的双层规划求解方法，第一层，针对货车停靠点的选取，设计了一种结合DBSCAN聚类和K-means聚类不同特点的多阶段融合聚类算法，第二层，以车辆路径问题为基础设计采用蚁群-模拟退火融合算法构造了一车携带多架无人机形式的配送路线；通过对不同算例的求解，验证了算法的计算性能和融合聚类的优越性，以某县物流配送为实例进行求解，结果表明在有效解决区域限制问题的情况下，相比传统配送模式在最终服务时间也缩短了41.4%，有效地提高了末端物流配送的效率。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_d01cb4134378954d",
+        "title": "面向多车多无人机协同配送路径优化的双链启发式算法",
+        "authors": [
+          "王坪烨",
+          "马李欢",
+          "孙卓"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "面向多车多无人机协同配送路径优化的双链启发式算法 贴合现实场景的多车多无人机协同配送问题由于其复杂性，成为路径优化问题的关键挑战。综合考虑每辆卡车可携带多架无人机、无人机在单航程内可多次配送以及客户存在配送时间要求等约束，提出带时间窗的多车多无人机协同配送问题，并以最小化总配送成本目标建立混合整数规划模型。为求解该问题，设计了一种结合自适应大邻域搜索算法和模拟退火算法的双链混合启发式算法。其中，双链编码结构通过分离客户配送顺序和配送工具，直观展示卡车和无人机协同配送路径，便于计算对应客户的时间窗约束，还有利于破坏算子与修复算子快速生成新解。最后，通过算例分析验证了算法的有效性和双链编码结构对该复杂场景的适应性。结果表明该算法在小、中、大规模算例中均能快速生成高质量解，小规模算例中相较于Gurobi求解器计算时间平均缩短94.34%，大规模算例中比可变邻域搜索算法总成本平均减少9.11%。此外，灵敏度分析进一步表明，卡车携带无人机数量和无人机成本是影响总配送成本和路径方案制定的关键因素。",
+        "theory_or_concept": "提出带时间窗的多车多无人机协同配送问题",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "面向多车多无人机协同配送路径优化的双链启发式算法 贴合现实场景的多车多无人机协同配送问题由于其复杂性，成为路径优化问题的关键挑战。综合考虑每辆卡车可携带多架无人机、无人机在单航程内可多次配送以及客户存在配送时间要求等约束，提出带时间窗的多车多无人机协同配送问题，并以最小化总配送成本目标建立混合整数规划模型。为求解该问题，设计了一种结合自适应大邻域搜索算法和模拟退火算法的双链混合启发式算法。其中，双链编码结构通过分离客户配送顺序和配送工具，直观展示卡车和无人机协同配送路径，便于计算对应客户的时间窗约束，还有利于破坏算子与修复算子快速生成新解。最后，通过算例分析验证了算法的有效性和双链编码结构对该复杂场景的适应性。结果表明该算法在小、中、大规模算例中均能快速生成高质量解，小规模算例中相较于Gurobi求解器计算时间平均缩短94.34%，大规模算例中比可变邻域搜索算法总成本平均减少9.11%。此外，灵敏度分析进一步表明，卡车携带无人机数量和无人机成本是影响总配送成本和路径方案制定的关键因素。",
+        "limitation": "面向多车多无人机协同配送路径优化的双链启发式算法 贴合现实场景的多车多无人机协同配送问题由于其复杂性，成为路径优化问题的关键挑战。综合考虑每辆卡车可携带多架无人机、无人机在单航程内可多次配送以及客户存在配送时间要求等约束，提出带时间窗的多车多无人机协同配送问题，并以最小化总配送成本目标建立混合整数规划模型。为求解该问题，设计了一种结合自适应大邻域搜索算法和模拟退火算法的双链混合启发式算法。其中，双链编码结构通过分离客户配送顺序和配送工具，直观展示卡车和无人机协同配送路径，便于计算对应客户的时间窗约束，还有利于破坏算子与修复算子快速生成新解。最后，通过算例分析验证了算法的有效性和双链编码结构对该复杂场景的适应性。结果表明该算法在小、中、大规模算例中均能快速生成高质量解，小规模算例中相较于Gurobi求解器计算时间平均缩短94.34%，大规模算例中比可变邻域搜索算法总成本平均减少9.11%。此外，灵敏度分析进一步表明，卡车携带无人机数量和无人机成本是影响总配送成本和路径方案制定的关键因素。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_0c5b00df0c3f4cfd",
+        "title": "时变拥堵下卡车与无人机协同配送路径优化",
+        "authors": [
+          "许鹏宇"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "提出一种时变拥堵下卡车与无人机协同配送的路径优化方法；构建了时变拥堵下的卡车与无人机路径优化问题与模型；提出一种两阶段启发式算法进行求解",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "时变拥堵下卡车与无人机协同配送路径优化 文章针对交通拥堵下卡车行驶速度慢、配送难的问题，提出一种时变拥堵下卡车与无人机协同配送的路径优化方法。首先，构建了时变拥堵下的卡车与无人机路径优化问题与模型；其次，设计针对拥堵场景下的卡车和无人机的规避策略。接着，提出一种两阶段启发式算法进行求解，第一阶段，采用动态取k值的k-medoids算法将客户点划分为卡车配送点与无人机配送点；第二阶段，划分无人机配送点，优化无人机路径，并采取遗传算法优化卡车路径。最后，用重庆市南岸区京东集配中心的实例验证了该算法的实际价值。求解结果表明，文章提出的拥堵规避策略能够减少配送时间，能为拥堵情景下的卡车与无人机配送提供优化方案。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_d7ae2e5c4508ebc1",
+        "title": "考虑动态同步的卡车-无人机协同配送路径优化",
+        "authors": [
+          "李烨",
+          "罗歆蕊",
+          "殷旭日"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑动态同步的卡车-无人机协同配送路径优化 “低空经济”作为一种新型的综合性经济形态，已经渗透进巡检、物流、救援、通信等多个领域。该文主要研究无人机和卡车协同的新型配送模式，考虑无人机在卡车路径上的任意位置动态起降以减少等待时间，并在配送系统中引入多架无人机以提高系统配送效率。针对考虑动态同步的单卡车多无人机协同配送路径优化问题，以最小化加权总成本为目标建立路径优化模型；根据模型设计自适应大邻域搜索算法求解，明确算法初始解构造方法和各算子功能，使用模拟退火算法的Metropolis准则避免算法陷入局部最优；采用不同规模算例验证算法的可行性，并将无人机在卡车配送点起降结果与无人机在卡车路径上动态起降结果对比，对模型中各成本组成的权重关系和配送系统中的无人机数量变化进行分析。结果表明，无人机在卡车路径上动态起降策略对于配送系统加权总成本的优化程度为0.80%～2.96%，且动态同步机制对等待成本变化敏感程度较高。随着等待成本权重增加，优化后的配送系统加权总成本逐渐降低，同时，增加等待成本可在一定程度上提升动态同步优化程度。当系统中存在两架无人机时，动态同步优化程度最高。提出的卡车-无人机动态同步方案可优化卡车和无人机的配送路径，为降低城市末端物流配送成本提供新的思路。",
+        "theory_or_concept": "引入多架无人机以提高系统配送效率；采用不同规模算例验证算法的可行性；提出的卡车-无人机动态同步方案可优化卡车和无人机的配送路径",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑动态同步的卡车-无人机协同配送路径优化 “低空经济”作为一种新型的综合性经济形态，已经渗透进巡检、物流、救援、通信等多个领域。该文主要研究无人机和卡车协同的新型配送模式，考虑无人机在卡车路径上的任意位置动态起降以减少等待时间，并在配送系统中引入多架无人机以提高系统配送效率。针对考虑动态同步的单卡车多无人机协同配送路径优化问题，以最小化加权总成本为目标建立路径优化模型；根据模型设计自适应大邻域搜索算法求解，明确算法初始解构造方法和各算子功能，使用模拟退火算法的Metropolis准则避免算法陷入局部最优；采用不同规模算例验证算法的可行性，并将无人机在卡车配送点起降结果与无人机在卡车路径上动态起降结果对比，对模型中各成本组成的权重关系和配送系统中的无人机数量变化进行分析。结果表明，无人机在卡车路径上动态起降策略对于配送系统加权总成本的优化程度为0.80%～2.96%，且动态同步机制对等待成本变化敏感程度较高。随着等待成本权重增加，优化后的配送系统加权总成本逐渐降低，同时，增加等待成本可在一定程度上提升动态同步优化程度。当系统中存在两架无人机时，动态同步优化程度最高。提出的卡车-无人机动态同步方案可优化卡车和无人机的配送路径，为降低城市末端物流配送成本提供新的思路。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_6faf1cd37a6764fa",
+        "title": "卡车-多无人机动态协同的配送路径优化研究",
+        "authors": [
+          "刘长石",
+          "吴张",
+          "寇纲"
+        ],
+        "year": 2025,
+        "source": "cnki",
+        "research_question": "卡车-多无人机动态协同的配送路径优化研究 随着技术的发展，无人机在城市末端配送中展现出便捷、高效的配送优势．本研究探讨城市物流系统中的卡车-多无人机动态协同配送路径规划，设定每辆卡车搭载多架无人机开展并行配送，各无人机单次起飞可配送多个客户，以最小化总配送成本为目标，建立混合整数规划模型．根据问题与模型特征设计一种三阶段混合启发式算法进行求解．通过多类型算例实验验证了模型的正确性和算法的有效性．研究结果表明，本研究模型和算法能够有效降低物流成本，缩短货物送达客户时间，提升配送效率，为城市物流配送提供重要决策参考．",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "卡车-多无人机动态协同的配送路径优化研究 随着技术的发展，无人机在城市末端配送中展现出便捷、高效的配送优势．本研究探讨城市物流系统中的卡车-多无人机动态协同配送路径规划，设定每辆卡车搭载多架无人机开展并行配送，各无人机单次起飞可配送多个客户，以最小化总配送成本为目标，建立混合整数规划模型．根据问题与模型特征设计一种三阶段混合启发式算法进行求解．通过多类型算例实验验证了模型的正确性和算法的有效性．研究结果表明，本研究模型和算法能够有效降低物流成本，缩短货物送达客户时间，提升配送效率，为城市物流配送提供重要决策参考．",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_0f131950a7e482e4",
+        "title": "基于集群作业的车载无人机联合配送路径优化",
+        "authors": [
+          "左大发",
+          "邱玉琢",
+          "朱宇"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "基于集群作业的车载无人机联合配送路径优化 为提高“最后一公里”配送效率并降低运营成本，构建以卡车停靠点为中心的多无人机集群协同配送模型，以总运营成本最小化为目标，提出基于深度强化学习的自适应大邻域搜索（deep reinforcement learning-based adaptive large neighborhood search，DRL-ALNS）算法求解。该算法采用Actor-Critic架构，依据当前解的多维状态特征动态选择破坏-修复算子组合。Solomon算例验证表明，DRL-ALNS算法在小中规模问题上与Gurobi精确解差距仅为0.6%，在中大规模问题上较两阶段混合算法和改进混合蚁群算法分别降低成本4.69%和1.0%。以成都市某区为实例的运算结果表明：联合配送较纯卡车配送成本降低26.85%，行驶距离减少48.55%。灵敏度分析显示，续航半径对成本影响更为明显，20 km续航半径与15～20 kg承载能力为经济合理的配置方案。研究结果可为物流企业优化末端配送路径提供决策参考。",
+        "theory_or_concept": "基于集群作业的车载无人机联合配送路径优化 为提高“最后一公里”配送效率并降低运营成本；构建以卡车停靠点为中心的多无人机集群协同配送模型；提出基于深度强化学习的自适应大邻域搜索（deep reinforcement lea",
+        "method": "算法、优化、模型、reinforcement learning",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "基于集群作业的车载无人机联合配送路径优化 为提高“最后一公里”配送效率并降低运营成本，构建以卡车停靠点为中心的多无人机集群协同配送模型，以总运营成本最小化为目标，提出基于深度强化学习的自适应大邻域搜索（deep reinforcement learning-based adaptive large neighborhood search，DRL-ALNS）算法求解。该算法采用Actor-Critic架构，依据当前解的多维状态特征动态选择破坏-修复算子组合。Solomon算例验证表明，DRL-ALNS算法在小中规模问题上与Gurobi精确解差距仅为0.6%，在中大规模问题上较两阶段混合算法和改进混合蚁群算法分别降低成本4.69%和1.0%。以成都市某区为实例的运算结果表明：联合配送较纯卡车配送成本降低26.85%，行驶距离减少48.55%。灵敏度分析显示，续航半径对成本影响更为明显，20 km续航半径与15～20 kg承载能力为经济合理的配置方案。研究结果可为物流企业优化末端配送路径提供决策参考。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_6e573bedeb6519a6",
+        "title": "考虑卡车无人机协同配送模式下的车辆路径问题研究",
+        "authors": [
+          "高娇娇",
+          "郭秀萍"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "考虑卡车无人机协同配送模式下的车辆路径问题研究 卡车无人机协同配送模式下的两级车辆路径问题，是随着无人机配送技术发展和应用出现的新问题。考虑载重、续航、时间同步性等约束，建立了混合整数规划模型，以成本最小为目标设计了基于扫描算法和改进的大规模邻域搜索的混合算法求解。仿真结果表明：混合算法相比CPLEX在运行时间上有明显优势，求解结果处于同一水平甚至更优；卡车无人机协同配送模式相较于卡车单独配送模式可提高配送效率，节约配送成本。",
+        "theory_or_concept": "基于扫描算法和改进的大规模邻域搜索的混合算法求解",
+        "method": "仿真、算法、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑卡车无人机协同配送模式下的车辆路径问题研究 卡车无人机协同配送模式下的两级车辆路径问题，是随着无人机配送技术发展和应用出现的新问题。考虑载重、续航、时间同步性等约束，建立了混合整数规划模型，以成本最小为目标设计了基于扫描算法和改进的大规模邻域搜索的混合算法求解。仿真结果表明：混合算法相比CPLEX在运行时间上有明显优势，求解结果处于同一水平甚至更优；卡车无人机协同配送模式相较于卡车单独配送模式可提高配送效率，节约配送成本。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_09ab31d2d0720991",
+        "title": "碳排放约束下无人机-卡车联合配送问题",
+        "authors": [
+          "马佰钰",
+          "李贺鑫",
+          "马千里"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "碳排放约束下无人机-卡车联合配送问题 无人机配送兼具配送时间短、成本低、降低道路拥堵程度等优点，多辆卡车和无人机联合配送以服务社区内的客户群体是解决最后一公里配送难题的突破口。考虑配送过程中碳排放总量的约束，以配送总成本最低为目标函数，构建以弧为基础的混合整数规划模型，并利用自适应大规模邻域搜索算法求解出无人机-卡车联合配送的最优路径，验证了碳排放约束下的无人机-卡车联合配送路径优化模型在降低配送成本、实现降碳目标上的有效性。",
+        "theory_or_concept": "构建以弧为基础的混合整数规划模型",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "无人机配送兼具配送时间短、成本低、降低道路拥堵程度等优点，多辆卡车和无人机联合配送以服务社区内的客户群体是解决最后一公里配送难题的突破口。考虑配送过程中碳排放总量的约束，以配送总成本最低为目标函数，构建以弧为基础的混合整数规划模型，并利用自适应大规模邻域搜索算法求解出无人机-卡车联合配送的最优路径，验证了碳排放约束下的无人机-卡车联合配送路径优化模型在降低配送成本、实现降碳目标上的有效性。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_16ca9dc30be32721",
+        "title": "考虑动态碳排放的电动卡车-无人机协同配送路径优化",
+        "authors": [
+          "郭悦翔",
+          "羊钊",
+          "王业萍"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "考虑动态碳排放的电动卡车-无人机协同配送路径优化 以电动车为代表的绿色地面运输与以无人机为代表的低空经济载体相结合，正成为平衡“双碳”目标下“最后一公里”效率与环保的关键路径。本研究提出了一套面向低碳、高效运营的电动卡车-无人机协同配送路径优化框架。首先，构建了基于实时载重的动态碳税评估模型，并将环境影响内化为显性经济成本；其次，提出了考虑时空-续航-载重多维约束的协同配送模型，实现卡车与无人机的精准时空配合；最后，设计了融合变邻域搜索算子的自适应遗传算法，以高效求解复杂的组合优化问题。实验表明，提出的协同配送模式在综合成本和完工时间上均优于单一卡车模式，且展现出更快的收敛速度；改进遗传算法在解的质量上表现优越；碳税政策作为优化激励而非惩罚性成本，实现环境与经济效益的协同统一。",
+        "theory_or_concept": "提出了一套面向低碳、高效运营的电动卡车-无人机协同配送路径优化框架；构建了基于实时载重的动态碳税评估模型；提出了考虑时空-续航-载重多维约束的协同配送模型",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑动态碳排放的电动卡车-无人机协同配送路径优化 以电动车为代表的绿色地面运输与以无人机为代表的低空经济载体相结合，正成为平衡“双碳”目标下“最后一公里”效率与环保的关键路径。本研究提出了一套面向低碳、高效运营的电动卡车-无人机协同配送路径优化框架。首先，构建了基于实时载重的动态碳税评估模型，并将环境影响内化为显性经济成本；其次，提出了考虑时空-续航-载重多维约束的协同配送模型，实现卡车与无人机的精准时空配合；最后，设计了融合变邻域搜索算子的自适应遗传算法，以高效求解复杂的组合优化问题。实验表明，提出的协同配送模式在综合成本和完工时间上均优于单一卡车模式，且展现出更快的收敛速度；改进遗传算法在解的质量上表现优越；碳税政策作为优化激励而非惩罚性成本，实现环境与经济效益的协同统一。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_c35f0f60523521ac",
+        "title": "农村地区卡车与无人机协同配送路径优化",
+        "authors": [
+          "蒋丽",
+          "王洪艳",
+          "梁昌勇"
+        ],
+        "year": 2023,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "提出基于集群的卡车和无人机路径问题；提出了一个两阶段混合蚁群算法对卡车路径和无人机路径进行联合优化以实现问题求解：第一阶；基于2-opt局部搜索策略的改进自适应蚁群算法求解卡车路径",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "针对农村地区末端配送道路通行条件差、网点覆盖率低等现状及乡村聚落集群分布的特点，提出基于集群的卡车和无人机路径问题。考虑卡车与无人机协同方式、无人机多包裹配送等约束，以最小化综合配送成本为目标建立混合整数规划模型，并提出了一个两阶段混合蚁群算法对卡车路径和无人机路径进行联合优化以实现问题求解：第一阶段设计基于2-opt局部搜索策略的改进自适应蚁群算法求解卡车路径，第二阶段借助就近聚类机制和蚁群算法求解无人机路径，综合两阶段求出卡车和无人机路径的综合方案。通过算例实验验证所建模",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_f4d2babd31d55b95",
+        "title": "基于无人机与卡车协作的封控社区生活物资配送方法",
+        "authors": [
+          "季金华",
+          "刘亚君",
+          "别一鸣"
+        ],
+        "year": 2022,
+        "source": "cnki",
+        "research_question": "基于无人机与卡车协作的封控社区生活物资配送方法 针对突发公共卫生事件情况下生活物资被病毒污染，小区内居民交叉感染及配送人员短缺等问题，本文提出一种基于无人机与卡车协作的封控社区生活物资配送方法。首先，规定无人机在完成每次配送后需要返回卡车位置处进行消杀，以配送过程中社区居民交叉感染风险和配送成本最小为优化目标，以配送服务完整性、无人机载货重量限制及生活物资时效性要求等为约束条件，建立混合整数规划模型，协同优化卡车额定载重、停靠位置、所需无人机数量和无人机组配送方案；然后，设计改进多目标粒子群算法求解模型，引入一种特殊的粒子编码方式，并耦合变异算子更新部分码位的粒子位置；最后，以长春市师范南园小区为例进行案例分析，从安全、配送成本、工作强度及一次性防控物资消耗等4个方面和卡车与人工协作配送模式进行比较分析发现，卡车与人工协作配送方法可以令社区居民交叉感染风险降低至少91.8%，日配送成本降低16.9%，人力资源投入减少50%，一次性防护物资支出节约46.1%左右。",
+        "theory_or_concept": "基于无人机与卡车协作的封控社区生活物资配送方法 针对突发公共卫生事件情况下生活物资被；提出一种基于无人机与卡车协作的封控社区生活物资配送方法；引入一种特殊的粒子编码方式",
+        "method": "案例、算法、优化、模型",
+        "data_or_sample": "案例分析，从安全、配送成本、工作强度及一次性防控物资消耗等4个方面和卡车与人工协作配送模式进行比较分析发现，卡车与人工协作配送方法可以令社区居民交叉感染风险降低至少",
+        "core_findings": "基于无人机与卡车协作的封控社区生活物资配送方法 针对突发公共卫生事件情况下生活物资被病毒污染，小区内居民交叉感染及配送人员短缺等问题，本文提出一种基于无人机与卡车协作的封控社区生活物资配送方法。首先，规定无人机在完成每次配送后需要返回卡车位置处进行消杀，以配送过程中社区居民交叉感染风险和配送成本最小为优化目标，以配送服务完整性、无人机载货重量限制及生活物资时效性要求等为约束条件，建立混合整数规划模型，协同优化卡车额定载重、停靠位置、所需无人机数量和无人机组配送方案；然后，设计改进多目标粒子群算法求解模型，引入一种特殊的粒子编码方式，并耦合变异算子更新部分码位的粒子位置；最后，以长春市师范南园小区为例进行案例分析，从安全、配送成本、工作强度及一次性防控物资消耗等4个方面和卡车与人工协作配送模式进行比较分析发现，卡车与人工协作配送方法可以令社区居民交叉感染风险降低至少91.8%，日配送成本降低16.9%，人力资源投入减少50%，一次性防护物资支出节约46.1%左右。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_755e78d02007cb6b",
+        "title": "ALNS求解车辆无人机联合配送路径优化问题",
+        "authors": [
+          "高其琛"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "提出卡车与无人机联合配送的新模式,并结合该问题特点建立模型、设计算法求解",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "传统的货物配送模式面临效率偏低、成本偏高的压力。而无人机在快递物流末端配送领域具有极大的发展潜力。已有学者提出卡车与无人机联合配送的新模式,并结合该问题特点建立模型、设计算法求解。但由于该问题属于NP-Hard问题,求解比较复杂。因此,本文首先利用节约算法与贪婪思想得到初始解,然后用ALNS算法进行改进,最终得到该问题的较优解。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_bc8067c04bcb8e65",
+        "title": "考虑等待成本的卡车与多无人机联合配送农村物流路径优化",
+        "authors": [
+          "陈希琼",
+          "王兴隆",
+          "胡大伟"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "考虑等待成本的卡车与多无人机联合配送农村物流路径优化 车辆和无人机联合配送模式是降低末端配送成本、提高效率的全新尝试。本文考虑卡车和无人机相互等待成本，以最小总成本为目标建立了单卡车和多无人机联合配送路径优化模型。设计了自适应大邻域搜索算法，采用三种破坏算子和修复算子，对破坏、修复后的临时解使用模拟退火接受准则。对包含10-100个节点的呈均匀分布和簇状分布的2类算例进行求解，与CPLEX求解结果对比表明提出的算法具有较快的速度、较好的精度和稳定性；分析卡车携带不同数量无人机的联合配送方案，结果显示，相较于纯卡车配送，携带1-4台无人机的联合配送可降低农村物流配送总成本17.88%～28.94%;对无人机续航里程的敏感性分析，表明随无人机续航里程的增加配送成本呈先快速降低后缓慢降低或趋于稳定。",
+        "theory_or_concept": "采用三种破坏算子和修复算子；提出的算法具有较快的速度、较好的精度和稳定性",
+        "method": "算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "考虑等待成本的卡车与多无人机联合配送农村物流路径优化 车辆和无人机联合配送模式是降低末端配送成本、提高效率的全新尝试。本文考虑卡车和无人机相互等待成本，以最小总成本为目标建立了单卡车和多无人机联合配送路径优化模型。设计了自适应大邻域搜索算法，采用三种破坏算子和修复算子，对破坏、修复后的临时解使用模拟退火接受准则。对包含10-100个节点的呈均匀分布和簇状分布的2类算例进行求解，与CPLEX求解结果对比表明提出的算法具有较快的速度、较好的精度和稳定性；分析卡车携带不同数量无人机的联合配送方案，结果显示，相较于纯卡车配送，携带1-4台无人机的联合配送可降低农村物流配送总成本17.88%～28.94%;对无人机续航里程的敏感性分析，表明随无人机续航里程的增加配送成本呈先快速降低后缓慢降低或趋于稳定。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_5c551ec5e06f54d8",
+        "title": "区域限制下无人机-地面运输车辆联合配送路径优化",
+        "authors": [
+          "武雪杰",
+          "王旻轲",
+          "胡浩浩"
+        ],
+        "year": 2026,
+        "source": "cnki",
+        "research_question": "区域限制下无人机-地面运输车辆联合配送路径优化 随着中国电子商务的快速发展，快递业务面临运输成本高、区域限制多等挑战。为解决上述问题提出了卡车、无人机和三轮车的协同配送方式，建立了区域限制下无人机-地面运输车辆联合配送路径优化模型，以最小化运输成本为目标，采用改进的自适应大邻域搜索（IALNS）算法进行求解。数值实验结果表明，IALNS算法优于Gurobi和自适应大邻域搜索（ALNS）算法。在相同客户点条件下，与传统卡车配送模式相比，无人机-地面运输车辆联合配送模式可降低34.51%的运输成本；相较于卡车-无人机联合配送模式和卡车-三轮车联合配送模式，分别降低27.47%和18.92%的运输成本。研究结果表明，该联合配送方式能够显著降低运输成本，为城市物流配送网络优化提供了可行的参考方案。",
+        "theory_or_concept": "提出了卡车、无人机和三轮车的协同配送方式；采用改进的自适应大邻域搜索（IALNS）算法进行求解",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "区域限制下无人机-地面运输车辆联合配送路径优化 随着中国电子商务的快速发展，快递业务面临运输成本高、区域限制多等挑战。为解决上述问题提出了卡车、无人机和三轮车的协同配送方式，建立了区域限制下无人机-地面运输车辆联合配送路径优化模型，以最小化运输成本为目标，采用改进的自适应大邻域搜索（IALNS）算法进行求解。数值实验结果表明，IALNS算法优于Gurobi和自适应大邻域搜索（ALNS）算法。在相同客户点条件下，与传统卡车配送模式相比，无人机-地面运输车辆联合配送模式可降低34.51%的运输成本；相较于卡车-无人机联合配送模式和卡车-三轮车联合配送模式，分别降低27.47%和18.92%的运输成本。研究结果表明，该联合配送方式能够显著降低运输成本，为城市物流配送网络优化提供了可行的参考方案。",
+        "limitation": "区域限制下无人机-地面运输车辆联合配送路径优化 随着中国电子商务的快速发展，快递业务面临运输成本高、区域限制多等挑战。为解决上述问题提出了卡车、无人机和三轮车的协同配送方式，建立了区域限制下无人机-地面运输车辆联合配送路径优化模型，以最小化运输成本为目标，采用改进的自适应大邻域搜索（IALNS）算法进行求解。数值实验结果表明，IALNS算法优于Gurobi和自适应大邻域搜索（ALNS）算法。在相同客户点条件下，与传统卡车配送模式相比，无人机-地面运输车辆联合配送模式可降低34.51%的运输成本；相较于卡车-无人机联合配送模式和卡车-三轮车联合配送模式，分别降低27.47%和18.92%的运输成本。研究结果表明，该联合配送方式能够显著降低运输成本，为城市物流配送网络优化提供了可行的参考方案。",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_3e1c97fdaf7cd280",
+        "title": "基于车载模式的战场物资多无人机联合配送任务分配研究",
+        "authors": [
+          "李绍斌",
+          "姜大立",
+          "方海洋"
+        ],
+        "year": 2020,
+        "source": "cnki",
+        "research_question": "基于车载模式的战场物资多无人机联合配送任务分配研究 提出了车载模式下的多无人机联合配送模式,对战场物资无人机配送的任务分配问题进行了研究。以完成所有配送任务的时间最短为目标,采用K-means聚类算法确定需求点聚类数量以及各集群中配送无人机与车辆的分离点,利用遗传算法解决车辆路径问题,通过调整配送无人机与车辆分离点实现保障方案的优化。仿真算例验证了模型及算法的有效性,研究成果为战场物资运输提供了新思路和方法支撑。",
+        "theory_or_concept": "基于车载模式的战场物资多无人机联合配送任务分配研究 提出了车载模式下的多无人机联合配；采用K-means聚类算法确定需求点聚类数量以及各集群中配送无人机与车辆的分离点,利",
+        "method": "仿真、算法、优化、模型",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "提出了车载模式下的多无人机联合配送模式,对战场物资无人机配送的任务分配问题进行了研究。以完成所有配送任务的时间最短为目标,采用K-means聚类算法确定需求点聚类数量以及各集群中配送无人机与车辆的分离点,利用遗传算法解决车辆路径问题,通过调整配送无人机与车辆分离点实现保障方案的优化。仿真算例验证了模型及算法的有效性,研究成果为战场物资运输提供了新思路和方法支撑。",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_cnki_ddd25231553b13d9",
+        "title": "多模式下的车辆和无人机联合配送模型与优化算法",
+        "authors": [
+          "贾兆红",
+          "王少贵",
+          "刘闯"
+        ],
+        "year": 2024,
+        "source": "cnki",
+        "research_question": "多模式下的车辆和无人机联合配送模型与优化算法 无人机已广泛用于物流配送,具有快速投递和低成本的优势.针对远离仓库中心、交通受限制客户的需求,在车机并行配送模式上引入车载无人机以服务该类客户,提出多模式下的车辆和无人机联合配送模型及其路径优化问题.该模型融合了车机协同配送模型和并行配送模型,包括搭载无人机的卡车和独立的无人机舰队.在此基础上建立以最小化交付时间为优化目标的混合整数规划模型,并设计基于知识学习策略的多算子遗传算法来提高搜索效率.实验结果表明,与传统交付方式相比,车辆与无人机联合配送模型可显著减少交付时间.在大规模数据集上,改进的遗传算法表现出更好的性能.该研究成果可为解决物流配送中的复杂动态的“最后一公里”问题提供指导和参考.",
+        "theory_or_concept": "引入车载无人机以服务该类客户,提出多模式下的车辆和无人机联合配送模型及其路径优化问题；基于知识学习策略的多算子遗传算法来提高搜索效率.实验结果表明,与传统交付方式相比,车",
+        "method": "实验、算法、优化、模型",
+        "data_or_sample": "数据集上,改进的遗传算法表现出更好的性能.该研究成果可为解决物流配送中的复杂动态的“最后一公里”问题提供指导和参考.",
+        "core_findings": "多模式下的车辆和无人机联合配送模型与优化算法 无人机已广泛用于物流配送,具有快速投递和低成本的优势.针对远离仓库中心、交通受限制客户的需求,在车机并行配送模式上引入车载无人机以服务该类客户,提出多模式下的车辆和无人机联合配送模型及其路径优化问题.该模型融合了车机协同配送模型和并行配送模型,包括搭载无人机的卡车和独立的无人机舰队.在此基础上建立以最小化交付时间为优化目标的混合整数规划模型,并设计基于知识学习策略的多算子遗传算法来提高搜索效率.实验结果表明,与传统交付方式相比,车辆与无人机联合配送模型可显著减少交付时间.在大规模数据集上,改进的遗传算法表现出更好的性能.该研究成果可为解决物流配送中的复杂动态的“最后一公里”问题提供指导和参考.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "应急配送协同优化"
+      },
+      {
+        "lit_id": "lit_openalex_f44a21ca4c6cdb99",
+        "title": "UAV–Ground Vehicle Collaborative Delivery in Emergency Response: A Review of Key Technologies and Future Trends",
+        "authors": [
+          "Yizhe Wang",
+          "Jie Li",
+          "Xiaoguang Yang"
+        ],
+        "year": 2025,
+        "source": "openalex",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "framework integration, adverse weather adaptabilit",
+        "method": "optimization、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "Research findings indicate that UAV delivery technologies in emergency contexts have evolved from single-aircraft applications to intelligent multi-modal collaborative systems, demonstrating significant advantages in medical supply distribution, disaster relief, and search-and-rescue operations.",
+        "limitation": "However, critical challenges persist, including regulatory framework integration, adverse weather adaptability, cybersecurity protection, human–machine interface design, cost–benefit assessment, and standardization deficiencies.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_9e5b2dcffdbc03b9",
+        "title": "A robust optimization framework for two‐echelon vehicle and UAV routing for post‐disaster humanitarian logistics operations",
+        "authors": [
+          "Tasnim Ibn Faiz",
+          "Chrysafis Vogiatzis",
+          "Jiongbai Liu"
+        ],
+        "year": 2024,
+        "source": "openalex",
+        "research_question": "To address the challenges of delivering emergency aid to trapped populations with failing infrastructure networks, we propose a novel robust computational framework for a two‐echelon vehicle routing problem that uses uncrewed autonomous vehicles (UAVs), or drones, for the deliveries.",
+        "theory_or_concept": "framework for two‐echelon vehicle and UAV routing；framework for a two‐echelon vehicle routing proble",
+        "method": "optimization、algorithm",
+        "data_or_sample": "dataset that aims to recreate emergency aid requests in different areas of Puerto Rico",
+        "core_findings": "Abstract Providing first aid and other supplies (e.g., epi‐pens, medical supplies, dry food, water) during and after a disaster is always challenging. The complexity of these operations increases when the transportation, power, and communic",
+        "limitation": "To address the challenges of delivering emergency aid to trapped populations with failing infrastructure networks, we propose a novel robust computational framework for a two‐echelon vehicle routing problem that uses uncrewed autonomous vehicles (UAVs), or drones, for the deliveries.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_05de48100ce3c574",
+        "title": "Discrete Optimization on Truck‐Drone Collaborative Transportation System for Delivering Medical Resources",
+        "authors": [
+          "Min Lin",
+          "Yuming Chen",
+          "Rui Han"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "experiment、optimization、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "We show by experiments that the number of trucks has more significant impact on the optimal solution than the number of drones and the performance of hybrid particle swarm optimization is better than the performance of the other algorithms.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_0ff6884301f8b442",
+        "title": "Vehicle-UAV Integrated Routing Optimization Problem for Emergency Delivery of Medical Supplies",
+        "authors": [
+          "Muhammad Arslan Ghaffar",
+          "Lei Peng",
+          "Muhammad Umer Aslam"
+        ],
+        "year": 2024,
+        "source": "openalex",
+        "research_question": "Addressing the need for improved logistics operations during such crises, this article presents an innovative approach, namely integrating vehicle and unmanned aerial vehicle (UAV) logistics to enhance the efficiency and resilience of medical supply chains.",
+        "theory_or_concept": "framework which employs the density-based spatial；based on vehicle accessibility, optimizing distri；framework, culminating in a refined optimization",
+        "method": "experiment、optimization、algorithm",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "Through comparative analysis, our findings reveal that the artificial bee colony (ABC) algorithm significantly outperforms the genetic algorithm in terms of solving efficiency, iteration counts, and delivery speed.",
+        "limitation": "Vehicle-UAV Integrated Routing Optimization Problem for Emergency Delivery of Medical Supplies In recent years, the delivery of medical supplies has faced significant challenges due to natural disasters and recurrent public health emergencies.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_5b8f623e99fa8b3a",
+        "title": "Reinforcement learning for humanitarian relief distribution with trucks and UAVs under travel time uncertainty",
+        "authors": [
+          "Robert van Steenbergen",
+          "Martijn Mes",
+          "Wouter van Heeswijk"
+        ],
+        "year": 2023,
+        "source": "openalex",
+        "research_question": "Within a finite time horizon, we aim to maximize a weighted objective function comprising the number of goods delivered, the number of different locations visited, and late arrival penalties.",
+        "theory_or_concept": "based on locally collected field data and real-wo；based on expected travel times. Furthermore, the",
+        "method": "experiment、reinforcement learning",
+        "data_or_sample": "instances and two real-world cases",
+        "core_findings": "The experimental results show that dynamic decision-making improves both performance and robustness of humanitarian operations, achieving reductions in lateness penalties of around 85% compared to static solutions based on expected travel times.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_03a6174aecbd40be",
+        "title": "Exact and heuristic approaches to Truck–Drone Delivery Problems",
+        "authors": [
+          "Júlia Cária de Freitas",
+          "Puca Huachi Vaz Penna",
+          "Túlio A. M. Toffolo"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "This work proposes a novel Mixed Integer Programming (MIP) formulation and a heuristic approach to address the problem.",
+        "theory_or_concept": "based on the General Variable Neighborhood Search",
+        "method": "algorithm",
+        "data_or_sample": "instances, and was capable of optimally solving several unsolved instances from the liter",
+        "core_findings": "Collaborative delivery employing drones in last-mile delivery has been an extensively studied topic in recent years. In this paper, it is studied Truck–Drone Delivery Problems (TDDPs) in which a traditional delivery truck is gathered with a",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_b7b5915e4c6a9e17",
+        "title": "Truck-Drone Delivery Optimization Based on Multi-Agent Reinforcement Learning",
+        "authors": [
+          "Zhiliang Bi",
+          "Xiwang Guo",
+          "Jiacun Wang"
+        ],
+        "year": 2024,
+        "source": "openalex",
+        "research_question": "Such a model simultaneously addresses the endurance limitations of drones and the time wastage incurred during the “last-mile” deliveries by trucks.",
+        "theory_or_concept": "Based on Multi-Agent Reinforcement Learning In re",
+        "method": "optimization、algorithm、reinforcement learning",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "In recent years, the adoption of truck–drone collaborative delivery has emerged as an innovative approach to enhance transportation efficiency and minimize the depletion of human resources. Such a model simultaneously addresses the enduranc",
+        "limitation": "Such a model simultaneously addresses the endurance limitations of drones and the time wastage incurred during the “last-mile” deliveries by trucks.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_31fdc6f4f01be6c7",
+        "title": "A Reinforcement Learning Model of Multiple UAVs for Transporting Emergency Relief Supplies",
+        "authors": [
+          "Daiki Hachiya",
+          "Erick Mas",
+          "Shunichi Koshimura"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "We formulated the routing problem of UAVs as the multi-objective, multi-trip, multi-item, and multi-UAV problem, and optimize the problem with Q-learning (QL), one of the reinforcement learning methods.",
+        "theory_or_concept": "Model of Multiple UAVs for Transporting Emergency",
+        "method": "quantitative、reinforcement learning",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "The results suggest that the model improved the stability of the supply of emergency relief supplies to all evacuation centers when compared to other models.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_4d629b979071f1b5",
+        "title": "The electric vehicle routing problem with drones: An energy minimization approach for aerial deliveries",
+        "authors": [
+          "Nikolaos A. Kyriakakis",
+          "Themistoklis Stamadianos",
+          "Magdalene Marinaki"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "The problem’s objective is to minimize the total energy consumption, focusing on the main non-constant and controllable factor of energy consumption on a delivery vehicle, the payload weight.",
+        "theory_or_concept": "using on the main non-constant and controllabl；framework are implemented, two versions of the Ant；based on the two-echelon VRP literature and are u",
+        "method": "optimization、algorithm",
+        "data_or_sample": "Instances for the EVRPD are created based on the two-echelon VRP literature and are used",
+        "core_findings": "Their computational results are compared and discussed.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_15954ee476054138",
+        "title": "Possibilities of Using UAVs in Pre-Hospital Security for Medical Emergencies",
+        "authors": [
+          "Marlena Robakowska",
+          "Daniel Ślęzak",
+          "Przemysław Żuratyński"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "This review aims to analyze the feasibility of using UAVs to support emergency medical systems in the supply and urgent care ranges.",
+        "theory_or_concept": "Using UAVs in Pre-Hospital Security for Medica；using UAVs to support emergency medical system；framework for the application. A systematic litera",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "data terminal connectivity (UAS) and remotely piloted aircraft systems (RPV, RPAS-mi",
+        "core_findings": "The term unmanned aerial vehicle (UAV) was post-applied in the 1980s to describe remotely piloted multi-purpose, unmanned, autonomous aircraft. The terms unmanned aircraft systems with data terminal connectivity (UAS) and remotely piloted a",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_7cd0c1f5b49b0067",
+        "title": "A mixed method impact assessment of the use of aerial logistics to improve maternal health and emergencies outcomes in the Ashanti Region of Ghana.",
+        "authors": [
+          "Kremer P",
+          "Haruna F",
+          "Briegleb C"
+        ],
+        "year": 2025,
+        "source": "pubmed",
+        "research_question": "The study used a mixed-method approach to assess the impact of aerial logistics on various maternal health outcomes in the Ashanti Region, focusing on the intervention by Zipline Mpanya distribution center.",
+        "theory_or_concept": "using on the intervention by Zipline Mpanya di；using or being treated with the aerial logisti",
+        "method": "qualitative、regression",
+        "data_or_sample": "data were sourced from the health directorate",
+        "core_findings": "Nonetheless, marginal means estimations in absolute terms showed overall declines in performance, consistent with the effects of the COVID-19 pandemic.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_a3d25cc447f00d72",
+        "title": "Integrated scheduling of truck and drone fleets for cargo transportation in post-disaster relief: A two-stage stochastic optimization approach",
+        "authors": [
+          "Xin Yang",
+          "Wenjie Cao",
+          "Kai Wang"
+        ],
+        "year": 2025,
+        "source": "openalex",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "based on parallel computation is developed to sol；using real disaster data from extreme rainstor",
+        "method": "experiment、optimization、algorithm",
+        "data_or_sample": "data from extreme rainstorms in Fangshan District, Beijing in July 2023",
+        "core_findings": "The extensive experiments demonstrate that the proposed algorithm consistently identifies high-quality solutions efficiently compared to the exact algorithm.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_11668456eedcb704",
+        "title": "A multi-agent approach to the truck multi-drone routing problem",
+        "authors": [
+          "Jose Miguel Leon-Blanco",
+          "P.L. Gonzalez-R",
+          "José L. Andrade-Pineda"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "A multi-agent approach to the truck multi-drone routing problem In this work, we address the Truck-multi-Drone Team Logistics Problem (TmDTL), devoted to visit a set of points with a truck helped by a team of unmanned aerial vehicles (UAVs) or drones in the minimum time, starting at a certain location and ending at a different one.",
+        "theory_or_concept": "using the largest instances of the single TDTL",
+        "method": "experiment、optimization",
+        "data_or_sample": "instances of the complex TmDTL, we have developed a novel agent-based method where agents",
+        "core_findings": "Our experiments demonstrate the ability of the proposed agent-based system to obtain good quality solutions for complex optimization problems that arise.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_6f134b09704f2624",
+        "title": "Hybrid Truck-Drone Delivery Systems: A Systematic Literature Review",
+        "authors": [
+          "Batool Madani",
+          "Malick Ndiaye"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "The overview aims to demonstrate the operational characteristics of such systems and their implications.",
+        "theory_or_concept": "based on vehicles roles, system configuration, pr",
+        "method": "survey、optimization",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "The overview aims to demonstrate the operational characteristics of such systems and their implications.",
+        "limitation": "Hybrid Truck-Drone Delivery Systems: A Systematic Literature Review Owing to the continued development of e-commerce, logisticians now have an outstanding obligation to tackle last-mile delivery challenges.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_f4fb5b55a6b8e742",
+        "title": "Deep Reinforcement Learning for Truck-Drone Delivery Problem",
+        "authors": [
+          "Zhiliang Bi",
+          "Xiwang Guo",
+          "Jiacun Wang"
+        ],
+        "year": 2023,
+        "source": "openalex",
+        "research_question": "This research focused on mixed truck-drone delivery and utilized reinforcement learning and real road networks to address its optimal scheduling issue.",
+        "theory_or_concept": "using trucks as a flight platform for drones a",
+        "method": "optimization、algorithm、reinforcement learning",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "Finally, a comparison with other reinforcement learning algorithms with behavioral constraints demonstrated the reasonableness of the problem and the advantages of the algorithm.",
+        "limitation": "However, to overcome the delivery range and payload capacity limitations of drones, the combination of trucks and drones is gaining more attention.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_5b95289ba84ac604",
+        "title": "Autonomous aerial robotics for package delivery: A technical review",
+        "authors": [
+          "Jack Saunders",
+          "Sajad Saeedi",
+          "Wenbin Li"
+        ],
+        "year": 2023,
+        "source": "openalex",
+        "research_question": "Different aerial manipulators and grippers are listed along with control techniques to address stability issues.",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "Abstract Small unmanned aerial vehicles (UAVs) have gained significant interest in the last decade. More specifically these vehicles have the capacity to impact package delivery logistics in a disruptive way. This paper reviews research pro",
+        "limitation": "Landing on a dynamic platform presents further challenges.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_6effbb6d245331b6",
+        "title": "The Orienteering Problem with Drones",
+        "authors": [
+          "Nicola Morandi",
+          "Roel Leus",
+          "Hande Yaman"
+        ],
+        "year": 2023,
+        "source": "openalex",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "based on a novel decomposition of the problem. We；framework to solve closely related problems in the",
+        "method": "algorithm",
+        "data_or_sample": "instances of the OP-mD with up to 50 nodes within one hour of CPU time with a standard co",
+        "core_findings": "We extend the classical problem setting of the orienteering problem (OP) to incorporate multiple drones that cooperate with a truck to visit a subset of the input nodes. We call this problem the OP with multiple drones (OP-mD). Drones have ",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_4a4ea9bbef49908f",
+        "title": "A New Truck-Drone Routing Problem for Parcel Delivery Services Aided by Parking Lots",
+        "authors": [
+          "Javier Gómez-Lagos",
+          "Alfredo Candia-Véjar",
+          "Flavio Encina"
+        ],
+        "year": 2021,
+        "source": "openalex",
+        "research_question": "For the transportation network, which includes these points, a mixed linear integer programming formulation is provided, which aims to minimize the makespan of serving all the customers.",
+        "theory_or_concept": "based on identifying the locations where the truc",
+        "method": "experiment、optimization",
+        "data_or_sample": "instances were conducted to analyze the model solutions' characteristics and find their c",
+        "core_findings": "The experiments showed that the proposed model could significantly improve the results obtained when only the truck delivers.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_2f989ada19f70756",
+        "title": "Drones for relief logistics under uncertainty after an earthquake",
+        "authors": [
+          "Okan Dükkancı",
+          "Achim Koberstein",
+          "Bahar Y. Kara"
+        ],
+        "year": 2023,
+        "source": "openalex",
+        "research_question": "Additionally, the objective is to minimize the total unsatisfied demand subject to a time-bound constraint on the deliveries, as well as the range and capacity limitations of drones.",
+        "theory_or_concept": "using drones under uncertainty, in which criti；based on the western (European) side of Istanbul,",
+        "method": "case study、algorithm",
+        "data_or_sample": "case study is conducted based on the western (European) side of Istanbul, Turkey",
+        "core_findings": "The computational results are used to evaluate the performance of the scenario decomposition algorithm and analyze the value of stochasticity and the expected value of perfect information under different parametric settings.",
+        "limitation": "Additionally, the objective is to minimize the total unsatisfied demand subject to a time-bound constraint on the deliveries, as well as the range and capacity limitations of drones.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_48c0bfa059777ab7",
+        "title": "Humanitarian Drones: A Review and Research Agenda",
+        "authors": [
+          "Abderahman Rejeb",
+          "Karim Rejeb",
+          "Steve Simske"
+        ],
+        "year": 2021,
+        "source": "openalex",
+        "research_question": "Humanitarian Drones: A Review and Research Agenda This study investigates the capabilities, performance outcomes, and barriers of drones applied to humanitarian logistics (HL).",
+        "theory_or_concept": "framework. More specifically, three important cap；Based on these findings, future research directio",
+        "method": "survey",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "The findings of this review paper summarize the capabilities, barriers and performance outcomes of humanitarian drones applied to logistics operations, management, and governance in a comprehensive framework.",
+        "limitation": "This study analyzes potential applications of drones in the humanitarian field and presents a comprehensive agenda that structures and guides further research on the topic.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_6c4483eb1e868b68",
+        "title": "Autonomous Delivery Solutions for Last-Mile Logistics Operations: A Literature Review and Research Agenda",
+        "authors": [
+          "Valeska Engesser",
+          "Evy Rombaut",
+          "Lieselot Vanhaverbeke"
+        ],
+        "year": 2023,
+        "source": "openalex",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "Based on the literature set, a snowballing proced",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "The implementation of autonomous delivery solutions in last-mile logistics operations is considered promising. Autonomous delivery solutions can help in tackling urban challenges related to last-mile logistics operations. Urbanization creat",
+        "limitation": "Autonomous delivery solutions can help in tackling urban challenges related to last-mile logistics operations.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_fb86869831939b77",
+        "title": "A tailored Benders decomposition approach for last-mile delivery with autonomous robots",
+        "authors": [
+          "Laurent Alfandari",
+          "Ivana Ljubić",
+          "Marcos de Melo da Silva"
+        ],
+        "year": 2021,
+        "source": "openalex",
+        "research_question": "A tailored Benders decomposition approach for last-mile delivery with autonomous robots This work addresses an operational problem of a logistics service provider that consists of finding an optimal route for a vehicle carrying customer parcels from a central depot to selected facilities, from where autonomous devices like robots are launched to perform last-mile deliveries.",
+        "theory_or_concept": "based on the customer delivery deadlines. This ar",
+        "method": "algorithm",
+        "data_or_sample": "instances of realistic size",
+        "core_findings": "Numerical results show that this novel Benders approach with a tailored combinatorial algorithm for generating Benders cuts largely outperforms all other alternatives.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_7e3686fca8b6ecf7",
+        "title": "Urban drone stations siting optimization based on hybrid algorithm of MILP and machine learning.",
+        "authors": [
+          "Pan W",
+          "Gao J",
+          "Wang X"
+        ],
+        "year": 2024,
+        "source": "pubmed",
+        "research_question": "An investigation into the distribution inefficiencies of emergency service facilities in selected districts of Chengdu reveals that imbalanced distribution of these facilities results in suboptimal response times during critical incidents.",
+        "theory_or_concept": "based on hybrid algorithm of MILP and machine lea；using the Gurobi optimization platform. Bayesi；framework for solving complex problems related to",
+        "method": "optimization、algorithm、machine learning",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "An investigation into the distribution inefficiencies of emergency service facilities in selected districts of Chengdu reveals that imbalanced distribution of these facilities results in suboptimal response times during critical incidents.",
+        "limitation": "To address this challenge, a two-stage clustering method, incorporating X-means and K-means algorithms, is employed to identify optimal number and locations for Unmanned Aerial Vehicle (UAV) fire stations and drone ambulance centers.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_adc6bbfac137624f",
+        "title": "Drones reduce the time to defibrillation in a highly visited non-urban area: A randomized simulation-based trial.",
+        "authors": [
+          "van Veelen MJ",
+          "Vinetti G",
+          "Dal Cappello T"
+        ],
+        "year": 2024,
+        "source": "pubmed",
+        "research_question": "Our aim was to assess the feasibility of autonomous drone delivery of automated external defibrillators (AED) in a non-urban area with physical barriers and compare the time to defibrillate (TTD) with bystander retrieval from a public access defibrillator (PAD) point and helicopter emergency medical services (HEMS) physician performed defibrillation.",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "simulation",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "RESULTS: Thirty-six simulations were performed.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_8fa40def97bddc1c",
+        "title": "Adopting drone technology for blood delivery: a feasibility study to evaluate its efficiency and sustainability.",
+        "authors": [
+          "Gauba P",
+          "Nangia A",
+          "Bahadur S"
+        ],
+        "year": 2025,
+        "source": "pubmed",
+        "research_question": "METHODS: This study investigates the impact of drone-based delivery on the quality and stability of blood components, relative to conventional transport methods along with the operational challenges associated with implementing a drone-based blood delivery system.",
+        "theory_or_concept": "framework was adopted, which facilitates a systema",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "RESULTS: The study documents the challenges experienced by the study team during the drone-based delivery of blood while maintaining the biochemical parameters of blood components.",
+        "limitation": "Moreover, the logistical challenges associated with blood product transport are substantial and maintaining the cold chain throughout the supply route is crucial to sustain their functional integrity as the temperature fluctuations can compromise its oxygen-carrying capacity.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_9b3648b48d0e81fb",
+        "title": "Optimization in multimodal freight transportation problems: A Survey",
+        "authors": [
+          "Claudia Archetti",
+          "Lorenzo Peirano",
+          "M. Grazia Speranza"
+        ],
+        "year": 2021,
+        "source": "openalex",
+        "research_question": "The objective of this literature review is to provide a picture of the state of the art on multimodal freight transportation optimization, for the different combinations of modes.",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "survey、optimization",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "Since the rise of globalization, international trade has grown constantly and the demand of transportation services grew with it. Multimodal transportation is a natural evolution of the classical unimodal road transportation, and is a manda",
+        "limitation": "Meanwhile, new emerging technologies generate new challenges for researchers.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_6861a1b42a04b019",
+        "title": "Revolutionizing Disaster Management: A Scoping Review of Drone Technology and Informatics in Humanitarian Response.",
+        "authors": [
+          "El-Sakka A",
+          "Osman A",
+          "Househ M"
+        ],
+        "year": 2025,
+        "source": "pubmed",
+        "research_question": "Most studies (n = 16, 80%) focus on natural disasters, with additional applications in conflict zones, forest fires, and health crises.",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "data for decision-making during crises",
+        "core_findings": "Drones, or unmanned aerial vehicles (UAVs), are transforming humanitarian operations by providing solutions for disaster relief, medical logistics, and aid delivery in challenging environments. This scoping review explores UAV applications ",
+        "limitation": "This scoping review explores UAV applications in humanitarian contexts, emphasizing their advantages, limitations, and barriers to adoption.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_43ee7cf169055be2",
+        "title": "Drone-based medical delivery in the extreme conditions of Himalayan region: a feasibility study.",
+        "authors": [
+          "Aggarwal S",
+          "Nigam K",
+          "Singh V"
+        ],
+        "year": 2024,
+        "source": "pubmed",
+        "research_question": "This study aims to investigate the feasibility of using drones for delivering essential medical supplies in Keylong, Himachal Pradesh, situated amidst the Middle Himalayan Range, where heavy snowfall during peak winter restricts access to remote regions, posing logistical hurdles for healthcare provision.",
+        "theory_or_concept": "using drones for delivering essential medical",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "samples",
+        "core_findings": "RESULTS: A total of 15 sorties were conducted, efficiently transporting 1000 units of medicines and 20 clinical samples.",
+        "limitation": "Insights from healthcare workers were documented on sociodemographic characteristics, local healthcare facilities and challenges encountered during drone operations.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_ba25245d1cf1baae",
+        "title": "Application of Unmanned Aerial Vehicles in Logistics: A Literature Review",
+        "authors": [
+          "Yi Li",
+          "Min Liu",
+          "Dandan Jiang"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "题名/摘要未明确研究问题，需精读全文",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "algorithm",
+        "data_or_sample": "database from the past two years (2021–2022)",
+        "core_findings": "The booming development of e-commerce has brought many challenges to the logistics industry. To ensure the sustainability of the logistics industry, the impact of environmental and social sustainability factors on logistics development need",
+        "limitation": "Application of Unmanned Aerial Vehicles in Logistics: A Literature Review The booming development of e-commerce has brought many challenges to the logistics industry.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_b4aa6fa2eec23df8",
+        "title": "Flight testing of drone-delivered automated external defibrillators for simulated out-of-hospital cardiac arrest in suburban Thailand.",
+        "authors": [
+          "Srivilaithon W",
+          "Khunkhlai N",
+          "Currie M"
+        ],
+        "year": 2025,
+        "source": "pubmed",
+        "research_question": "Integration into emergency services could address current delays, though further research is necessary to optimize performance under varying conditions.",
+        "theory_or_concept": "using drones to deliver AEDs in suburban OHCA；using a DJI Matrice 600 drone (DJI, China) to",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "The results showed a 97.7% success rate in AED delivery, with a median flight distance of 4042 m and a median response time of 7 min and 39 s.",
+        "limitation": "However, in developing countries, logistical and infrastructural challenges often result in delays, particularly in suburban areas.",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_f7cce92fecf39808",
+        "title": "Semi-autonomous drone delivering automated external defibrillators for real out-of-hospital cardiac arrest: A Danish feasibility study.",
+        "authors": [
+          "Jakobsen LK",
+          "Bang Gram JK",
+          "Grabmayr AJ"
+        ],
+        "year": 2025,
+        "source": "pubmed",
+        "research_question": "AIM: To assess the feasibility and safety of drone-delivered automated external defibrillators (AEDs) in real out-of-hospital cardiac arrests (OHCAs) in Denmark, addressing the critical need for timely defibrillation in OHCAs.",
+        "theory_or_concept": "题名/摘要未明确理论或核心概念",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "题名/摘要未报告数据或样本",
+        "core_findings": "RESULTS: Of 76 suspected OHCAs, 27 occurred during non-operating hours (nighttime).",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_pubmed_e25710d558b9095a",
+        "title": "Combinations of First Responder and Drone Delivery to Achieve 5-Minute AED Deployment in OHCA.",
+        "authors": [
+          "Starks MA",
+          "Chu J",
+          "Leung KHB"
+        ],
+        "year": 2024,
+        "source": "pubmed",
+        "research_question": "OBJECTIVES: The authors estimated the impact of a statewide program for drone-delivered AEDs in North Carolina integrated into emergency medical service and first responder (FR) response for OHCA.",
+        "theory_or_concept": "Using Cardiac Arrest Registry to Enhance Survi",
+        "method": "regression",
+        "data_or_sample": "data, we included 28,292 OHCA patients ≥18 years of age between 1 January 2013 and 3",
+        "core_findings": "RESULTS: Historical county-level median response times were 8.0 minutes (IQR: 7.0-9.0 minutes) with 16.5% of OHCAs having AED arrival times of <5 minutes (IQR: 11.2%-24.3%).",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      },
+      {
+        "lit_id": "lit_openalex_0823d03022d45617",
+        "title": "Effect of unmanned aerial vehicle (drone) delivery on blood product delivery time and wastage in Rwanda: a retrospective, cross-sectional study and time series analysis",
+        "authors": [
+          "Marie Paul Nisingizwe",
+          "Pacifique Ndishimye",
+          "Swaibu Katare"
+        ],
+        "year": 2022,
+        "source": "openalex",
+        "research_question": "Future studies should investigate if these improvements are cost-effective, and whether drone delivery might be effective for other pharmaceutical and health supplies that cannot be easily stored at remote facilities.",
+        "theory_or_concept": "based on estimated driving times (p<0·0001) and 9；based on Google Maps estimates (p<0·0001). The de",
+        "method": "题名/摘要未明确研究方法",
+        "data_or_sample": "data from 20 health facilities between Jan 1, 2015, and Dec 31, 2019, in Rwanda",
+        "core_findings": "FINDINGS: Between March 17, 2017, and Dec 31, 2019, 12 733 blood product orders were delivered by drones.",
+        "limitation": "题名/摘要未报告局限，需结合全文批判性评述",
+        "relation": "已纳入",
+        "group": "协同配送路径优化"
+      }
+    ]
+  }
+}

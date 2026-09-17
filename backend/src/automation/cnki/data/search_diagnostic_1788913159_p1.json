@@ -1,0 +1,73 @@
+{
+  "created_at": "2026-09-09T08:19:19+0800",
+  "request": {
+    "endpoint": "https://kns.cnki.net/kns8s/brief/grid",
+    "page_num": 1,
+    "page_size": 20,
+    "bool_search": "true",
+    "status_code": 200,
+    "response_length": 105,
+    "fields": {
+      "boolSearch": "true",
+      "QueryJson": "{\"Platform\":\"\",\"Resource\":\"JOURNAL\",\"Classid\":\"YSTT4HG0\",\"Products\":\"\",\"QNode\":{\"QGroup\":[{\"Key\":\"Subject\",\"Title\":\"\",\"Logic\":0,\"Items\":[{\"Key\":\"Expert\",\"Title\":\"\",\"Logic\":0,\"Field\":\"EXPERT\",\"Operator\":0,\"Value\":\"SU=('水产品'+'水海产品'+'海产品'+'水产品出口')*('营销策略'+'营销模式'+'营销战略'+'营销组合')*('区域品牌'+'产业竞争力'+'产业集群')\",\"Value2\":\"\"}],\"ChildItems\":[]},{\"Key\":\"ControlGroup\",\"Title\":\"\",\"Logic\":0,\"Items\":[],\"ChildItems\":[]}]},\"ExScope\":\"1\",\"SearchType\":4,\"Rlang\":\"CHINESE\",\"KuaKuCode\":\"\",\"Expands\":{},\"View\":\"changeDBCh\",\"SearchFrom\":1}",
+      "pageNum": "1",
+      "pageSize": "20",
+      "dstyle": "listmode",
+      "boolSortSearch": "false",
+      "sentenceSearch": "false",
+      "productStr": "YSTT4HG0,LSTPFY1C,RMJLXHZ3,JQIRZIYA,EMRPGLPA,J708GVCE,JUP3MUPD,1UR4K4HZ,BPBAFJ5S,MPMFIG1A,WQ0UVIAA,NB3BWEHK,XVLO76FD,HR1YT1Z9,BLZOG7CK,PWFIRAGL,NN3FJMUV,NLBO1Z6R,",
+      "searchFrom": "资源范围：学术期刊;  中英文扩展;  时间范围：更新时间：不限;  来源类别：全部期刊; ",
+      "subject": "",
+      "turnpage": "8Kf6r96aVUubfe4hUZXU-w!!",
+      "language": "",
+      "uniplatform": "",
+      "CurPage": "1"
+    },
+    "query_json": {
+      "Platform": "",
+      "Resource": "JOURNAL",
+      "Classid": "YSTT4HG0",
+      "Products": "",
+      "QNode": {
+        "QGroup": [
+          {
+            "Key": "Subject",
+            "Title": "",
+            "Logic": 0,
+            "Items": [
+              {
+                "Key": "Expert",
+                "Title": "",
+                "Logic": 0,
+                "Field": "EXPERT",
+                "Operator": 0,
+                "Value": "SU=('水产品'+'水海产品'+'海产品'+'水产品出口')*('营销策略'+'营销模式'+'营销战略'+'营销组合')*('区域品牌'+'产业竞争力'+'产业集群')",
+                "Value2": ""
+              }
+            ],
+            "ChildItems": []
+          },
+          {
+            "Key": "ControlGroup",
+            "Title": "",
+            "Logic": 0,
+            "Items": [],
+            "ChildItems": []
+          }
+        ]
+      },
+      "ExScope": "1",
+      "SearchType": 4,
+      "Rlang": "CHINESE",
+      "KuaKuCode": "",
+      "View": "changeDBCh",
+      "SearchFrom": 1
+    }
+  },
+  "response": {
+    "has_retry_phrase": true,
+    "has_structure_error": false,
+    "has_parameter_error": false,
+    "preview": " <div id=\"briefBox\"> <p class=\"no-content\" value=\"\">抱歉，暂无数据，请稍后重试。</p> </div> "
+  }
+}
