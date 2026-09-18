@@ -48,17 +48,6 @@ _PLACEHOLDER_GROUP_RE = _re.compile(
 _CHINESE_SOURCES = frozenset({Source.CNKI, Source.USER_IMPORTED})
 _KEYWORD_CHAIN_RE = _re.compile(r"^(?:[\u4e00-\u9fff]{1,3}与){2,}[\u4e00-\u9fff]{1,4}$")
 _SLASH_CHAIN_RE = _re.compile(r"\s*[/|]+\s*")
-_CHINESE_PROBLEM_SIGNALS = frozenset({
-    "优化", "规划", "调度", "路径", "机制", "影响", "评价", "治理", "策略",
-    "模型", "算法", "约束", "鲁棒", "不确定", "预测", "识别", "决策", "协同",
-    "比较", "实证", "实验", "仿真", "配置", "选址", "分配", "演化", "绩效",
-})
-_ENGLISH_PROBLEM_SIGNALS = frozenset({
-    "optimization", "optimisation", "routing", "scheduling", "planning", "allocation",
-    "assignment", "coordination", "model", "modeling", "modelling", "impact", "evaluation",
-    "strategy", "algorithm", "constraint", "robust", "uncertainty", "prediction", "decision",
-    "simulation", "empirical", "comparison", "design", "governance", "performance",
-})
 # 有实际学术含义的英文缩写,允许单独作为组名主体(统一大写存储)
 _EN_ACRONYM_ALLOWLIST = frozenset({
     "AI", "IOT", "MSC", "ERP", "B2B", "O2O", "SNS", "GDPR",
@@ -76,14 +65,8 @@ _ENGLISH_STOPWORDS = frozenset({
     "paper", "papers", "work", "works", "shown", "show", "find", "findings",
     "ch", "learnin", "learning",
 })
-_CHINESE_GENERIC_TERMS = frozenset({
-    "研究", "分析", "方法", "问题", "相关", "基于", "探讨", "探究", "视角", "路径",
-    "影响", "因素", "机制", "模式", "体系", "评价", "应用", "发展", "现状", "综述",
-    "本文", "结果", "结论", "实证", "模型", "框架", "策略", "研究者", "文献",
-})
 _TITLE_LEAD_WORDS = ("基于", "面向", "考虑", "关于", "针对", "采用", "通过")
 _TITLE_CLAUSE_MARKERS = ("的", "背景下", "情境下", "条件下", "环境下", "中", "下")
-_TITLE_END_WORDS = ("研究", "分析", "探讨", "综述", "模型", "方法", "问题", "方案", "优化", "规划")
 # 叙述性短语/连接词,严禁作为章节标题(LLM 偶发返回"近年来"、"然而"等)
 # 这类词没有信息量,只能用作正文过渡
 _NARRATIVE_GROUP_NAMES = frozenset({
@@ -100,9 +83,7 @@ _NARRATIVE_GROUP_NAMES = frozenset({
 # 主题名不能停在未完成的词尾。除常见的“与/和/及/的”等半截连接词外，
 # 还拦截“配方向”这类把“配送方向”截断后的残片；这里按语言形态判断，
 # 不绑定任何具体研究领域。
-_TRUNCATED_GROUP_SUFFIX_RE = _re.compile(
-    r"(?:多一|与|和|及|的|等|之|其|路|配方向|[一二三四五六七八九十])$"
-)
+_TRUNCATED_GROUP_SUFFIX_RE = _re.compile(r"(?:与|和|及|的|等|之|其)$")
 _TITLE_LEAD_RE = _re.compile(r"^(?:基于|面向|考虑|关于|针对|采用|通过)")
 # 组名长度上限:超出 12 字的 LLM 描述倾向堆砌,不再像标题
 _GROUP_NAME_MAX_LEN = 20
@@ -131,7 +112,7 @@ def _group_name_acceptable(name: str) -> bool:
         return False
     if name in _GENERIC_GROUP_NAMES or name in _NARRATIVE_GROUP_NAMES:
         return False
-    if _TRUNCATED_GROUP_SUFFIX_RE.search(name):
+    if len(name) > 2 and _TRUNCATED_GROUP_SUFFIX_RE.search(name):
         return False
     chinese_chars = _re.findall(r"[\u4e00-\u9fff]", name)
     latin_words = [w.lower() for w in _re.findall(r"[A-Za-z][A-Za-z0-9-]*", name)]
@@ -139,9 +120,7 @@ def _group_name_acceptable(name: str) -> bool:
         # 英文文献簇允许使用包含至少两个实质词的英文主题名；
         # 纯英文功能词/单词碎片仍然拒绝，避免出现 such/data/future 一类伪标题。
         meaningful = [w for w in latin_words if w not in _ENGLISH_STOPWORDS]
-        if len(name) > 48 or len(meaningful) < 2:
-            return False
-        if not any(word in _ENGLISH_PROBLEM_SIGNALS for word in meaningful):
+        if len(name) > 80 or not meaningful:
             return False
         return True
     if len(name) > _GROUP_NAME_MAX_LEN:
@@ -151,9 +130,6 @@ def _group_name_acceptable(name: str) -> bool:
     if len(chinese_chars) < 2 and not latin_words:
         return False
     if latin_words and chinese_chars and any(w.upper() not in _EN_ACRONYM_ALLOWLIST for w in latin_words):
-        return False
-    chinese_terms = _re.findall(r"[\u4e00-\u9fff]{2,}", name)
-    if chinese_terms and all(term in _CHINESE_GENERIC_TERMS for term in chinese_terms):
         return False
     m = _EN_FRAGMENT_GROUP_RE.match(name)
     if m:
@@ -234,19 +210,15 @@ def _derive_group_name(papers: list[Paper], lit_ids: list[str], index: int = 1) 
                 if len(prefix) >= 4:
                     candidate = prefix
                     break
-        candidate = _re.sub(rf"({'|'.join(_TITLE_END_WORDS)})$", "", candidate).strip()
         while len(candidate) > 12 and candidate[-1] in "与和及的等之其路":
             candidate = candidate[:-1]
         # 不再按固定字符数截断标题。固定截断会把“自主着陆”截成
         # “应急自”这类半个词；只有在自然学术结尾处才收束，超长且
         # 没有边界的片段直接交给可接受性校验拒绝。
         if len(candidate) > _GROUP_NAME_MAX_LEN:
-            boundaries = tuple(dict.fromkeys(_TITLE_END_WORDS + ("系统", "设计", "网络", "协同", "决策")))
-            cuts = [candidate.find(word) + len(word) for word in boundaries if candidate.find(word) >= 6]
-            if cuts:
-                candidate = candidate[:max(cuts)]
-            else:
-                candidate = ""
+            # 只按标题自身的标点或自然分句边界收束，不使用领域词表截断。
+            pieces = [p.strip() for p in _re.split(r"[：:，,；;。.!！?？]", candidate) if p.strip()]
+            candidate = max(pieces, key=len) if pieces else ""
         if len(candidate) >= 4 and _group_name_acceptable(candidate):
             phrases.append(candidate)
     if phrases:
@@ -255,7 +227,7 @@ def _derive_group_name(papers: list[Paper], lit_ids: list[str], index: int = 1) 
         w for w in _re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", title)
         if w.lower() not in _ENGLISH_STOPWORDS
     ]
-    meaningful = [w for w in words if w.lower() in _ENGLISH_PROBLEM_SIGNALS or len(w) > 3]
+    meaningful = [w for w in words if len(w) > 2]
     if len(meaningful) >= 2:
         return " ".join(meaningful[:4])[:48].strip()
     return ""
@@ -810,7 +782,7 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
             # 风险控制”等）。这是文献证据，不是领域词典或编号占位符。
             rep_title = representative.title or ""
             phrases = [x for x in _re.findall(r"[\u4e00-\u9fff]{2,8}", rep_title)
-                       if x not in _CHINESE_GENERIC_TERMS]
+                       if x not in _GENERIC_GROUP_NAMES]
             for phrase in phrases:
                 candidate = _clean_group_name(phrase)
                 if (_group_name_acceptable(candidate)
@@ -925,7 +897,7 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
         # 不能把高频二元词机械拼成“无人与人机与配送”一类伪标题。
         # 兜底名称必须优先来自簇中心真实标题；只有标题完全不可用时，
         # 才从摘要中提取少量连续实词并直接连接，不人为添加“与/和”。
-        stop = _CHINESE_GENERIC_TERMS | _ENGLISH_STOPWORDS
+        stop = _GENERIC_GROUP_NAMES | _ENGLISH_STOPWORDS
         freq: dict[str, int] = {}
         for i in indices:
             for term in docs[i]:

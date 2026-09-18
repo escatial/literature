@@ -149,7 +149,7 @@ def test_group_name_rejects_placeholders_and_keyword_chains():
     assert not clf._group_name_acceptable("研究议题3")
     assert not clf._group_name_acceptable("无人机协同子主题2")
     assert not clf._group_name_acceptable("无人与人机与配送")
-    assert not clf._group_name_acceptable("市区内卡车与无人机协同配方向")
+    assert not clf._group_name_acceptable("研究对象与")
     assert clf._group_name_acceptable("Hybrid Routing Models")
 
 
