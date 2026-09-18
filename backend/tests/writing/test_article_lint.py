@@ -1,4 +1,4 @@
-from qa.article_lint import check_article_text, repair_article_text
+from qa.article_lint import check_article_text, repair_article_text, repair_unbound_author_year
 from writing.section_writer import SectionResult, _looks_like_non_article
 from retrieval.types import Paper, Source
 
@@ -87,6 +87,21 @@ def test_article_lint_repairs_deterministic_formatting():
     assert "胡大伟" in section.content
     assert "。" in section.content
     assert not check_article_text([section]).issues
+
+
+def test_repair_unbound_author_year_adds_lit_anchor_for_unique_match():
+    section = SectionResult(
+        key="theme_1", title="主题",
+        content="张三（2023）指出治理有效。",
+        citations=[],
+    )
+    paper = Paper(
+        lit_id="lit_cnki_aa01", source=Source.CNKI, title="治理研究",
+        authors=["张三"], journal="测试学报", year=2023,
+    )
+    repairs = repair_unbound_author_year([section], [paper])
+    assert repairs
+    assert "[lit_cnki_aa01]" in section.content
 
 
 def test_article_lint_rejects_model_internal_reasoning_leak():

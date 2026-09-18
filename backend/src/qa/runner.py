@@ -17,7 +17,7 @@ from typing import Any
 from qa.accuracy import check_citation_accuracy
 from qa.binding import check_reference_binding
 from qa.citation_format import check_citation_format
-from qa.article_lint import check_article_text, repair_article_text
+from qa.article_lint import check_article_text, repair_article_text, repair_unbound_author_year
 from qa.quota import check_literature_quota
 from qa.models import QACheckResult, QASummary
 from qa.rules import QACheckStatus, QARuleSet, default_rule_set
@@ -55,6 +55,7 @@ class QARunner:
         # 0) 正文可读性与引用排版体检
         try:
             repairs = repair_article_text(sections, papers=papers)
+            repairs.extend(repair_unbound_author_year(sections, papers))
             r = check_article_text(sections, papers=papers)
             if repairs:
                 r.metrics["auto_repairs"] = repairs

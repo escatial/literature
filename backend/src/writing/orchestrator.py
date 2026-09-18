@@ -1004,6 +1004,16 @@ def _run_post_write_qa(
             on_fail=_soft_on_fail,
         )
         summary = payload.get("summary", {}) if payload else {}
+        internal_repairs = []
+        for item in summary.get("results", []) if isinstance(summary, dict) else []:
+            if item.get("check_id") == "article_lint_001":
+                internal_repairs = item.get("metrics", {}).get("auto_repairs", []) or []
+                break
+        if internal_repairs:
+            auto_repairs.extend(internal_repairs)
+            reference_list, _ = apply_citation_numbering(sections, papers)
+            if attempt == 0:
+                continue
         if summary.get("overall") != "fail":
             break
         from qa.article_lint import repair_article_text

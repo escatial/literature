@@ -158,6 +158,67 @@ def repair_article_text(sections: list[SectionResult], papers=None) -> list[dict
     return repairs
 
 
+def repair_unbound_author_year(sections: list[SectionResult], papers) -> list[dict]:
+    """为正文中未绑定编号的作者年份夹注补上对应的数字锚点。
+
+    仅处理能由当前文献池唯一确定的作者+年份；无法唯一匹配时不猜测，
+    交给章节重写流程，避免把错误编号绑定到错误文献。
+    """
+    if not papers:
+        return []
+    candidates: dict[tuple[str, str], list] = {}
+    for paper in papers:
+        year = str(getattr(paper, "year", 0) or "")
+        if not year:
+            continue
+        for raw in (getattr(paper, "authors", None) or []):
+            author = str(raw or "").strip()
+            if not author:
+                continue
+            compact = re.sub(r"[^一-鿿A-Za-z-]", "", author)
+            if not compact:
+                continue
+            surname = compact if re.search(r"[一-鿿]", compact) else compact.split("-")[-1]
+            for key in {compact.lower(), surname.lower()}:
+                candidates.setdefault((key, year), []).append(paper)
+    repairs = []
+    author_year_re = re.compile(
+        r"(?P<author>[一-鿿]{2,8}|[A-Z][A-Za-z-]{1,32}(?:\s+et\s+al\.)?)"
+        r"\s*[（(]\s*(?P<year>(?:19|20)\d{2})\s*[）)]"
+    )
+    for section in sections:
+        if getattr(section, "key", "") == "comment":
+            continue
+        text = section.content or ""
+        changed = False
+        def replace(match):
+            nonlocal changed
+            author = match.group("author").strip()
+            year = match.group("year")
+            key = re.sub(r"[^一-鿿A-Za-z-]", "", author).lower()
+            options = candidates.get((key, year), [])
+            if not options and key.endswith("et al"):
+                key = key[:-5].strip()
+                options = candidates.get((key, year), [])
+            unique = {p.lit_id: p for p in options}
+            if len(unique) != 1:
+                return match.group(0)
+            paper = next(iter(unique.values()))
+            # 已有同句数字编号则无需处理。
+            sentence_end = re.search(r"[。！？!?；;\n]", text[match.end():])
+            end = match.end() + (sentence_end.start() if sentence_end else len(text))
+            sentence = text[:end]
+            if re.search(r"\[\d{1,3}\]", sentence[match.start():]):
+                return match.group(0)
+            changed = True
+            return match.group(0) + f"[lit_{paper.lit_id.removeprefix('lit_')}]"
+        new_text = author_year_re.sub(replace, text)
+        if changed and new_text != text:
+            section.content = new_text
+            repairs.append({"section_key": section.key, "changes": ["作者年份夹注自动绑定文献编号"]})
+    return repairs
+
+
 def _raw_numeric_anchor_issues(text: str):
     """找出所在句没有作者(年份)夹注的数字锚点。"""
     for match in _RAW_NUMERIC.finditer(text or ""):
