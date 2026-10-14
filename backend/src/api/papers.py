@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from db.models import PaperModel
+from db.models import PaperModel, RetrievalHistoryModel
 from retrieval.paper_identity import build_identity_key, repair_paper_fields, validate_paper_identity
 from db.schemas import (
     BatchSelectRequest,
@@ -163,6 +163,62 @@ def list_papers(
         page_size=page_size,
         total_pages=total_pages or 1,
     )
+
+
+@router.get("/task-topic")
+def get_task_topic(
+    x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    db: Session = Depends(get_db),
+):
+    """解析当前任务的研究主题(供写作页自动填充)。
+
+    1. 直接命中:该任务自己检索产生的历史(history.task_id 与 papers.task_id 同源)。
+    2. 内容回退:「查看历史」把文献恢复进新任务池时 history.task_id 仍是原始任务,
+       此时按池内 lit_id 与历史快照的重合度找来源(重合过半才认定)。
+    查不到(如纯手动导入)返回空串,前端保持输入框原状。
+    必须注册在 /{lit_id} 之前,否则路径会被吞。
+    """
+    task_id = _resolve_task_id(x_task_id)
+    row = db.execute(
+        select(RetrievalHistoryModel)
+        .where(RetrievalHistoryModel.task_id == task_id)
+        .order_by(RetrievalHistoryModel.created_at.desc())
+        .limit(1)
+    ).scalars().first()
+    if row and (row.topic or "").strip():
+        return {"topic": row.topic}
+
+    pool_ids = set(
+        db.execute(
+            select(PaperModel.lit_id).where(PaperModel.task_id == task_id)
+        ).scalars()
+    )
+    if pool_ids:
+        from retrieval.history_service import _HISTORY_KEEP
+
+        best_row: RetrievalHistoryModel | None = None
+        best_overlap = 0
+        histories = db.execute(
+            select(RetrievalHistoryModel)
+            .order_by(RetrievalHistoryModel.created_at.desc())
+            .limit(_HISTORY_KEEP)
+        ).scalars()
+        for h in histories:
+            snap_ids = {
+                s.get("lit_id")
+                for s in (h.papers_snapshot or [])
+                if isinstance(s, dict) and s.get("lit_id")
+            }
+            overlap = len(pool_ids & snap_ids)
+            if overlap > best_overlap:
+                best_row, best_overlap = h, overlap
+        if (
+            best_row is not None
+            and best_overlap >= len(pool_ids) // 2
+            and (best_row.topic or "").strip()
+        ):
+            return {"topic": best_row.topic}
+    return {"topic": ""}
 
 
 @router.get("/{lit_id}", response_model=PaperOut)

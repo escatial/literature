@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Generator
 
@@ -68,11 +69,24 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
 }
 
 _clients: dict[str, OpenAI] = {}
+# 记录上一次 messages_create 成功调用的 provider id。主要用于
+# 主题阶段的结构化决策日志(如 provider 列、息该实际落在哪一级),
+# 以及 harness 绕圈重试时决定是否切换 provider。这个 contextvar
+# 起始为 None; 调用后由 _create_with_provider 在成功分支后设置。测试可以直接
+# 调用 set_last_used_provider("minimax") 注入假数据。
+last_used_provider: ContextVar[str | None] = ContextVar("last_used_provider", default=None)
 
-# v7.1 默认锁定只用 minimax。
-# - deepseek / gpt 的配置(MINIMAX_BASE_URL/GPT_BASE_URL/DEEPSEEK_BASE_URL 等)保留,
-#   不再被自动 fallback 使用;若用户希望切回,可在 .env 设置
-#   LLM_FALLBACK_ORDER=minimax,deepseek(逗号分隔)显式启用。
+def set_last_used_provider(pid: str | None) -> None:
+    """Test/observability hook: 手动设置上一次成功调用的 provider。"""
+    last_used_provider.set(pid)
+
+
+# 默认锁定 minimax 单 provider。历史的多级降级(minimax -> deepseek -> gpt)
+# 会在首选故障时把请求悄悄换到别的模型，主题/正文质量漂移且排因困难；
+# 现在 minimax 故障直接向调用方抛出真实错误，由前端原样展示给用户。
+# 如需临时启用其他 provider，在 .env 设置 LLM_FALLBACK_ORDER=minimax,deepseek。
+# fallback 链仅在遇到鉴权/限流/网关/超时类瞬时错误时触发，
+# 模型能力/JSON 截断类问题不会切换 provider。
 DEFAULT_FALLBACK_ORDER: tuple[str, ...] = ("minimax",)
 # 触发起切换的瞬时错误白名单:鉴权失败 / 限流 / 网关错误 / 请求超时等
 # 不把"模型能力不够 / JSON 截断 / 内容审查拒绝"纳入,这类问题换 provider 也没用。
@@ -238,10 +252,15 @@ def get_client(provider: str | None = None, timeout: float | None = None) -> Ope
     timeout_value = timeout if timeout is not None else 300.0
     key = _client_key(resolved.id, timeout_value)
     if key not in _clients:
+        # SDK 内部重试关闭:openai>=1 在 client 创建时默认开启 max_retries=2,
+        # 与外层 messages_create(max_retries=1) 叠加导致单次调用在客户端侧
+        # 多等 4-7 秒并输出 'Retrying request to /chat/completions'。重试完全
+        # 交给外层 fallback 链路，不再让 SDK 内部静默重试。
         _clients[key] = OpenAI(
             api_key=resolved.api_key,
             base_url=resolved.base_url,
             timeout=timeout_value,
+            max_retries=0,
         )
     return _clients[key]
 
@@ -534,7 +553,10 @@ def _create_with_provider(
             if isinstance(user, str) and "json" not in user.lower():
                 user = user + "\n\n请用合法 JSON 格式返回结果。"
 
-    for attempt in range(max_retries):
+    # max_retries=0 表示"只调一次、不重试"(格式修复等短调用依赖该语义),
+    # range(0) 会让循环体一次都不跑、last_err 停留在 None,最终 raise None
+    # 变成 TypeError: exceptions must derive from BaseException。
+    for attempt in range(max(1, max_retries)):
         try:
             client = get_client(provider=resolved.id, timeout=timeout)
             if resolved.mode == "responses":
@@ -572,6 +594,7 @@ def _create_with_provider(
                     if reasoning.strip():
                         content = re.sub(r"</?think>", "", reasoning).strip()
             _record_provider_status(resolved.id, success=True, error=None)
+            last_used_provider.set(resolved.id)
             return content
         except APIConnectionError as e:
             last_err = e
@@ -609,7 +632,9 @@ def _create_with_provider(
     if last_err is not None:
         _record_provider_status(resolved.id, success=False, error=str(last_err))
     log.error("provider %s 重试 %s 次仍失败: %s", resolved.id, max_retries, last_err)
-    raise last_err  # type: ignore[misc]
+    if last_err is None:
+        last_err = RuntimeError(f"provider {resolved.id} 未执行任何请求即退出(max_retries={max_retries})")
+    raise last_err
 
 
 def _create_fallback(

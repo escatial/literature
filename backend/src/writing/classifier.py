@@ -8,6 +8,7 @@ import json as _json
 import logging
 import math
 import re as _re
+import time
 from dataclasses import dataclass, field
 
 from prompts.service import parse_llm_json, render
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 class Group:
     name: str
     lit_ids: list[str] = field(default_factory=list)
+    research_question: str | None = None
 
 
 # 通用兜底组名,不作为学术章节标题使用
@@ -44,6 +46,9 @@ _EN_FRAGMENT_GROUP_RE = _re.compile(
 )
 _PLACEHOLDER_GROUP_RE = _re.compile(
     r"^(?:(?:主题(?:方向)?|文献子主题|研究议题|研究主题|研究方向)|.*子主题)\s*[一二三四五六七八九十0-9]+$"
+    # 模型照抄 prompt/格式示例的占位名("主题名"/"<组名>"/"示例主题"等):
+    # 整词拒绝,交给证据重命名链路,不能让占位词出现在确认面板。
+    r"|^[<【(\"“‘']?(?:中文|示例|学术|新)?(?:主题名称|主题名|组名|标题名|主题|分组)[>】)\"”'']?$"
 )
 _CHINESE_SOURCES = frozenset({Source.CNKI, Source.USER_IMPORTED})
 _KEYWORD_CHAIN_RE = _re.compile(r"^(?:[\u4e00-\u9fff]{1,3}与){2,}[\u4e00-\u9fff]{1,4}$")
@@ -87,9 +92,20 @@ _TRUNCATED_GROUP_SUFFIX_RE = _re.compile(r"(?:与|和|及|的|等|之|其)$")
 _TITLE_LEAD_RE = _re.compile(r"^(?:基于|面向|考虑|关于|针对|采用|通过)")
 # 组名长度上限:超出 12 字的 LLM 描述倾向堆砌,不再像标题
 _GROUP_NAME_MAX_LEN = 20
+# 两遍式阈值:达到该规模的主题池走「全局定轴 → 固定主题归组」两遍式,
+# 小池子单次调用一步完成定轴+归组。模块级常量便于测试覆盖默认行为。
+_CHUNK_THRESHOLD = 30
+# 拒绝“与/和/及/以及”这类并列连接词。两侧均为内容词时说明 LLM 把两
+# 个研究主题合并了，应当重划。单侧为词中字符(如“载人与”/“需求和”)也
+# 会让标题读起来像“未定主语”的堆叠短语，一律拒绝。
+_COORDINATING_GROUP_RE = _re.compile(r"[与和及]|(?:以及)")
 
 
-def _group_name_acceptable(name: str) -> bool:
+def _group_name_acceptable(
+    name: str,
+    *,
+    pool_language: str | None = None,
+) -> bool:
     """组名是否可作为学术综述章节标题。
 
     硬约束:
@@ -108,11 +124,17 @@ def _group_name_acceptable(name: str) -> bool:
         return False
     if _PLACEHOLDER_GROUP_RE.fullmatch(name):
         return False
-    if _KEYWORD_CHAIN_RE.fullmatch(name):
-        return False
-    if name in _GENERIC_GROUP_NAMES or name in _NARRATIVE_GROUP_NAMES:
+    if _COORDINATING_GROUP_RE.search(name):
         return False
     if len(name) > 2 and _TRUNCATED_GROUP_SUFFIX_RE.search(name):
+        return False
+    # 个案研究尾缀碎片("以乳山市为例")是论文标题的副标题片段,
+    # 不是研究主题;整词拒绝,交给证据重命名。
+    if _re.fullmatch(r"以.{1,16}为例", name):
+        return False
+    # 伪装的兜底桶:"特定XX综合研究/XX概述/XX总结"本质是"其他"组,
+    # 说明模型没有给出可比较的主题边界,一律拒绝。
+    if _re.search(r"(?:综合|概述|概览|总结)(?:研究|分析|评述|进展)?$", name):
         return False
     chinese_chars = _re.findall(r"[\u4e00-\u9fff]", name)
     latin_words = [w.lower() for w in _re.findall(r"[A-Za-z][A-Za-z0-9-]*", name)]
@@ -122,6 +144,19 @@ def _group_name_acceptable(name: str) -> bool:
         meaningful = [w for w in latin_words if w not in _ENGLISH_STOPWORDS]
         if len(name) > 80 or not meaningful:
             return False
+        # 中文主题池下，纯英文通用话术("E-commerce marketing strategies"
+        # 这种) 不能作为一级主题 — 它反映的是英文营销通用词而不是
+        # 本组文献的具体研究问题。
+        # 中文主题池:拒绝纯英文通用词短语(没有中文字符且没有学术缩写)。
+        # 判定方式:整段字符串不含中文字符且没有 B2B/AI/IoT 这类缩写就被拒;
+        # 真正的中文学术主题(包括短中英混合)都会被保留。
+        # 注意:不再按 60 字符长度放行 —— 线上案例里 62/75 字符的英文长名
+        # 正是从这个口径漏进中文综述确认面板的。
+        if pool_language == "zh":
+            has_chinese = any("\u4e00" <= ch <= "\u9fff" for ch in name)
+            if not has_chinese:
+                if not _re.search(r"\b(?:[A-Z]{2,}|[A-Z]\d[A-Z]?)\b", name):
+                    return False
         return True
     if len(name) > _GROUP_NAME_MAX_LEN:
         return False
@@ -161,14 +196,14 @@ def _clean_group_name(name: str) -> str:
 
 
 def _looks_like_title_prefix(name: str, papers: list[Paper], lit_ids: list[str]) -> bool:
-    """拒绝模型把长标题截断后直接当作主题名。"""
+    """拒绝模型把长标题截断后直接当作主题名(含与某篇标题完全相同的情形)。"""
     compact_name = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", name or "")
     if len(compact_name) < 6:
         return False
     by_id = {p.lit_id: p for p in papers}
     for lit_id in lit_ids:
         title = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", by_id.get(lit_id).title if by_id.get(lit_id) else "")
-        if title and len(title) > len(compact_name) and title.startswith(compact_name):
+        if title and len(title) >= len(compact_name) and title.startswith(compact_name):
             return True
     return False
 
@@ -297,69 +332,31 @@ def _finalize_theme_groups(
         if not ids:
             continue
         name = _clean_group_name(group.name)
+        _pool_lang = _pool_dominant_language(papers)
         if (
-            not _group_name_acceptable(name)
+            not _group_name_acceptable(name, pool_language=_pool_lang)
             or _looks_like_title_prefix(name, papers, ids)
             or _group_name_conflicts(name, seen_names)
         ):
             name = _unique_evidence_group_name(
                 papers, ids, seen_names, len(normalized) + 1,
             )
-        if not name or not _group_name_acceptable(name) or _group_name_conflicts(name, seen_names):
+        if not name or not _group_name_acceptable(name, pool_language=_pool_lang) or _group_name_conflicts(name, seen_names):
             continue
-        normalized.append(Group(name=name, lit_ids=ids))
+        normalized.append(
+            Group(name=name, lit_ids=ids, research_question=group.research_question)
+        )
         seen_ids.update(ids)
         seen_names.add(name)
 
     if not normalized:
-        normalized = _deterministic_fallback_groups(papers, topic)
-        return normalized
+        raise ValueError("主题结果没有形成可验证的研究问题边界，请重新划分")
 
     # 漏分文献按标题相似度回收到最接近的主题，保证分类覆盖全集。
     _reassign_orphans(papers, [p.lit_id for p in papers if p.lit_id not in seen_ids], normalized)
 
-    target = min(_desired_auto_groups(len(papers)), len(papers))
-    # 若模型只给出过少主题，拆分最大簇；拆分名仍从真实标题提取。
-    while len(normalized) < target:
-        source = max(normalized, key=lambda g: len(g.lit_ids))
-        if len(source.lit_ids) < 2:
-            break
-        cut = max(1, len(source.lit_ids) // 2)
-        moved = source.lit_ids[cut:]
-        source.lit_ids = source.lit_ids[:cut]
-        new_name = _unique_evidence_group_name(
-            papers, moved, {g.name for g in normalized}, len(normalized) + 1,
-        )
-        if not new_name:
-            # 标题短语不足时保留原组名并拒绝伪造新标题；下一轮会停止。
-            source.lit_ids.extend(moved)
-            break
-        normalized.append(Group(name=new_name, lit_ids=moved))
-
-    # 不能让“目标 4 组、实际 2 组”的退化结果进入正文。重新用确定性
-    # 标题证据聚类，并再次收敛名称；该分支不依赖领域词典或 LLM。
-    if len(normalized) < target:
-        fallback = _deterministic_fallback_groups(papers, topic)
-        fallback_normalized: list[Group] = []
-        used: set[str] = set()
-        for index, fallback_group in enumerate(fallback, start=1):
-            ids = [lid for lid in fallback_group.lit_ids if lid in valid]
-            name = _unique_evidence_group_name(papers, ids, used, index)
-            if ids and name:
-                fallback_normalized.append(Group(name=name, lit_ids=ids))
-                used.add(name)
-        if len(fallback_normalized) >= target:
-            normalized = fallback_normalized
-            seen_ids = {lid for group in normalized for lid in group.lit_ids}
-            _reassign_orphans(
-                papers,
-                [p.lit_id for p in papers if p.lit_id not in seen_ids],
-                normalized,
-            )
-
     normalized = [g for g in normalized if g.lit_ids]
-    _rebalance_language_groups(normalized, papers)
-    return normalized
+    return _balance_oversize_groups(papers, normalized, topic)
 
 
 def _groups_acceptable(groups: list[Group]) -> bool:
@@ -456,15 +453,17 @@ def classify_by_locale(papers: list[Paper]) -> list[Group]:
 
 
 def _salvage_groups_json(raw: str) -> list[dict] | None:
-    """从「分析文字 + JSON」混合输出中抢救 groups 数组。
+    """从「分析文字 + JSON」混合输出中抢救 groups/themes 数组。
 
     MiniMax 偶发无视 json_object 约束,先写大段分析过程再给 JSON;
     parse_llm_json 只认「整段是合法 JSON」,这里做括号配对二次抢救。
     返回 None 表示全文确实没有可解析的 {"groups": [...]} 结构(如被截断)。
     """
-    marker = raw.find('{"groups"')
-    if marker == -1:
-        marker = raw.find('{ "groups"')
+    marker = -1
+    for head in ('{"groups"', '{ "groups"', '{"themes"', '{ "themes"'):
+        marker = raw.find(head)
+        if marker != -1:
+            break
     if marker == -1:
         return None
     depth = 0
@@ -492,7 +491,13 @@ def _salvage_groups_json(raw: str) -> list[dict] | None:
                 except Exception:
                     depth = 0  # 伪闭合(JSON 无效),继续向后找完整结构
                     continue
-                groups = obj.get("groups") if isinstance(obj, dict) else None
+                groups = None
+                if isinstance(obj, dict):
+                    for key in ("groups", "themes", "clusters", "categories"):
+                        value = obj.get(key)
+                        if isinstance(value, list):
+                            groups = value
+                            break
                 if isinstance(groups, list):
                     return [item for item in groups if isinstance(item, dict)]
                 return None
@@ -508,6 +513,9 @@ def _salvage_truncated_groups(raw: str) -> list[dict] | None:
     _reassign_orphans 按标题相似度归组 —— 截断不再等于整体失败。
     """
     marker = raw.find('"groups"')
+    themes_marker = raw.find('"themes"')
+    if themes_marker != -1 and (marker == -1 or themes_marker < marker):
+        marker = themes_marker
     if marker == -1:
         return None
     arr_start = raw.find("[", marker)
@@ -620,7 +628,62 @@ def _parse_group_response(raw: str) -> list[dict]:
     return []
 
 
+def _repair_invalid_group_response(raw: str, *, topic: str, papers: list[Paper],
+                                   progress=None) -> list[dict]:
+    """将模型已明确给出的 Markdown/自然语言分组修复为结构化 JSON。
+
+    这里只做格式转换，不重新设计主题，也不允许模型补造文献编号；
+    这样可以把协议违约从“0 主题”转换成可审计的修复步骤。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    catalog = "\n".join(f"#{i + 1} {p.title}" for i, p in enumerate(papers))
+    system = (
+        "你是结构化输出修复器。把给定的文献主题分组说明转换成 JSON。"
+        "只能保留原文明确出现的主题名称和编号，不能新增、改写或猜测主题，"
+        "ids 只能使用文献目录中的编号。只输出 JSON，不要解释。"
+    )
+    user = (
+        f"研究主题：{topic}\n文献目录：\n{catalog}\n\n"
+        f"原始分组结果：\n{text[:12000]}\n\n"
+        '输出格式：{"groups":[{"name":"<主题名>","ids":[1,2,3]}]}；'
+        "只输出 JSON。name 必须是 3-12 字、概括该组文献的具体中文名词短语,"
+        "严禁照抄示例里的占位文字。"
+    )
+    if progress:
+        progress({"kind": "format_repair_started", "message": "正在修复主题分类输出格式..."})
+    import threading as _thr_rep
+    _hb_stop = _thr_rep.Event()
+    _heartbeat_progress(
+        progress,
+        {"papers": len(papers), "stage": "format_repair"},
+        _hb_stop, interval=5.0,
+    )
+    try:
+        try:
+            repaired = messages_create(
+                system=system, user=user, max_tokens=min(1800, max(500, len(papers) * 12)),
+                temperature=0.0, response_format={"type": "json_object"},
+                timeout=20.0, max_retries=0,
+            )
+        finally:
+            _hb_stop.set()
+        items = _parse_group_response(repaired)
+        if progress:
+            progress({"kind": "format_repair_done", "groups": len(items)})
+        return items
+    except Exception as exc:
+        logger.warning("主题分类格式修复失败: %s", exc)
+        if progress:
+            progress({"kind": "format_repair_failed", "message": str(exc)[:300]})
+        return []
+
+
 def _build_groups(items: list[dict], valid_ids: set[str]) -> tuple[list[Group], set[str]]:
+
+    for item in items:
+        item.setdefault("research_question", None)
     covered: set[str] = set()
     groups: list[Group] = []
     names_seen: set[str] = set()
@@ -641,8 +704,36 @@ def _build_groups(items: list[dict], valid_ids: set[str]) -> tuple[list[Group], 
             continue
         covered.update(ids)
         names_seen.add(name)
-        groups.append(Group(name=name, lit_ids=ids))
+        groups.append(Group(name=name, lit_ids=ids, research_question=item.get("research_question")))
     return groups, covered
+
+
+def _pool_dominant_language(papers) -> str:
+    """Sniff whether a paper pool is Chinese-dominant.
+
+    Uses the Chinese-character density inside titles (and falls
+    back to source if titles are empty). We deliberately do NOT
+    also weight abstracts because chunk prompts may have
+    truncated them.
+    """
+    if not papers:
+        return "en"
+    cn_chars = 0
+    total_chars = 0
+    cn_source = sum(
+        1 for paper in papers
+        if getattr(paper, "source", "") in (Source.CNKI, Source.USER_IMPORTED)
+    )
+    for paper in papers:
+        text = (getattr(paper, "title", "") or "").strip()
+        if not text:
+            continue
+        total_chars += len(text)
+        cn_chars += sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    cn_share = (cn_chars / total_chars) if total_chars else 0
+    src_share = cn_source / len(papers)
+    combined = 0.6 * cn_share + 0.4 * src_share
+    return "zh" if combined >= 0.4 else "en"
 
 
 def _min_groups(n_papers: int) -> int:
@@ -718,6 +809,189 @@ def _reassign_orphans(papers: list[Paper], rest: list[str], groups: list[Group])
         best.lit_ids.append(p.lit_id)
 
 
+def _split_group_balanced(
+    papers: list[Paper],
+    group: Group,
+    cap: int,
+    topic: str,
+    used_names: set[str],
+    depth: int = 0,
+) -> list[Group]:
+    """把单个超大组按组内标题相似度分散种子拆成 ≤cap 的均衡子组(确定性,零 LLM)。
+
+    相似度不可分(并列/全零)时按序号轮转,保证子组规模均衡且不丢文献;
+    子组名优先取组内真实标题证据,取不到时用「父组名·第N部分」消歧。
+    """
+    by_id = {p.lit_id: p for p in papers}
+    members = [by_id[lid] for lid in group.lit_ids if lid in by_id]
+    k = math.ceil(len(members) / cap)
+    if k <= 1 or depth >= 2 or len(members) < 2:
+        return [group]
+    seeds = [members[round(i * (len(members) - 1) / (k - 1))] for i in range(k)]
+    sims = [
+        [_title_similarity(paper.title, seeds[j].title) for j in range(k)]
+        for paper in members
+    ]
+    # 贪心轮转分配:每轮把与当前种子最相似且尚未分配的成员划给它。
+    # 桶规模由构造保证均衡(≤ceil(n/k)≤cap),不受同质标题下相似度
+    # 细微差异导致的 argmax 一边倒影响(argmax 会拆出 60/8/7 这种桶)。
+    per = math.ceil(len(members) / k)
+    remaining = list(range(len(members)))
+    buckets: list[list[str]] = []
+    for j in range(k):
+        remaining.sort(key=lambda i: (-sims[i][j], i))
+        take = max(1, min(per, len(remaining) - (k - 1 - j)))
+        chosen = remaining[:take]
+        buckets.append([members[i].lit_id for i in chosen])
+        remaining = remaining[take:]
+    buckets[-1].extend(members[i].lit_id for i in remaining)
+    parts: list[Group] = []
+    for j, bucket in enumerate(b for b in buckets if b):
+        payload = Group(name=group.name, lit_ids=bucket,
+                        research_question=group.research_question)
+        if len(bucket) > cap and depth + 1 < 2:
+            parts.extend(_split_group_balanced(
+                papers, payload, cap, topic, used_names, depth + 1,
+            ))
+            continue
+        name = _unique_evidence_group_name(papers, bucket, used_names, j + 1)
+        if not name or _group_name_conflicts(name, used_names) or not _group_name_acceptable(name):
+            base = _clean_group_name(group.name) or _clean_group_name(topic) or "研究综述"
+            base_name = f"{base[:12]}·第{j + 1}部分"
+            name = base_name
+            counter = 2
+            while _group_name_conflicts(name, used_names) or not _group_name_acceptable(name):
+                name = f"{base_name}({counter})"
+                counter += 1
+        payload.name = name
+        used_names.add(name)
+        parts.append(payload)
+    return parts
+
+
+def _balance_oversize_groups(
+    papers: list[Paper], groups: list[Group], topic: str,
+) -> list[Group]:
+    """拆分过度集中的巨型主题组,防止「90 篇里 75 篇挤进一个泛化主题」复发。
+
+    上限与 harness 的 theme_balance 检查(最大主题过半即失衡)对齐:真主题
+    允许长到一半 —— 证据密集的问题簇就该是大章节,35% 时代的强拆只会把
+    完整主题肢解成伪主题;超过一半说明定轴失败,原地拆成均衡子组保住可写性。
+    小池子(<16 篇)不做处理。
+    """
+    if len(papers) < 16 or not groups:
+        return groups
+    cap = max(12, math.ceil(len(papers) * 0.5))
+    if not any(len(g.lit_ids) > cap for g in groups):
+        return groups
+    used_names = {g.name for g in groups}
+    result: list[Group] = []
+    for group in groups:
+        if len(group.lit_ids) <= cap:
+            result.append(group)
+            continue
+        # 父组被拆散,其名字不再占用;子组名从组内标题证据重新取证。
+        used_names.discard(group.name)
+        result.extend(_split_group_balanced(papers, group, cap, topic, used_names))
+    return [g for g in result if g.lit_ids]
+
+
+def _retitle_groups_for_pool(
+    papers: list[Paper], groups: list[Group], topic: str, progress=None,
+) -> list[Group]:
+    """池级主题名统一校验:语言一致性 + 泛化名/标题碎片,证据重命名优先。
+
+    分块各自 finalize 时用的是块内主导语言,交错分块下含英文文献的块可能
+    给出英文主题名;二级归并/超限折叠产生的新组合名也不再经过池级校验
+    (线上案例:中文综述确认面板出现英文章节名和"以乳山市为例")。这里以
+    全池主导语言重校:能从组内证据重命名的直接重命名;纯英文文献组交给
+    一次批量 LLM 改名;LLM 失败保留原名(结构优先,用户可手动改名)。
+    """
+    if not groups:
+        return groups
+    pool_lang = _pool_dominant_language(papers)
+    used = {g.name for g in groups}
+    need_llm: list[Group] = []
+    for index, group in enumerate(groups, start=1):
+        name_ok = _group_name_acceptable(group.name, pool_language=pool_lang)
+        title_copy = _looks_like_title_prefix(group.name, papers, group.lit_ids)
+        if name_ok and not title_copy:
+            continue
+        renamed = _unique_evidence_group_name(
+            papers, group.lit_ids, used - {group.name}, index,
+        )
+        renamed_ok = (
+            renamed
+            and renamed not in used
+            and _group_name_acceptable(renamed, pool_language=pool_lang)
+            and not _looks_like_title_prefix(renamed, papers, group.lit_ids)
+        )
+        if renamed_ok:
+            used.discard(group.name)
+            used.add(renamed)
+            group.name = renamed
+        else:
+            need_llm.append(group)
+    if not need_llm:
+        return groups
+    if progress:
+        progress({
+            "kind": "retitle_started",
+            "count": len(need_llm),
+            "message": f"正在规范化 {len(need_llm)} 个主题的命名(语言一致性/泛化名)...",
+        })
+    new_names = _llm_retitle_group_names(topic, pool_lang, need_llm, papers)
+    for group, new_name in zip(need_llm, new_names):
+        if (new_name
+                and new_name not in used
+                and _group_name_acceptable(new_name, pool_language=pool_lang)):
+            used.discard(group.name)
+            used.add(new_name)
+            group.name = new_name
+    return groups
+
+
+def _llm_retitle_group_names(
+    topic: str, pool_lang: str, groups: list[Group], papers: list[Paper],
+) -> list[str]:
+    """一次批量调用,把不合格主题名改写为池语言的学术主题名。
+
+    只做命名,不动任何文献归属;失败时返回空串列表,调用方保留原名。
+    """
+    by_id = {p.lit_id: p for p in papers}
+    lines = []
+    for index, group in enumerate(groups, start=1):
+        reps = [by_id[lid].title for lid in group.lit_ids[:3] if lid in by_id]
+        lines.append(f"#{index} 当前主题名:{group.name} | 代表文献:{'；'.join(reps)}")
+    target = "中文" if pool_lang == "zh" else "English"
+    try:
+        raw = messages_create(
+            system=(
+                "你是学术综述主题命名器。把给定的主题名逐条改写为简明、相互区分的学术主题名。"
+                "概括各组文献共同回答的研究问题;不使用'综合研究''概述'等泛化词,"
+                "不使用'以XX为例'这类个案研究副标题,也不照抄任何单篇文献标题;"
+                "名称内部不要使用'与/和/及'连接词。只输出JSON。"
+            ),
+            user=(
+                f"研究主题:{topic}\n目标语言:{target}(3-12字,语言必须一致)\n"
+                + "\n".join(lines)
+                + '\n只输出:{"names":["主题名1","主题名2"]},数量必须与输入一致。'
+            ),
+            max_tokens=1000, temperature=0.2,
+            response_format={"type": "json_object"},
+            timeout=30.0, max_retries=1,
+        )
+        data = parse_llm_json(raw)
+        names_raw = data.get("names", []) if isinstance(data, dict) else []
+        cleaned = [_clean_group_name(str(item)) for item in names_raw]
+        while len(cleaned) < len(groups):
+            cleaned.append("")
+        return cleaned
+    except Exception as exc:
+        logger.warning("主题名批量改写失败,保留原名: %s", exc)
+        return [""] * len(groups)
+
+
 def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Group]:
     """LLM 不可用时的可写作兜底：按标题相似度稳定拆成多组。
 
@@ -790,7 +1064,22 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
                     label = candidate
                     break
         if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label):
-            # 无法从标题获得可靠差异时合并回已有主题，而不是产出伪标题。
+            # 标题高度同质、各桶证据名同名冲突时，用代表标题中文前缀+序号
+            # 消歧（与 _semantic_cluster_groups 的 base+index 先例一致，根
+            # 仍是真实文献标题而非占位词）。不能把所有桶并回一组：几十篇
+            # 并成单主题既没法写章节，也过不了最低主题数结构核查。
+            representative = next(
+                (by_id[lid] for lid in bucket if _is_chinese_paper(by_id.get(lid))),
+                by_id[bucket[0]],
+            )
+            chinese = "".join(_re.findall(r"[\u4e00-\u9fff]", representative.title or ""))[:8]
+            base = chinese or _clean_group_name(topic) or "研究综述"
+            candidate = f"{base[:9]}{i + 1}"
+            if _group_name_acceptable(candidate):
+                groups.append(Group(name=candidate, lit_ids=bucket))
+                used_names.add(candidate)
+                continue
+            # 实在无法命名时合并回已有主题，而不是产出伪标题。
             if groups:
                 groups[0].lit_ids.extend(x for x in bucket if x not in groups[0].lit_ids)
             continue
@@ -804,7 +1093,7 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
             return [Group(name=label, lit_ids=[p.lit_id for p in papers])]
     covered = {lid for g in groups for lid in g.lit_ids}
     _reassign_orphans(papers, [p.lit_id for p in papers if p.lit_id not in covered], groups)
-    return groups
+    return _balance_oversize_groups(papers, groups, topic)
 
 
 def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> list[Group]:
@@ -938,6 +1227,36 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
             group.name = (base[:9] + str(index)).strip()
         used_names.add(group.name)
     groups = [g for g in groups if g.lit_ids]
+    # 退化防护:同质/低区分度池子里,文献与各簇中心的相似度几乎相同,
+    # k-means 会把全部文献落进同一簇、其余簇为空。单主题撑不起综述章节
+    # 结构:按分散种子+标题相似度原地重拆,相似度不可分(并列/全零)时
+    # 按序号轮转保证非退化;随后仍走统一的去重命名与 LLM 命名流程。
+    if len(groups) < 2 and n >= 9:
+        k2 = max(2, _desired_auto_groups(n))
+        seeds2 = [papers[round(i * (n - 1) / (k2 - 1))] for i in range(k2)]
+        buckets2: list[list[int]] = [[] for _ in range(k2)]
+        for i, paper in enumerate(papers):
+            sims = [_title_similarity(paper.title, seeds2[j].title) for j in range(k2)]
+            best = max(range(k2), key=lambda j: sims[j])
+            if sims[best] <= 0.0 or sims.count(sims[best]) > 1:
+                idx = i % k2
+            else:
+                idx = best
+            buckets2[idx].append(i)
+        for j in range(k2):
+            if buckets2[j]:
+                continue
+            donor = max(range(k2), key=lambda t: len(buckets2[t]))
+            if len(buckets2[donor]) > 1:
+                buckets2[j].append(buckets2[donor].pop())
+        groups = [
+            Group(
+                name=local_name(b, min(j, len(seeds) - 1)),
+                lit_ids=[papers[i].lit_id for i in b],
+            )
+            for j, b in enumerate(buckets2)
+            if b
+        ]
     if progress:
         progress({"kind": "local_cluster_done", "count": len(groups), "covered": n, "message": f"本地摘要聚类完成，共形成 {len(groups)} 个候选主题簇。"})
 
@@ -948,7 +1267,11 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
         try:
             if progress:
                 progress({"kind": "naming_started", "count": len(groups), "message": "主题簇已形成，正在生成可读主题名称..."})
-            catalog = "\n".join(f"#{i + 1} 代表标题：{papers[seeds[i]].title}；摘要：{(papers[seeds[i]].abstract or '')[:240]}" for i in range(len(groups)))
+            catalog = "\n".join(
+                f"#{i + 1} 代表标题：{(by_lid.get(groups[i].lit_ids[0]) or papers[0]).title}"
+                f"；摘要：{((by_lid.get(groups[i].lit_ids[0]) or papers[0]).abstract or '')[:240]}"
+                for i in range(len(groups))
+            )
             raw = messages_create(
                 system=(
                     "你是文献综述主题命名助手，只给已有主题簇命名，不重新分配文献。"
@@ -957,7 +1280,7 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
                 ),
                 user=(
                     f"研究主题：{topic}\n{catalog}\n"
-                    f"输出：{{\"names\":[\"4-10字中文、问题导向的学术主题\"]}}，数量必须为{len(groups)}。"
+                    f"输出：{{\"names\":[\"中文、问题导向的学术主题\"]}}，名称数量必须为{len(groups)}。"
                 ),
                 max_tokens=1200, temperature=0.2, response_format={"type": "json_object"},
                 timeout=45.0, max_retries=1,
@@ -978,21 +1301,35 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
             logger.warning("本地聚类主题命名失败，保留证据主题名: %s", exc)
     # 命名器可能少返回或返回重复名；最终再做一次全量收敛。
     used_names: set[str] = set()
+    resolved: list[Group] = []
     for index, group in enumerate(groups, start=1):
-        if not _group_name_acceptable(group.name) or group.name in used_names:
-            representative = by_lid.get(group.lit_ids[0], papers[0])
+        candidate = None
+        if _group_name_acceptable(group.name) and group.name not in used_names:
+            candidate = group.name
+        if candidate is None:
             evidence_name = local_name(
                 [i for i, paper in enumerate(papers) if paper.lit_id in set(group.lit_ids)],
                 min(index - 1, len(seeds) - 1),
             )
             if _group_name_acceptable(evidence_name) and evidence_name not in used_names:
-                group.name = evidence_name
-            else:
-                raise ValueError(
-                    f"第 {index} 个主题簇无法生成可靠名称，代表文献：{representative.title}"
-                )
+                candidate = evidence_name
+        if candidate is None:
+            # 命名模型失败且证据名冲突:用代表标题中文前缀+序号消歧,
+            # 不让单个簇的命名问题把整次可用的聚类结果作废。
+            representative = by_lid.get(group.lit_ids[0], papers[0])
+            chinese = "".join(_re.findall(r"[\u4e00-\u9fff]", representative.title or ""))[:8]
+            base = chinese or _clean_group_name(topic) or "研究综述"
+            numbered = f"{base[:9]}{index}"
+            if _group_name_acceptable(numbered) and numbered not in used_names:
+                candidate = numbered
+        if candidate is None and resolved:
+            # 仍无法命名的簇并入前一组:文献不丢、组名唯一,优于整体报错。
+            resolved[-1].lit_ids.extend(group.lit_ids)
+            continue
+        group.name = candidate or group.name
+        resolved.append(group)
         used_names.add(group.name)
-    return groups
+    return _balance_oversize_groups(papers, resolved, topic)
 
 
 def _output_token_budget(papers: list[Paper]) -> int:
@@ -1028,96 +1365,437 @@ def _map_group_items(items: list[dict], index_of: dict[str, str]) -> list[dict]:
     return mapped
 
 
-def _merge_chunk_groups(chunk_groups: list[list[Group]], papers: list[Paper], topic: str, progress=None) -> list[Group]:
-    """合并分块结果；同名主题合并，近似主题按标题相似度归并，保证全量覆盖。"""
-    merged: list[Group] = []
-    by_id = {p.lit_id: p for p in papers}
-    for groups in chunk_groups:
-        for group in groups:
-            target = next((g for g in merged if g.name == group.name), None)
-            if target is None:
-                target = Group(name=group.name, lit_ids=[])
-                merged.append(target)
-            for lid in group.lit_ids:
-                if lid not in target.lit_ids:
-                    target.lit_ids.append(lid)
-    if progress:
-        progress({
-            "kind": "merge_candidates",
-            "count": len(merged),
-            "themes": [g.name for g in merged[:20]],
-            "message": f"各文献块共形成 {len(merged)} 个候选主题，正在进行二级主题归并...",
+# ================= 两遍式主题划分:全局定轴 + 固定主题归组 =================
+# 旧分块法:每块 15 篇各自发明主题,再按标题词面相似度跨块合并。同一真主题
+# 在不同块里会被起不同名字,词面不像就永远合不回去,真主题裂成伪主题;行业词
+# 当组名又把问题维度切碎。两遍式让模型先通读全部题录定出互斥主题轴,再按固定
+# 轴归组 —— 主题命名天然跨全集一致,归组阶段不存在"合并"这一步。
+
+_AXIS_MAX = 8
+
+
+def _abstract_limit_for(papers: list[Paper], *, minimal: bool) -> int:
+    """两遍式共用的摘要截断长度:池子越大截得越短,保证单次调用放得下。"""
+    if minimal:
+        return 220
+    n = len(papers)
+    if n >= 350:
+        return 120
+    if n >= 200:
+        return 200
+    return 320
+
+
+def _catalog_lines(papers: list[Paper], abstract_limit: int) -> str:
+    """编号目录:行首短编号供模型回显,lit_id 原文绝不出现在输出协议里。"""
+    return "\n".join(
+        f"- #{i + 1} | {p.title} | {p.year or 'N/A'} | 摘要:{(p.abstract or '').strip()[:abstract_limit]}..."
+        for i, p in enumerate(papers)
+    )
+
+
+def _axis_catalog(axes: list[Group]) -> str:
+    lines = []
+    for i, axis in enumerate(axes, start=1):
+        line = f"{i}. {axis.name}"
+        if axis.research_question:
+            line += f" —— {axis.research_question}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _parse_axis_response(raw: str) -> list[dict]:
+    data = parse_llm_json(raw)
+    items: list[dict] | None = None
+    if isinstance(data, dict):
+        for key in ("themes", "groups", "clusters", "categories"):
+            value = data.get(key)
+            if isinstance(value, list):
+                items = [x for x in value if isinstance(x, dict)]
+                break
+    if items is None:
+        items = _salvage_groups_json(raw) or []
+    if items is None or not items:
+        # json_object 并不可靠:MiniMax 偶发按「Theme N: 名称 + Research
+        # question: ...」小作文输出主题轴。语义内容是好的,补文本抢救。
+        items = _salvage_text_axes(raw)
+    return items
+
+
+_THEME_HEADING_RE = _re.compile(
+    r"(?im)^\s*(?:\*{1,2})?(?:theme|主题轴|主题)\s*\d+\s*[:：.、]\s*(.+?)\s*$"
+)
+_THEME_RQ_RE = _re.compile(
+    r"(?im)^\s*(?:\*{1,2})?(?:research question|研究问题)\s*[:：]\s*(.+?)\s*$"
+)
+
+
+def _salvage_text_axes(raw: str) -> list[dict]:
+    """抢救「Theme N: 名称 … Research question: …」式自然语言主题轴。
+
+    只做格式转换:主题名与研究问题必须原文出现,不猜不补。
+    """
+    text = str(raw or "")
+    headings = list(_THEME_HEADING_RE.finditer(text))
+    axes: list[dict] = []
+    for index, match in enumerate(headings):
+        name = match.group(1).strip().strip("*#· ")
+        # 剥掉模型附带的英文对照注释("xxx - English gloss")
+        name = name.split(" - ")[0].split(" — ")[0].strip()
+        body_end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        body = text[match.end():body_end]
+        rq_match = _THEME_RQ_RE.search(body)
+        axes.append({
+            "name": name,
+            "research_question": rq_match.group(1).strip() if rq_match else "",
         })
+    return axes
 
-    # 二级聚类只传候选主题及少量代表标题，输入远小于 540 篇全文；让模型按语义
-    # 归并跨块同类主题，而不是按组名字符相似度硬压成几个大桶。
-    if len(merged) > 12:
-        catalog_lines = []
-        for index, group in enumerate(merged, start=1):
-            titles = [by_id[lid].title for lid in group.lit_ids[:3] if lid in by_id]
-            catalog_lines.append(f"#{index} {group.name} | 代表文献:{'；'.join(titles)}")
+
+def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None = None) -> list[Group]:
+    """主题轴校验:名字合格(含池语言一致性)、互斥,数量落在下限与 _AXIS_MAX。
+
+    互斥不仅查包含关系,还查 bigram 相似度 —— 「数智化驱动的企业营销策略
+    转型」与「数智化驱动的营销策略转型」互不包含却是同一主题的两种措辞,
+    同时保留会让归组阶段无所适从。不合格/相近轴丢弃,数量不足下限返回空列表。
+    """
+    axes: list[Group] = []
+    seen: set[str] = set()
+    for item in items:
+        name = _clean_group_name(str(item.get("name") or item.get("theme") or ""))
+        if not name or not _group_name_acceptable(name, pool_language=pool_language):
+            continue
+        if _group_name_conflicts(name, seen):
+            continue
+        if any(_title_similarity(name, used) >= 0.5 for used in seen):
+            continue
+        rq = str(item.get("research_question") or item.get("question") or "").strip()
+        axes.append(Group(name=name, lit_ids=[], research_question=rq or None))
+        seen.add(name)
+        if len(axes) >= _AXIS_MAX:
+            break
+    if len(axes) < max(2, _min_groups(n_papers)):
+        return []
+    return axes
+
+
+def _plan_theme_axes(
+    papers: list[Paper], topic: str, language: str, *,
+    abstract_limit: int, progress=None,
+) -> list[Group]:
+    """第一遍:单次调用通读全部题录,产出全局主题轴(名称 + 研究问题)。"""
+    catalog = _catalog_lines(papers, abstract_limit)
+    system = render(
+        "literature-review:classify-plan",
+        topic=topic,
+        papers_catalog=catalog,
+        topic_language=(language or "zh").upper(),
+        axis_min=max(2, _min_groups(len(papers))),
+    )
+    lang_name = "中文" if (language or "zh") == "zh" else "English"
+    user = (
+        f"研究主题:{topic}\n请通读以上 {len(papers)} 篇文献,输出主题划分方案。"
+        f"name 与 research_question 必须使用{lang_name}。"
+        "只输出 JSON 对象,不输出任何解释文字。"
+    )
+    # 防偷懒下限:18 篇以上的异质文献池通常不止 2 个研究问题簇,
+    # 前两次尝试少于 3 个主题轴按"未完成"返工;最后一次仍偷懒则接受,
+    # 交给确认面板人工调整,不无限重试。
+    lazy_floor = 3 if len(papers) >= 18 else max(2, _min_groups(len(papers)))
+    floor = max(2, _min_groups(len(papers)))
+    last_error: Exception | None = None
+    for attempt, temperature in ((1, 0.2), (2, 0.4), (3, 0.6)):
+        import threading as _thr_plan
+        _hb_stop = _thr_plan.Event()
+        attempt_user = user
+        if attempt >= 2:
+            attempt_user = (
+                f"{user}\n\n返工要求:上一次输出的主题轴不可用(语言不符、"
+                f"占位名、缺少 research_question 或数量不足)。主题名必须全部"
+                f"使用{lang_name};每个主题轴的 research_question 不得为空;"
+                f"至少 {lazy_floor} 个主题。"
+            )
         try:
-            raw = messages_create(
-                system=(
-                    "你是文献主题聚类助手。将候选主题按真实研究内容归并为6-10个并列的学术主题。"
-                    "不要使用机制、方法路径、研究分析、其他等空泛名称。只输出JSON。"
-                ),
-                user=(
-                    f"研究主题：{topic}\n候选主题如下：\n" + "\n".join(catalog_lines)
-                    + '\n只输出格式：{"groups":[{"name":"主题名","ids":[1,2]}]}。'
-                    "每个候选编号必须且只能出现一次。"
-                ),
-                max_tokens=6000,
-                temperature=0.2,
-                response_format={"type": "json_object"},
+            if progress:
+                progress({
+                    "kind": "llm_attempt", "attempt": attempt,
+                    "papers": len(papers), "stage": "axis_plan",
+                })
+            _heartbeat_progress(
+                progress,
+                {"attempt": attempt, "papers": len(papers), "stage": "axis_plan"},
+                _hb_stop, interval=5.0,
             )
-            meta_items = _parse_group_response(raw)
-            consolidated: list[Group] = []
-            used: set[int] = set()
-            for item in meta_items:
-                name = _clean_group_name(str(item.get("name") or item.get("theme") or ""))
-                ids = item.get("ids") or item.get("lit_ids") or []
-                indexes = []
-                for value in ids:
-                    try:
-                        idx = int(str(value).lstrip("#")) - 1
-                    except ValueError:
-                        continue
-                    if 0 <= idx < len(merged) and idx not in used:
-                        indexes.append(idx)
-                        used.add(idx)
-                if name and indexes and _group_name_acceptable(name):
-                    lit_ids = []
-                    for idx in indexes:
-                        lit_ids.extend(lid for lid in merged[idx].lit_ids if lid not in lit_ids)
-                    consolidated.append(Group(name=name, lit_ids=lit_ids))
-            if 6 <= len(consolidated) <= 12 and len(used) == len(merged):
-                merged = consolidated
-                if progress:
-                    progress({"kind": "merge_done", "count": len(merged), "themes": [g.name for g in merged]})
+            try:
+                raw = messages_create(
+                    system=system, user=attempt_user, max_tokens=2500,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                    timeout=120.0, max_retries=1,
+                )
+            finally:
+                _hb_stop.set()
         except Exception as exc:
-            logger.warning("二级主题归并失败，保留确定性候选主题: %s", exc)
-    # 主题过多时只合并“明显相近”的主题，并设置硬上限，避免全量两两
-    # 贪心合并在异常输出下退化为近似立方复杂度、长时间卡在合并阶段。
-    target_max = min(12, max(5, _desired_auto_groups(len(papers)) + 2))
-    if len(merged) > target_max:
-        merged.sort(key=lambda g: len(g.lit_ids), reverse=True)
-        kept = merged[:target_max]
-        for extra in merged[target_max:]:
-            best = max(
-                kept,
-                key=lambda g: (_title_similarity(extra.name, g.name), len(g.lit_ids)),
+            last_error = exc
+            logger.warning("主题轴规划 LLM 调用失败(attempt=%d): %s", attempt, exc)
+            if progress:
+                progress({
+                    "kind": "llm_error", "attempt": attempt,
+                    "papers": len(papers), "stage": "axis_plan",
+                    "error_type": type(exc).__name__, "message": str(exc)[:500],
+                })
+            continue
+        axes = _normalize_axes(_parse_axis_response(raw), len(papers), language)
+        if len(axes) >= floor and (len(axes) >= lazy_floor or attempt >= 3):
+            if progress:
+                progress({
+                    "kind": "axis_plan_done", "themes": [a.name for a in axes],
+                    "message": f"主题轴规划完成,共 {len(axes)} 个主题:{'、'.join(a.name for a in axes)}",
+                })
+            return axes
+        logger.warning(
+            "主题轴规划第 %d 次输出不可用(axes=%d, floor=%d, lazy_floor=%d),原文预览=%s",
+            attempt, len(axes), floor, lazy_floor, str(raw)[:300],
+        )
+    raise ValueError(
+        f"主题轴规划失败:{last_error or '模型输出不包含可用的主题方案'}"
+    )
+
+
+def _anchor_groups_to_axes(groups: list[Group], axes: list[Group]) -> list[Group]:
+    """把归组结果对齐回主题轴:按轴序输出,锚定轴的研究问题。
+
+    模型可能微调组名措辞;精确匹配失败时按去噪后的包含关系回退。匹配不到
+    任何轴的组作废,其文献由调用方按孤儿回收 —— 脱离主题轴的野组不进确认面板。
+    """
+    def _compact(name: str) -> str:
+        return _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", name or "")
+
+    by_axis: dict[int, list[Group]] = {}
+    for group in groups:
+        matched = None
+        for idx, axis in enumerate(axes):
+            if group.name == axis.name:
+                matched = idx
+                break
+        if matched is None:
+            compact = _compact(group.name)
+            for idx, axis in enumerate(axes):
+                axis_compact = _compact(axis.name)
+                if compact and axis_compact and (
+                    compact in axis_compact or axis_compact in compact
+                ):
+                    matched = idx
+                    break
+        if matched is not None:
+            by_axis.setdefault(matched, []).append(group)
+    anchored: list[Group] = []
+    for idx, axis in enumerate(axes):
+        parts = by_axis.get(idx) or []
+        ids: list[str] = []
+        for part in parts:
+            ids.extend(lid for lid in part.lit_ids if lid not in ids)
+        if ids:
+            anchored.append(Group(
+                name=axis.name, lit_ids=ids,
+                research_question=axis.research_question,
+            ))
+    return anchored
+
+
+def _assign_papers_to_axes(
+    papers: list[Paper], axes: list[Group], topic: str, *,
+    abstract_limit: int, progress=None,
+) -> list[Group]:
+    """第二遍:把每篇文献归入固定主题轴,输出与轴一一对应。
+
+    编号协议与抢救/格式修复链路复用单发路径;组名必须逐字来自主题轴,
+    脱轴输出的文献按标题相似度回收到最相近的轴。
+    """
+    index_of = {str(i + 1): p.lit_id for i, p in enumerate(papers)}
+    valid_ids = {p.lit_id for p in papers}
+    system = render(
+        "literature-review:classify-assign",
+        topic=topic,
+        theme_axes=_axis_catalog(axes),
+        axis_count=len(axes),
+        papers_catalog=_catalog_lines(papers, abstract_limit),
+    )
+    token_budget = _output_token_budget(papers)
+    axis_names_block = "\n".join(f"- {a.name}" for a in axes)
+    best: list[Group] = []
+    best_covered = -1
+    last_error: Exception | None = None
+    for attempt, temperature in ((1, 0.1), (2, 0.3), (3, 0.3)):
+        import threading as _thr_assign
+        _hb_stop = _thr_assign.Event()
+        # MiniMax 对 system 里长目录末尾的轴清单遵循度差,把允许的主题名
+        # 放到 user 消息开头(注意力权重更高的位置)并强令逐字使用。
+        attempt_user = (
+            f"研究主题:{topic}\n"
+            f"唯一允许输出的主题名(逐字使用,共 {len(axes)} 个):\n{axis_names_block}\n\n"
+            f"任务:把给定文献清单的 {len(papers)} 篇文献逐篇归入上述主题轴,"
+            "每篇恰属一组;ids 只写行首编号数字;严禁修改主题名、严禁自拟主题;"
+            "不要输出任何分析过程。只输出 JSON:"
+            '{"groups": [{"name": "<主题名>", "ids": [1, 2, 3]}]}'
+        )
+        if attempt >= 2:
+            attempt_user += (
+                f"\n\n返工要求:上一次输出没有逐字使用给定主题名。"
+                f"name 只能取自:\n{axis_names_block}"
             )
-            best.lit_ids.extend(x for x in extra.lit_ids if x not in best.lit_ids)
-        merged = kept
-    covered = {lid for g in merged for lid in g.lit_ids}
-    rest = [p.lit_id for p in papers if p.lit_id not in covered]
-    _reassign_orphans(papers, rest, merged)
-    _rebalance_language_groups(merged, papers)
-    return merged or _deterministic_fallback_groups(papers, topic)
+        raw = ""
+        try:
+            if progress:
+                progress({"kind": "llm_attempt", "attempt": attempt, "papers": len(papers), "stage": "assign"})
+            _heartbeat_progress(
+                progress,
+                {"attempt": attempt, "papers": len(papers), "stage": "assign"},
+                _hb_stop, interval=5.0,
+            )
+            try:
+                raw = messages_create(
+                    system=system, user=attempt_user, max_tokens=token_budget,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                    timeout=120.0, max_retries=1,
+                )
+            finally:
+                _hb_stop.set()
+        except Exception as exc:
+            last_error = exc
+            logger.warning("主题归组 LLM 调用失败(attempt=%d): %s", attempt, exc)
+            if progress:
+                progress({
+                    "kind": "llm_error", "attempt": attempt,
+                    "papers": len(papers), "stage": "assign",
+                    "error_type": type(exc).__name__, "message": str(exc)[:500],
+                })
+            continue
+        items = _parse_group_response(raw)
+        logger.info(
+            "主题归组响应(attempt=%d, papers=%d, 解析=%d, 原文预览=%s)",
+            attempt, len(papers), len(items), str(raw).replace("\n", " ")[:400],
+        )
+        # 逐行拆分防护(与单发路径同规则):组数 ≥ 文献数说明模型把目录
+        # 每行当成了一组,没有可用的主题边界。
+        if len(items) >= len(papers):
+            items = []
+        if not items:
+            items = _repair_invalid_group_response(
+                raw, topic=topic, papers=papers, progress=progress,
+            )
+        mapped = _map_group_items(items, index_of)
+        built, _ = _build_groups(mapped, valid_ids)
+        anchored = _anchor_groups_to_axes(built, axes)
+        covered = len({lid for g in anchored for lid in g.lit_ids})
+        if progress:
+            progress({
+                "kind": "llm_result", "attempt": attempt,
+                "papers": len(papers), "parsed_groups": len(items),
+                "valid_groups": len(anchored), "covered": covered,
+                "decision": "accept" if covered == len(papers) else "repair",
+                "themes": [g.name for g in anchored],
+            })
+        if covered > best_covered:
+            best, best_covered = anchored, covered
+        if best_covered == len(papers):
+            break
+    if not best:
+        # 轴绑定三次全败(模型无视给定轴自拟主题是 MiniMax 的常见行为)。
+        # 与其报废整个划分,不如顺水推舟:让模型按自己的判断对全量文献
+        # 直接分组一次 —— 自拟主题名经过 _build_groups/_finalize_theme_groups
+        # 的同一套名称校验链,与人工确认面板的质量底线一致。
+        if progress:
+            progress({
+                "kind": "assign_fallback_started",
+                "message": "模型未能按给定主题轴归组,改为让其自主分组...",
+            })
+        import threading as _thr_free
+        _hb_stop = _thr_free.Event()
+        free_user = (
+            f"研究主题:{topic}\n请通读以上 {len(papers)} 篇文献,按摘要中的实际"
+            "研究问题分成 3-6 个主题,每篇恰属一组;组名是简洁的中文学术名词短语,"
+            "概括该组共同回答的研究问题;ids 只写行首编号数字;不要输出分析过程。"
+            '只输出 JSON:{"groups": [{"name": "<主题名>", "ids": [1, 2, 3]}]}'
+        )
+        try:
+            _heartbeat_progress(
+                progress,
+                {"attempt": 4, "papers": len(papers), "stage": "assign_free"},
+                _hb_stop, interval=5.0,
+            )
+            try:
+                raw = messages_create(
+                    system=system, user=free_user, max_tokens=token_budget,
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                    timeout=120.0, max_retries=1,
+                )
+            finally:
+                _hb_stop.set()
+            items = _parse_group_response(raw)
+            if len(items) >= len(papers):
+                items = []
+            mapped = _map_group_items(items, index_of)
+            best, _ = _build_groups(mapped, valid_ids)
+        except Exception as exc:
+            logger.warning("主题自主分组兜底失败: %s", exc)
+    if not best:
+        raise ValueError(
+            f"主题归组失败:{last_error or '模型未把任何文献归入给定主题轴'}"
+        )
+    # 孤篇组吸收:轴方案可能留下只有 1 篇的组,写不成章节。仅当吸收后
+    # 组数仍满足最低组数要求时才合并;否则保留孤篇组交给用户在确认面板
+    # 手工处置 —— 塌缩成单组会触发 theme_count 检查,反而整体作废。
+    if len(best) > 1:
+        keep = [g for g in best if len(g.lit_ids) >= 2]
+        if len(keep) >= max(1, _min_groups(len(papers))):
+            best = keep
+    covered_ids = {lid for g in best for lid in g.lit_ids}
+    _reassign_orphans(
+        papers, [p.lit_id for p in papers if p.lit_id not in covered_ids], best,
+    )
+    return best
 
 
-def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool = True, progress=None) -> list[Group]:
+def _heartbeat_progress(progress, base_event, stop_event, interval=5.0):
+    """Daemon thread that emits a still_alive progress event every
+    ``interval`` seconds while a long HTTP call is in flight. UI
+    counter resets on each emit so the user sees we are alive.
+    """
+    if not progress:
+        return None
+    state = {"first": True, "elapsed": 0.0}
+
+    def _run():
+        while not stop_event.is_set():
+            if state["first"]:
+                state["first"] = False
+            else:
+                state["elapsed"] = round(state["elapsed"] + interval, 2)
+                try:
+                    progress({**base_event, "kind": "still_alive",
+                              "elapsed_since_call": state["elapsed"]})
+                except Exception:
+                    return
+            if stop_event.wait(interval):
+                return
+
+    import threading as _thr
+    t = _thr.Thread(target=_run, name="heartbeat", daemon=True)
+    t.start()
+    return t
+
+
+def classify_by_theme(
+    papers: list[Paper], topic: str, *, _allow_chunking: bool = True,
+    _strategy: str = "default",  # default | minimal_abstracts | local_fallback
+    _raise_on_coverage_failure: bool = True,
+    _language: str | None = None,  # "zh" | "en" | None (auto-detect)
+    _topic_language_hint: bool = True,
+    progress=None, _require_multiple: bool = True,
+) -> list[Group]:
     """主题分类:LLM 将文献归入若干主题。
 
     强约束(代码层兜底):
@@ -1133,44 +1811,41 @@ def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool 
 
     # 超大池仅作防御性本地聚类；正常写作链会先筛选到至多 100 篇，再让
     # 模型基于中英文标题与摘要统一判定研究问题，避免本地词频按语言分簇。
-    if _allow_chunking and len(papers) >= 500:
+    # 主题语言探测:由调用方显式传入或自动按文献池主力语言推断。
+    if _language is None:
+        _language = _pool_dominant_language(papers)
+    if _strategy == "local_fallback" or (_allow_chunking and len(papers) >= 500):
         if progress:
             progress({"kind": "local_cluster_started", "count": len(papers), "message": f"正在对 {len(papers)} 篇文献的标题与摘要做本地语义聚类..."})
         return _semantic_cluster_groups(papers, topic, progress=progress)
 
-    # 产品级分块：避免 80+ 篇文献一次性进入上下文。每块独立调用/重试，
-    # 单块失败时仍可由本地兜底完成，最后统一合并并校验覆盖。
-    chunk_size = 50
-    if _allow_chunking and len(papers) > 120:
-        chunk_count = max(1, math.ceil(len(papers) / chunk_size))
-        chunks = [[] for _ in range(chunk_count)]
-        # 交错分配语言属性，避免前几块全中文、后几块全英文；语言不参与主题命名。
-        for bucket in ([p for p in papers if _is_chinese_paper(p)], [p for p in papers if not _is_chinese_paper(p)]):
-            for i, paper in enumerate(bucket):
-                chunks[i % chunk_count].append(paper)
-        chunks = [c for c in chunks if c]
-        chunk_groups = []
-        for index, chunk in enumerate(chunks, start=1):
-            if progress:
-                progress({"kind": "chunk_started", "chunk": index, "total_chunks": len(chunks), "count": len(chunk)})
-            def chunk_progress(data, *, _index=index):
-                if progress:
-                    progress({**data, "chunk": _index, "total_chunks": len(chunks)})
-            result = classify_by_theme(chunk, topic, _allow_chunking=False, progress=chunk_progress)
-            chunk_groups.append(result)
-            if progress:
-                progress({
-                    "kind": "chunk_done",
-                    "chunk": index,
-                    "total_chunks": len(chunks),
-                    "count": len(chunk),
-                    "groups": len(result),
-                    "covered": len({lid for group in result for lid in group.lit_ids}),
-                    "themes": [group.name for group in result],
-                })
+    # 两遍式主题划分(≥ _CHUNK_THRESHOLD):第一遍全局定轴(模型通读全部
+    # 题录,产出互斥主题轴),第二遍按固定轴归组。主题命名跨全集一致,
+    # 不再有"块内自造主题 + 标题相似度合并"造成的主题裂变。
+    if _allow_chunking and len(papers) >= _CHUNK_THRESHOLD:
+        abstract_limit = _abstract_limit_for(
+            papers, minimal=(_strategy == "minimal_abstracts"),
+        )
         if progress:
-            progress({"kind": "merge_started", "total_chunks": len(chunks), "message": "正在合并各文献块的主题结果..."})
-        return _merge_chunk_groups(chunk_groups, papers, topic, progress=progress)
+            progress({
+                "kind": "axis_plan_started", "count": len(papers),
+                "message": f"正在通读 {len(papers)} 篇文献的标题与摘要,归纳全局主题轴...",
+            })
+        axes = _plan_theme_axes(
+            papers, topic, _language,
+            abstract_limit=abstract_limit, progress=progress,
+        )
+        groups = _assign_papers_to_axes(
+            papers, axes, topic,
+            abstract_limit=abstract_limit, progress=progress,
+        )
+        min_groups = _min_groups(len(papers))
+        if len(groups) < min_groups:
+            raise ValueError(
+                f"主题归组后仅形成 {len(groups)} 个可验证主题，至少需要 {min_groups} 个。"
+                "请检查模型返回及主题名称校验记录后重新划分。"
+            )
+        return _finalize_theme_groups(papers, groups, topic)
 
     # 分组依据:标题 + 摘要。同主题文献标题高度相似,
     # 区分「方法流派/应用情境/机制要素」的信息主要在摘要里。
@@ -1178,7 +1853,10 @@ def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool 
     index_of = {str(i + 1): p.lit_id for i, p in enumerate(papers)}
     # 主题聚类必须依据摘要证据；大池子仅缩短摘要片段，避免上下文过大。
     title_only = False
-    abstract_limit = 600 if len(papers) >= 70 else 1200
+    if _strategy == "minimal_abstracts":
+        abstract_limit = 250
+    else:
+        abstract_limit = 600 if len(papers) >= 70 else 1200
     catalog = "\n".join(
         (
             f"- #{i + 1} | {p.title} | {p.year or 'N/A'}"
@@ -1188,17 +1866,25 @@ def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool 
         for i, p in enumerate(papers)
     )
     valid_ids = {p.lit_id for p in papers}
-    min_groups = _desired_auto_groups(len(papers))
+    # 主题数量由文献证据决定，不再按篇数预设 3/4/5 组。
+    min_groups = _min_groups(len(papers)) if _require_multiple else 1
     token_budget = _output_token_budget(papers)
+    # 跨 attempt 记录最近一次 LLM 调用失败详情:minimax 单 provider 下,
+    # 最终报错必须携带真实原因(超时/欠费/限流),前端才能原样展示给用户。
+    last_llm_error: dict[str, str | None] = {"message": None}
+    provider_error_streak = [0]
 
     def _ask(attempt: int) -> list[Group]:
-        """attempt 1=常规;2=显式返工(升温+强制组数);3=极简输入兜底。"""
+        """attempt 1=常规;2=显式返工;3=极简输入重试。"""
         # 只提正向要求,不列举反面例子 —— 负面清单会诱导 LLM 联想到坏组名;
         # 组名不合格由代码校验链(_group_name_acceptable)兜底,无需 prompt 层禁令。
         topic_prefix_reminder = (
             f"\n\n## 组名要求\n"
-            f"每个组名都要像学术综述的章节标题:简洁的中文学术名词短语(4-10 字),"
+            f"每个组名都要像学术综述的章节标题:简洁、完整的中文学术名词短语,"
             f"围绕主题「{topic}」,优先概括本组共同回答的研究问题或待解释对象。"
+            "组名必须体现本组文献区别于其他组的具体研究对象或研究问题,"
+            "不能只复述研究主题本身,也不能用「一般策略」「XX研究」「XX综述」"
+            "这类可以套在整份文献池上的泛称;"
             "方法、语言、数据库、期刊不能单独构成一级主题；同组文献应能比较继承、补充、冲突或演进关系。"
         )
         # 输出纪律:MiniMax 偶发把「逐篇分析过程」当正文输出,
@@ -1218,12 +1904,12 @@ def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool 
                 for i, p in enumerate(papers)
             )
             system = (
-                "你是文献计量助手。把文献按摘要中的实际研究主题分成 2-5 组。"
+                "你是文献计量助手。把文献按摘要中的实际研究问题自然分组，分组数量由文献证据决定。"
                 "只输出 JSON 对象,不输出任何其他文字。"
             )
             user = (
                 f'主题「{topic}」的文献如下(每行:编号、标题、摘要)。'
-                f"按摘要中的实际研究主题分为 {min_groups}-5 组,组名为 4-10 字中文学术名词短语,"
+                "按摘要中的实际研究问题自然分组，主题数量由证据决定，"
                 '每篇文献恰属一组,ids 只写行首编号数字。只输出:\n'
                 '{"groups": [{"name": "<组名>", "ids": [1, 2, 3]}]}'
                 f"\n\n{catalog_min}"
@@ -1233,9 +1919,8 @@ def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool 
                 # 返工要求只在重试时出现 —— 首调就指责模型犯错会污染输出。
                 rework = (
                     f"\n\n## 返工要求(第 {attempt} 次)\n"
-                    f"上一次的分组不满足「至少 {min_groups} 组」的硬要求。"
-                    "请按研究问题/方法、应用情境、机制要素等维度拆出并列子主题,"
-                    f"共输出 {min_groups}-5 组,每组一个独立的章节式组名。\n"
+                    "上一次没有形成可用的主题边界。请重新依据摘要中的共同研究问题分组，"
+                    "不要为满足数量而硬拆或硬合。\n"
                 ) + topic_prefix_reminder
             else:
                 rework = topic_prefix_reminder
@@ -1244,84 +1929,223 @@ def classify_by_theme(papers: list[Paper], topic: str, *, _allow_chunking: bool 
                 topic=topic,
                 classify_mode="theme",
                 papers_catalog=catalog,
+                topic_language=(_language or "zh").upper(),
+                dominant_language=(_language or "zh").upper(),
             )
             # catalog 只在 system 出现一次;user 只带增量指令,避免清单双份发送
             user = f"研究主题:{topic}{rework}{output_discipline}"
+        import threading as _thr_ask
+        _hb_stop = _thr_ask.Event()
         try:
             if progress:
                 progress({"kind": "llm_attempt", "attempt": attempt, "count": len(papers)})
-            raw = messages_create(
-                system=system, user=user, max_tokens=token_budget,
-                temperature=0.3 if attempt == 1 else 0.7,
-                response_format={"type": "json_object"},
-                timeout=75.0, max_retries=1,
+            _heartbeat_progress(
+                progress,
+                {"attempt": attempt, "papers": len(papers), "stage": "llm_call"},
+                _hb_stop, interval=5.0,
             )
+            try:
+                raw = messages_create(
+                    system=system, user=user, max_tokens=token_budget,
+                    temperature=0.3 if attempt == 1 else 0.7,
+                    response_format={"type": "json_object"},
+                    timeout=30.0, max_retries=1,
+                )
+            finally:
+                _hb_stop.set()
             items = _parse_group_response(raw)
+            provider_error_streak[0] = 0
             logger.info(
                 "主题分类响应已解析(attempt=%d, papers=%d, groups=%d, names=%s)",
                 attempt, len(papers), len(items),
                 [str(item.get("name") or item.get("theme") or "")[:20] for item in items[:8]],
             )
+            # 逐行拆分组防护:组数 ≥ 文献数说明模型把目录每行当成一个组
+            # (常见于文本抢救路径,15 篇解析出 30+ 组),这种输出没有可比较
+            # 的主题边界,按无效输出处理并进入格式修复。
+            if len(items) >= len(papers):
+                logger.warning(
+                    "主题分类解析出 %d 组(文献 %d 篇),疑似逐条拆分,按无效输出处理",
+                    len(items), len(papers),
+                )
+                items = []
             if not items:
                 logger.warning("主题分类返回空分组，原文预览=%s", str(raw).replace("\n", " ")[:500])
+                # response_format 不是可靠的协议保证：模型可能返回 Markdown。
+                # 在下一次分类尝试前，先用短上下文执行一次纯格式修复。
+                items = _repair_invalid_group_response(
+                    raw, topic=topic, papers=papers, progress=progress
+                )
+                if items:
+                    logger.info("主题分类格式修复成功(attempt=%d, groups=%d)", attempt, len(items))
         except Exception as exc:
+            last_llm_error["message"] = f"{type(exc).__name__}: {exc}"[:300]
+            provider_error_streak[0] += 1
             logger.warning(
                 "主题分类 LLM 调用失败(attempt=%d, papers=%d, title_only=%s, input_chars=%d): %s",
                 attempt, len(papers), title_only, len(system) + len(user), exc,
             )
+            if progress:
+                progress({
+                    "kind": "llm_error",
+                    "attempt": attempt,
+                    "papers": len(papers),
+                    "error_type": type(exc).__name__,
+                    "message": str(exc)[:500],
+                })
+            # 不要覆盖此前已形成的有效分组；调用方会继续进入下一轮修复。
             return []
         items = _map_group_items(items, index_of)
         groups, _ = _build_groups(items, valid_ids)
         if progress:
+            coverage = len({lid for group in groups for lid in group.lit_ids})
             progress({
                 "kind": "llm_result",
                 "attempt": attempt,
                 "papers": len(papers),
                 "parsed_groups": len(items),
                 "valid_groups": len(groups),
-                "covered": len({lid for group in groups for lid in group.lit_ids}),
+                "covered": coverage,
+                "decision": "accept" if coverage == len(papers) and len(groups) >= min_groups else "repair",
+                "issues": (["文献编号未映射或覆盖不完整"] if coverage < len(papers) else []),
                 "themes": [group.name for group in groups],
             })
         return groups
 
-    groups = _ask(1)
-    if len(groups) < min_groups or not _groups_language_balanced(groups, papers):
-        groups = _ask(2)
-    if (len(groups) < min_groups or not _groups_language_balanced(groups, papers)) and len(papers) > 120:
-        logger.warning("主题分类前两次调用未达标,启用极简输入第三次重试")
-        groups = _ask(3)
-    # 组名不合格的组剔除(其文献由 _reassign_orphans 回收,不丢文献)
-    groups = [g for g in groups if _group_name_acceptable(g.name)] if groups else []
-    if not groups or len(groups) < min_groups or not _groups_language_balanced(groups, papers):
-        # 80 篇以下仍保留“模型失败即要求重划分”的严格交互；接近正式综述
-        # 规模的大池子不能因一次模型格式抖动卡死，改用确定性证据兜底。
-        if _allow_chunking and len(papers) < 90:
-            raise ValueError(
-                "主题分类模型连续返回无效或不完整结果，系统已停止生成，"
-                "不会再用截断标题或编号主题冒充分类结果。请重新划分主题（按语言分裂或主题不足）。"
-            )
-        # LLM 失败不能把用户卡在“划分主题中”。立即使用可追溯的
-        # 标题相似度兜底，并在进度事件中明确标记为 fallback；正文前仍由
-        # 用户确认主题归属，符合“划分→确认→写作”的两阶段架构。
-        logger.warning(
-            "主题分类三次调用均未产出有效分组(输入 %d 篇),启用确定性多组兜底",
-            len(papers),
-        )
-        fallback = _deterministic_fallback_groups(papers, topic)
-        if progress:
-            progress({
-                "kind": "fallback_result",
-                "papers": len(papers),
-                "groups": len(fallback),
-                "covered": len({lid for group in fallback for lid in group.lit_ids}),
-                "themes": [group.name for group in fallback],
-            })
-        return _finalize_theme_groups(papers, fallback, topic)
+    # 每个分类池最多两次主调用；每次主调用的协议失败都会先进入格式修复。
+    best_groups: list[Group] = []
+    best_score: tuple[int, int, int] = (-1, -1, -1)  # (covered, valid_groups, parsed_items)
 
-    # 无组文献按标题相似度归入最相近的组(避免漏 paper,不再倒进最后一组)
+    def _score(g: list[Group]) -> tuple[int, int, int]:
+        covered_ids = {lid for grp in g for lid in grp.lit_ids}
+        return (len(covered_ids), sum(1 for grp in g if grp.lit_ids), 0)
+
+    def _read_provider() -> str | None:
+        try:
+            from src.llm.client import last_used_provider
+            return last_used_provider.get()
+        except Exception:
+            return None
+
+    def _emit_attempt(
+        attempt: int,
+        started: float,
+        result_groups: list[Group],
+        error_kind: str | None,
+        next_strategy_reason: str | None = None,
+    ) -> None:
+        if not progress:
+            return
+        covered = len({lid for grp in result_groups for lid in grp.lit_ids})
+        elapsed = round(time.time() - started, 3)
+        progress({
+            "kind": "theme_attempt",
+            "attempt": attempt,
+            "input_scale": len(papers),
+            "abstract_limit": abstract_limit,
+            "chunked": False,
+            "chunk_size": None,
+            "provider": _read_provider(),
+            "elapsed_seconds": elapsed,
+            "valid_groups": sum(1 for grp in result_groups if grp.lit_ids),
+            "coverage": covered,
+            "expected": len(papers),
+            "decision": (
+                "accept"
+                if (covered == len(papers) and len(result_groups) >= min_groups)
+                else "repair"
+            ),
+            "failure_reason": error_kind,
+            "next_strategy_reason": next_strategy_reason,
+            "strategy": _strategy,
+        })
+
+    def _record_partial(reason: str) -> None:
+        if not progress or not best_groups:
+            return
+        progress({
+            "kind": "partial_groups",
+            "reason": reason,
+            "groups": [
+                {"name": g.name, "lit_ids": list(g.lit_ids)} for g in best_groups
+            ],
+            "covered": len({lid for grp in best_groups for lid in grp.lit_ids}),
+            "expected": len(papers),
+            "strategy": _strategy,
+        })
+
+    failures: list[str] = []  # 记录每轮未产出有效分组的原因，用于最后发出 partial_groups
+    for attempt in (1, 2, 3):
+        started = time.time()
+        try:
+            attempt_groups = _ask(attempt)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "主题分类外层调用异常(attempt=%d, papers=%d): %s",
+                attempt, len(papers), exc,
+            )
+            failures.append(f"attempt_{attempt}_exception:{type(exc).__name__}")
+            _emit_attempt(
+                attempt=attempt,
+                started=started,
+                result_groups=[],
+                error_kind=type(exc).__name__,
+            )
+            continue
+        if not attempt_groups:
+            failures.append(f"attempt_{attempt}_empty_result")
+            # minimax 单 provider:连续两次连接级失败(超时/断连),第三次
+            # 大概率同样失败。直接终止,把真实错误抛给前端,不让用户白等。
+            if provider_error_streak[0] >= 2:
+                failures.append(f"attempt_{attempt}_provider_unavailable")
+                break
+        _emit_attempt(
+            attempt=attempt,
+            started=started,
+            result_groups=attempt_groups,
+            error_kind=None if attempt_groups else "empty_result",
+        )
+        score = _score(attempt_groups)
+        if score > best_score:
+            best_groups = list(attempt_groups)
+            best_score = score
+        covered_now, valid_now, _ = best_score
+        if covered_now == len(papers) and valid_now >= min_groups:
+            break
+
+    # Step 5: 任一轮未产出有效分组且已有 best_groups 时，在返回前发出
+    # partial_groups，让调用方看到划分过程的最佳部分结果而不是空集。
+    if failures and best_groups:
+        _record_partial(";".join(failures))
+
+    groups = best_groups
+    # 组名不合格的组剣除（其文献由 _reassign_orphans 回收，不丢文献）
+    groups = [g for g in groups if _group_name_acceptable(g.name, pool_language=_language)] if groups else []
+    # 先把模型漏报的文献按标题相似度回收进现有组，再做覆盖率校验：
+    # 旧顺序里校验在回收之前，覆盖差 1-2 篇就整块/整池报 0 主题,
+    # 把本可救回的结果整个丢弃（本次线上事故的直接原因）。
     covered = {lid for g in groups for lid in g.lit_ids}
     rest = [p.lit_id for p in papers if p.lit_id not in covered]
     _reassign_orphans(papers, rest, groups)
+    coverage_short = (
+        len({lid for g in groups for lid in g.lit_ids}) < len(papers)
+        if groups else True
+    )
+    if _raise_on_coverage_failure and (
+        len(groups) < min_groups or (groups and coverage_short)
+    ):
+        provider_note = (
+            f"最近一次模型调用失败：{last_llm_error['message']}。"
+            if last_llm_error["message"]
+            else ""
+        )
+        raise ValueError(
+            f"主题分类未形成可比较的主题（当前 {len(groups)} 个，至少需要 {min_groups} 个）。"
+            f"最后一次分类未通过校验，解析到 {len(groups)} 个有效主题。{provider_note}"
+            "请展开实时工作记录查看模型请求/响应错误，修复后重新划分。"
+        )
+    if not groups:
+        return []
     return _finalize_theme_groups(papers, groups, topic)
 
 
@@ -1331,3 +2155,5 @@ def classify(papers: list[Paper], topic: str, mode: str, progress=None) -> list[
     if mode == "theme":
         return classify_by_theme(papers, topic, progress=progress)
     raise ValueError(f"unknown classify mode: {mode}")
+
+

@@ -41,13 +41,20 @@ _META_REASONING = re.compile(
 _AUTHOR_YEAR = re.compile(
     r"(?:"
     r"[一-鿿]{2,4}(?:\s*(?:和|与|、|,|，)\s*[一-鿿]{2,4})*(?:等)?"
-    r"|[A-ZÀ-Þ][A-Za-zÀ-Þ .'-]{0,48}(?:et\s+al\.|and\s+[A-ZÀ-Þ][A-Za-zÀ-Þ .'-]+)?"
+    r"|[A-ZÀ-Þ][A-Za-zÀ-Þ .'\-&/,，、与和]{0,70}(?:等|et\s+al\.|and\s+[A-ZÀ-Þ][A-Za-zÀ-Þ .'\-&/,，、与和]+)?"
     r")\s*[（(]\s*(?:19|20)\d{2}\s*[）)]",
     re.IGNORECASE,
 )
 _FALLBACK_EVIDENCE_PREFIXES = (
     "补充证据显示",
     "与本节问题相邻的研究中",
+)
+_PARAGRAPH_NUMERIC_CITATION = re.compile(r"\[(\d{1,3})\]")
+_PARAGRAPH_LIT_CITATION = re.compile(r"\[lit_[^\]]+\]")
+_PARAGRAPH_AUTHOR_YEAR = re.compile(
+    r"(?:[一-鿿]{2,8}(?:等)?|[A-ZÀ-Þ][A-Za-zÀ-Þ .'\-&/,，、与和]{0,70}(?:等|et\s+al\.)?)"
+    r"\s*[（(]\s*(?:19|20)\d{2}\s*[）)]",
+    re.IGNORECASE,
 )
 
 
@@ -149,11 +156,22 @@ def repair_article_text(sections: list[SectionResult], papers=None) -> list[dict
             r"\1。\n",
             text,
         )
+        # 5) 书名号是题录层的信息,不是正文论述的一部分:期刊名泄漏已在
+        # 步骤 0 改写,剩余《X》(补证据句/模型复述标题)一律剥壳保留内文。
+        book_marks = 0
+        def _strip_marks(match: "re.Match[str]") -> str:
+            nonlocal book_marks
+            book_marks += 1
+            return match.group(1)
+        text = re.sub(r"《([^《》]{1,80})》", _strip_marks, text)
         if text != original:
             section.content = text
+            changes = ["姓名标点归一化", "作者年份句边界修复", "链接间距修复"]
+            if book_marks:
+                changes.append(f"移除书名号 {book_marks} 处")
             repairs.append({
                 "section_key": section.key,
-                "changes": ["姓名标点归一化", "作者年份句边界修复", "链接间距修复"],
+                "changes": changes,
             })
     return repairs
 
@@ -204,11 +222,11 @@ def repair_unbound_author_year(sections: list[SectionResult], papers) -> list[di
             if len(unique) != 1:
                 return match.group(0)
             paper = next(iter(unique.values()))
-            # 已有同句数字编号则无需处理。
+            # 已有同句内部锚点或数字编号则无需处理。
             sentence_end = re.search(r"[。！？!?；;\n]", text[match.end():])
             end = match.end() + (sentence_end.start() if sentence_end else len(text))
             sentence = text[:end]
-            if re.search(r"\[\d{1,3}\]", sentence[match.start():]):
+            if re.search(r"\[(?:\d{1,3}|lit_[A-Za-z0-9_]+|hash:[A-Za-z0-9_]+)\]", sentence[match.start():]):
                 return match.group(0)
             changed = True
             return match.group(0) + f"[lit_{paper.lit_id.removeprefix('lit_')}]"
@@ -249,8 +267,26 @@ def _unbound_author_year_issues(text: str):
         end_match = re.search(r"[。！？!?；;\n]", after)
         sentence_end = match.end() + (end_match.end() if end_match else len(after))
         sentence = text[sentence_start:sentence_end]
-        if not _RAW_NUMERIC.search(sentence):
+        if not (_RAW_NUMERIC.search(sentence) or _PARAGRAPH_LIT_CITATION.search(sentence)):
             yield match
+
+
+def _paragraph_citation_issues(text: str, minimum: int = 3):
+    """Yield paragraphs that cite fewer than ``minimum`` distinct works."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    for index, paragraph in enumerate(paragraphs, start=1):
+        numeric = set(_PARAGRAPH_NUMERIC_CITATION.findall(paragraph))
+        lit_ids = set(_PARAGRAPH_LIT_CITATION.findall(paragraph))
+        linked = len(numeric or lit_ids)
+        author_year = {
+            re.sub(r"\s+", " ", match.group(0).strip().lower())
+            for match in _PARAGRAPH_AUTHOR_YEAR.finditer(paragraph)
+        }
+        # A paragraph must contain both three traceable works and three
+        # visible author-year mentions; numeric links alone are insufficient.
+        count = min(linked, len(author_year))
+        if count < minimum:
+            yield index, count, paragraph
 
 def check_article_text(sections: list[SectionResult], papers=None) -> QACheckResult:
     result = QACheckResult(
@@ -334,6 +370,14 @@ def check_article_text(sections: list[SectionResult], papers=None) -> QACheckRes
                 snippet=text[start:match.end() + 60],
             ))
         if section.key != "comment":
+            for paragraph_index, count, paragraph in _paragraph_citation_issues(text, minimum=3):
+                issues.append(QAIssue(
+                    "ARTICLE_PARAGRAPH_CITATION_DENSITY", QACheckStatus.FAIL,
+                    "content", f"section:{section.key}:paragraph:{paragraph_index}",
+                    f"正文段落仅绑定{count}篇文献，至少需要3位不同学者及其文献",
+                    section_key=section.key,
+                    snippet=paragraph[:240],
+                ))
             for match in _unbound_author_year_issues(text):
                 start = max(0, match.start() - 60)
                 issues.append(QAIssue(

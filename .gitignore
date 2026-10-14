@@ -70,3 +70,12 @@ literature-review.zip
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 调试日志 / 运行产物(2026-10-15)
+backend/*log*.txt
+/_log.txt
+final_log.txt
+artifacts/
+artifacts_last_history.json
+backend/src/automation/cnki/data/search_diagnostic_*.json
+tmp_*.py

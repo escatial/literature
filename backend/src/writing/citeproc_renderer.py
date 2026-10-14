@@ -131,7 +131,32 @@ def format_citation_via_citeproc(
     # 英文来源必须保持语种一致，统一转回英文缩写，避免 QA 将其误判为语言混用。
     if paper.source in {Source.OPENALEX, Source.PUBMED, Source.CROSSREF}:
         rendered = rendered.replace("等", "et al.")
+        rendered = _normalize_english_entry(rendered)
     return _CITE_NUM_PREFIX_RE.sub("", rendered).strip()
+
+
+def _normalize_english_entry(rendered: str) -> str:
+    """英文条目标准化:让整条可直接粘进 Google Scholar / 文献管理器检索。
+
+    中文 locale 的 CSL 会渲染全角标点(，：（）),粘进检索框会因标点
+    不匹配而"查不到文献";另有 et al.. 双句号、PubMed 题名尾句号粘在
+    [J] 前、文章号自区间(3052-3052)三类渲染噪声。
+    """
+    text = (
+        rendered.replace("，", ", ")
+        .replace("：", ": ")
+        .replace("（", " (")
+        .replace("）", ")")
+        .replace("、", ", ")
+    )
+    text = re.sub(r"\s+,", ",", text)
+    text = text.replace("et al..", "et al.")
+    # PubMed 题录题名自带尾句号,与 GB/T 的"[J]"连接成 ".[J]." → 去掉句号
+    text = re.sub(r"\s*\.\s*(\[J\])", r" \1", text)
+    text = text.replace("[J]. .", "[J]. ")
+    # 文章号自区间去重: "3052-3052" → "3052"(真页码区间如 941-962 不受影响)
+    text = re.sub(r"\b(\d{2,})\s*-\s*\1\b", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def format_citation_safe(

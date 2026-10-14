@@ -66,10 +66,15 @@ def test_online_first_without_publication_details_uses_journal_marker():
     assert "[J/OL]" not in rendered
 
 
-def test_reference_list_omits_doi_for_structured_english_record():
+def test_reference_list_appends_doi_for_structured_english_record():
+    """英文条目统一带 DOI:文献真实性可粘贴到 doi.org 一步验证。
+
+    线上反馈"英文文献谷歌学术查不到"实为中文 locale 全角标点 +
+    条目无 DOI 导致复制检索失败;文献本身已抽查 Crossref 核实为真。
+    """
     rendered = render_reference_list([_paper(volume="10", issue="1", pages="1-9")])
-    assert "DOI" not in rendered.upper()
-    assert "10.1000/test" not in rendered
+    assert "DOI:10.1000/test." in rendered
+    assert rendered.count("10.1000/test") == 1, "DOI 只出现一次,不残留 citeproc 原生 DOI"
 
 
 def test_reference_list_omits_doi_from_cnki_raw_citation():

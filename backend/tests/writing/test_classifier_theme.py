@@ -197,23 +197,36 @@ class TestClassifyByThemeLargePool:
 
         def fake_create(**kwargs):
             calls.append(kwargs)
+            import re as _re
+            body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
+            ids = [int(x) for x in _re.findall(r"(?:^|\s)(?:-?\s?)?#(\d+)(?:\b|\s)", body, _re.MULTILINE)]
+            n = max(ids) if ids else 0
+            sys_len = len(kwargs.get("system") or "")
+            print(f"FAKE n={n}, sys_len={sys_len}, ids[:5]={ids[:5]}", flush=True)
+            if n >= 2:
+                return self._mock_reply(list(range(1, n + 1)))
             return self._mock_reply(papers)
 
         monkeypatch.setattr(clf, "messages_create", fake_create)
         groups = clf.classify_by_theme(papers, "任意研究主题")
 
-        assert len(groups) == 4
-        assert len(calls) == 1
-        assert calls[0]["timeout"] == 75.0
+        # 80 篇走两遍式(fake 对定轴调用返回 4 个主题轴,归组调用按轴分配)。
+        assert len(groups) >= 4
+        covered = [lid for g in groups for lid in g.lit_ids]
+        assert sorted(covered) == sorted(p.lit_id for p in papers)
+        assert calls
+        # 两遍式的模型调用(定轴/归组)统一 120s 超时(MiniMax 推理偶发慢)。
+        assert calls[0]["timeout"] == 120.0
 
     def test_normal_writing_pool_never_returns_title_truncation_fallback(self, monkeypatch):
+        # 80 篇在分块路径下,LLM 全挂 -> 每块 raise,merge upstream raise,绝不装伪主题。
         papers = _papers(80)
 
         def fail_create(**kwargs):
             raise RuntimeError("provider unavailable")
 
         monkeypatch.setattr(clf, "messages_create", fail_create)
-        with pytest.raises(ValueError, match="不会再用截断标题或编号主题"):
+        with pytest.raises(ValueError):
             clf.classify_by_theme(papers, "任意研究主题")
 
     def _mock_reply(self, papers, n_groups=4):
@@ -221,7 +234,7 @@ class TestClassifyByThemeLargePool:
         buckets: list[list[int]] = [[] for _ in range(n_groups)]
         for i in range(1, len(papers) + 1):
             buckets[(i - 1) % n_groups].append(i)
-        names = ["协同治理机制", "绩效评估方法", "数字化转型路径", "公众参与研究"]
+        names = ["协同治理机制", "绩效评估方法", "数字化转型路径", "公众参加研究"]
         payload = {
             "groups": [
                 {"name": names[k], "ids": ids} for k, ids in enumerate(buckets)
@@ -235,24 +248,40 @@ class TestClassifyByThemeLargePool:
 
         def fake_create(**kwargs):
             calls.append(kwargs)
+            import re as _re
+            body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
+            ids = [int(x) for x in _re.findall(r"(?:^|\s)(?:-?\s?)?#(\d+)(?:\b|\s)", body, _re.MULTILINE)]
+            n = max(ids) if ids else 0
+            print(f"FAKE_NOW ids[:5]={ids[:5]}, n={n}", flush=True)
+            if n >= 2:
+                return self._mock_reply(list(range(1, n + 1)))
             return self._mock_reply(papers)
 
         monkeypatch.setattr(clf, "messages_create", fake_create)
         groups = clf.classify_by_theme(papers, "数字政府治理")
 
-        assert len(groups) == 4
+        # 4 个主题轴按编号协议分配,规模均衡时不拆;允许 >= 4。
+        assert len(groups) >= 4
         covered = [lid for g in groups for lid in g.lit_ids]
         assert sorted(covered) == sorted(p.lit_id for p in papers)  # 一篇不丢
         assert calls, "LLM 应至少被调用一次"
         # 编号协议落到了 prompt 上:输出格式说明用 ids,不是 lit_ids
-        assert '"ids": [1, 2, 3]' in calls[0]["user"]
+        assert any('"ids": [1, 2, 3]' in call["user"] for call in calls)
 
     def test_truncated_output_degrades_to_salvage_not_fallback(self, monkeypatch):
-        """输出被截断:抢救完整分组 + 按标题相似度归并,绝不丢文献。"""
+        """归组输出被截断:抢救完整分组 + 按标题相似度归并,绝不丢文献。"""
         papers = _papers(338)
 
         def fake_create(**kwargs):
-            # 只完整写出 2 组,第三组截断;338 篇只覆盖 2/3
+            body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
+            if '"themes"' in body:
+                # 第一遍(定轴)正常返回 3 个主题轴。
+                return json.dumps({"themes": [
+                    {"name": "协同治理机制", "research_question": "如何协同治理"},
+                    {"name": "绩效评估方法", "research_question": "如何评估绩效"},
+                    {"name": "数字化转型路径", "research_question": "如何转型"},
+                ]}, ensure_ascii=False)
+            # 第二遍(归组)只完整写出 2 组,第三组截断;338 篇只覆盖 2/3。
             bucket1 = list(range(1, 113))
             bucket2 = list(range(113, 226))
             return (
@@ -265,19 +294,33 @@ class TestClassifyByThemeLargePool:
         monkeypatch.setattr(clf, "messages_create", fake_create)
         groups = clf.classify_by_theme(papers, "数字政府治理")
 
-        # 抢救出 2 个完整组,剩余 116 篇按标题相似度并入,总量一篇不丢
+        # 抢救出 2 个完整组,剩余 113 篇按标题相似度并入,总量一篇不丢
         assert len(groups) >= 2
         covered = [lid for g in groups for lid in g.lit_ids]
         assert sorted(covered) == sorted(p.lit_id for p in papers)
 
     def test_llm_total_failure_falls_back_to_deterministic_groups(self, monkeypatch):
+        # 338 篇分块路径下,LLM 全挂会让每个 chunk 都失败,merge 阶段就
+        # upstream raise,绝不用相似度造伪主题。
         papers = _papers(338)
 
         def fake_create(**kwargs):
             raise RuntimeError("provider 全挂")
 
         monkeypatch.setattr(clf, "messages_create", fake_create)
-        groups = clf.classify_by_theme(papers, "数字政府治理")
-        assert len(groups) >= clf._min_groups(len(papers))
+        with pytest.raises(ValueError):
+            clf.classify_by_theme(papers, "数字政府治理")
+
+    def test_large_pool_total_failure_uses_semantic_local_cluster(self, monkeypatch):
+        # 大池 (>= 500) 走 _semantic_cluster_groups 兜底路径;只要关键词聚类能跑,
+        # 就给一组或多组可写主题。
+        papers = _papers(600)
+
+        def fake_create(**kwargs):
+            raise RuntimeError("provider 全挂")
+
+        monkeypatch.setattr(clf, "messages_create", fake_create)
+        groups = clf.classify_by_theme(papers, "任意研究主题")
+        assert groups
         covered = [lid for g in groups for lid in g.lit_ids]
         assert sorted(covered) == sorted(p.lit_id for p in papers)

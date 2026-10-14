@@ -54,8 +54,19 @@ class QARunner:
 
         # 0) 正文可读性与引用排版体检
         try:
+            # The orchestrator invokes QA after the first numbering pass.
+            # Convert that stable numeric representation back to internal
+            # anchors before any repair so existing citations survive.
+            if not any("[lit_" in (section.content or "") for section in sections):
+                from writing.orchestrator import restore_internal_citation_anchors
+                restore_internal_citation_anchors(sections)
             repairs = repair_article_text(sections, papers=papers)
             repairs.extend(repair_unbound_author_year(sections, papers))
+            # 作者年份修复可能补入新的内部锚点；编号必须在本轮所有
+            # 确定性修复完成后统一执行，否则旧的 [N] 会被清掉。
+            if any("[lit_" in (section.content or "") for section in sections):
+                from writing.orchestrator import apply_citation_numbering
+                reference_list, _ = apply_citation_numbering(sections, papers)
             r = check_article_text(sections, papers=papers)
             if repairs:
                 r.metrics["auto_repairs"] = repairs

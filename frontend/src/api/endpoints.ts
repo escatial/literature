@@ -190,6 +190,10 @@ export const bulkUpsertPapers = (papers: PaperCreatePayload[]) =>
     { papers },
   ).then(r => r.data);
 
+/** 解析当前任务的研究主题(来自该任务关联的检索历史)。topic 为空串表示没有可用的主题。 */
+export const getTaskTopic = () =>
+  http.get<{ topic: string }>('/papers/task-topic').then(r => r.data);
+
 export const updatePaper = (litId: string, patch: { selected?: boolean; relevance_score?: number }) =>
   http.patch<Paper>(`/papers/${litId}`, patch).then(r => r.data);
 

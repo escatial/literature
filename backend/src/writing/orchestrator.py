@@ -19,8 +19,17 @@ from typing import Any, Generator
 import re as _re
 from writing.citeproc_renderer import format_citation_via_citeproc as _citeproc_render
 from agent.plan_agent import classify_agent_stream
+from agent.harness import (
+    AgentStage,
+    AgentState,
+    HarnessPolicy,
+    completion_payload,
+    inspect_theme_groups,
+    run_repair_loop,
+)
 from retrieval.types import Paper, Source
 from screening.llm_filter import screen_batch, screen_batch_stream
+from writing import classifier as _classifier_mod
 from writing.classifier import Group, classify, _title_similarity
 from writing.relevance import (
     RelevanceScore,
@@ -179,12 +188,19 @@ def build_review_blueprint(
             for token in set(tokens):
                 if token in {
                 "研究", "分析", "方法", "问题", "相关", "本文", "结果", "结论", "基于",
+                "基于此", "因此", "此外", "然而", "其次", "首先", "最后", "综上", "同时",
+                "但是", "由于", "通过", "对于", "随着", "认为", "指出", "提出", "进行",
+                "以及", "其中", "之间", "方面", "要素", "影响", "作用", "情况", "现状",
                 "study", "studies", "research", "analysis", "method", "methods", "approach",
                 "this", "that", "these", "those", "with", "without", "based", "and", "the",
                 "are", "for", "from", "into", "is", "it", "its", "of", "on", "or", "to", "using",
                 "used", "use", "can", "could", "may", "might", "will", "would", "also", "than",
                 "results", "result", "paper", "papers", "work", "works", "shown", "show", "find", "findings",
                 "such", "data", "future", "challenge", "challenges", "learning", "new", "two", "one",
+                "were", "was", "have", "has", "had", "been", "being", "however", "through",
+                "among", "their", "they", "which", "while", "both", "more", "most", "other",
+                "others", "between", "during", "about", "how", "why", "where", "but", "not",
+                "when", "what", "who", "across", "within", "over", "under", "after", "before",
                 }:
                     continue
                 terms[token] = terms.get(token, 0) + 1
@@ -864,7 +880,9 @@ def _evidence_recovery_section_result(spec, topic: str, papers: list[Paper]):
     因而适用于任意主题；作用是保证 LLM 连续失败时仍不会交付半句话或
     未绑定的作者年份引用。
     """
-    from writing.section_writer import SectionResult, _paper_display_author_year
+    from writing.section_writer import (
+        SectionResult, _paper_display_author_year, _title_topic_phrase,
+    )
 
     if getattr(spec, "key", "") == "comment":
         return _placeholder_section_result(spec, topic, papers)
@@ -874,10 +892,10 @@ def _evidence_recovery_section_result(spec, topic: str, papers: list[Paper]):
         if not paper.lit_id:
             continue
         author_year = _paper_display_author_year(paper)
-        title = (paper.title or "未命名文献").strip().rstrip("。！？!?")
+        phrase = _title_topic_phrase(paper.title or "")
         evidence.append(
-            f"{author_year}围绕《{title}》讨论了与本主题相关的研究对象、决策变量或分析方法，"
-            f"其题名与摘要证据可用于界定该研究路径的适用边界[{paper.lit_id}]。"
+            f"{author_year}针对{phrase}等议题讨论了与本主题相关的研究对象、决策变量或分析方法，"
+            f"其题录证据可用于界定该研究路径的适用边界[{paper.lit_id}]。"
         )
         citations.append(paper.lit_id)
     if evidence:
@@ -1030,6 +1048,115 @@ def _run_post_write_qa(
     return payload
 
 
+_THEME_STRATEGIES = ("default", "minimal_abstracts", "local_fallback")
+
+
+def _run_theme_classification_loop(
+    topic: str,
+    papers: list[Paper],
+    *,
+    progress=None,
+    check_stop=None,
+) -> tuple[list[Group], dict]:
+    """主题阶段 harness:分类 → 通用结构核查 → 升级策略重试 → 确定性兜底。
+
+    三级策略逐级降级:default(完整摘要) → minimal_abstracts(短摘要) →
+    local_fallback(本地确定性语义聚类,不依赖 LLM)。任何一级通过通用
+    结构检查即交付;全部失败时返回 best effort 部分结果和 blocked 状态,
+    由调用方决定是否以结构检查错误终止流程。LLM 的真实失败原因会通过
+    progress 事件和 meta 一并带出,前端可直接展示。
+    """
+    state = AgentState(task_id=f"theme:{topic}:{len(papers)}", topic=topic)
+    # require_pass=False:不让 AgentLoopError 以裸异常形式逃逸;流程是否
+    # 终止由调用方根据 meta.status 和结构检查 issues 决定,错误文案可控。
+    policy = HarnessPolicy(max_attempts=3, require_pass=False, allow_partial_output=True)
+    strategies: list[str] = []
+    best_groups: list[Group] = []
+    last_issues: list[str] = []
+
+    def _classify(strategy: str) -> list[Group]:
+        strategies.append(strategy)
+        if check_stop:
+            check_stop()
+        try:
+            return _classifier_mod.classify_by_theme(
+                papers, topic, progress=progress, _strategy=strategy,
+            )
+        except RuntimeError:
+            # 用户停止等控制流信号不许被吞掉
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if progress:
+                progress({
+                    "kind": "theme_strategy_failed",
+                    "strategy": strategy,
+                    "message": f"主题分类策略 {strategy} 失败：{exc}",
+                })
+            return []
+
+    def _track_best(groups: list[Group]) -> None:
+        nonlocal best_groups
+        covered = len({lid for g in groups for lid in g.lit_ids})
+        best_covered = len({lid for g in best_groups for lid in g.lit_ids})
+        if groups and covered > best_covered:
+            best_groups = list(groups)
+
+    def produce(_state: AgentState) -> list[Group]:
+        return _classify(_THEME_STRATEGIES[0])
+
+    def inspect(groups, _state: AgentState):
+        nonlocal last_issues
+        checks = inspect_theme_groups(groups, papers)
+        _track_best(list(groups))
+        last_issues = [issue for check in checks for issue in check.issues]
+        if progress:
+            progress({
+                "kind": "theme_validation_failed" if last_issues else "theme_validation_passed",
+                "message": (
+                    "主题方案结构核查未通过，正在升级重试策略..."
+                    if last_issues else "主题方案结构核查通过。"
+                ),
+                "issues": last_issues,
+                "strategy": strategies[-1] if strategies else None,
+            })
+        return checks
+
+    def repair(_groups, _checks, _state: AgentState):
+        # 下一级策略;最后一级由 classify_by_theme 内部走确定性本地聚类。
+        strategy = _THEME_STRATEGIES[min(_state.attempt, len(_THEME_STRATEGIES) - 1)]
+        if progress:
+            progress({
+                "kind": "theme_strategy_escalated",
+                "strategy": strategy,
+                "message": f"主题分类升级到策略 {strategy} 重试...",
+            })
+        return _classify(strategy)
+
+    output = run_repair_loop(
+        state, stage=AgentStage.THEME, policy=policy,
+        produce=produce, inspect=inspect, repair=repair,
+    )
+    groups = list(output) if isinstance(output, list) else []
+    if not groups and best_groups:
+        # 全部策略都未通过结构核查时,把覆盖最高的部分结果一并带出,
+        # 供前端展示与人工确认,而不是静默丢弃。
+        groups = best_groups
+        if progress:
+            progress({
+                "kind": "partial_groups",
+                "reason": "all_strategies_failed",
+                "groups": [{"name": g.name, "lit_ids": list(g.lit_ids)} for g in groups],
+                "covered": len({lid for g in groups for lid in g.lit_ids}),
+                "expected": len(papers),
+            })
+    if state.error and "用户已停止写作" in str(state.error):
+        raise RuntimeError("用户已停止写作")
+    meta = completion_payload(state)
+    meta["strategies"] = strategies
+    meta["issues"] = last_issues
+    return groups, meta
+
+
 def plan_review_stream(
     topic: str,
     papers: list[Paper],
@@ -1083,7 +1210,20 @@ def plan_review_stream(
             "total": len(papers),
         })
         check_stop()
-        groups = classify(papers, topic, classify_mode, progress=progress)
+        theme_meta: dict | None = None
+        if classify_mode == "theme":
+            # 主题模式走 harness 循环:default → minimal_abstracts →
+            # local_fallback 三级策略,任一级通过结构核查即交付;
+            # 全部失败时以结构检查错误终止,issues 里带真实原因。
+            groups, theme_meta = _run_theme_classification_loop(
+                topic, papers, progress=progress, check_stop=check_stop,
+            )
+            if theme_meta.get("status") != "passed":
+                issues = theme_meta.get("issues") or []
+                detail = "；".join(issues) if issues else "三级分类策略均未通过结构核查"
+                raise ValueError(f"主题方案未通过结构检查：{detail}")
+        else:
+            groups = classify(papers, topic, classify_mode, progress=progress)
         # 主题聚类阶段必须保留全部“筛选后纳入”的文献：这一阶段的产出是
         # 面向全量证据的知识地图和可编辑主题归属，不能提前抽样成 70~90 篇
         # 写作池。提前抽样会造成主题覆盖、相关性报告和证据矩阵互相矛盾，
@@ -1107,6 +1247,10 @@ def plan_review_stream(
         yield _sse_event("classify_done", {
             "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
             "agent": agent_meta,
+            "harness": (
+                {k: theme_meta[k] for k in ("status", "strategies", "issues")}
+                if theme_meta else None
+            ),
         })
         section_specs = build_review_sections(classify_mode, groups, topic)
         yield _sse_event("plan_complete", {
@@ -1547,7 +1691,14 @@ def _format_one_gbt(p: Paper) -> str:
     if p.source in (Source.OPENALEX, Source.PUBMED, Source.CROSSREF):
         rendered = _citeproc_render(p)
         if rendered:
-            return _strip_doi(rendered)
+            rendered = _strip_doi(rendered).rstrip(".")
+            # 英文文献的真实性核查依赖 DOI:条目末尾统一带 DOI,用户可以
+            # 直接粘贴到 doi.org / Google Scholar 验证,而不是逐词手敲标题。
+            doi = (getattr(p, "doi", "") or "").strip()
+            bare = _re.sub(r"^(?:https?://(?:dx\.)?doi\.org/)", "", doi, flags=_re.IGNORECASE)
+            if bare:
+                return f"{rendered}. DOI:{bare}."
+            return f"{rendered}."
         raise ValueError(
             f"GB/T 7714-2025 citeproc rendering failed: "
             f"source={p.source.value}, lit_id={p.lit_id}, title={p.title}"
@@ -1583,6 +1734,41 @@ def replace_anchors_with_numbers(content: str, number_map: dict[str, int]) -> st
     return _CITE_ANCHOR_RE.sub(_repl, content or "")
 
 
+_NUMBERED_CITE_RE = _re.compile(r"\[(\d{1,3})\]")
+
+
+def restore_internal_citation_anchors(sections: list[SectionResult]) -> None:
+    """把已编号正文中的 [N] 无损还原成内部 [lit_x] 锚点。
+
+    QA 修复链(article_lint/binding/density)只认识内部锚点;若在编号之后
+    直接修复,[N] 会被当成模型残留的伪锚点剥掉,造成引用丢失。编号流程
+    写完 citations 后,各章节 citations 里的 lit_id 恰好按全局编号升序排列
+    (由 apply_citation_numbering 的同步逻辑保证),据此可以完整重建
+    编号 → lit_id 映射,再逐个把 [N] 换回 [lit_x]。已含内部锚点的章节跳过。
+    """
+    queue: list[str] = []
+    seen: set[str] = set()
+    for s in sections:
+        for lid in getattr(s, "citations", None) or []:
+            lid = str(lid)
+            if lid.startswith(("lit_", "hash:")) and lid not in seen:
+                seen.add(lid)
+                queue.append(lid)
+    if not queue:
+        return
+    number_to_lid = {index + 1: lid for index, lid in enumerate(queue)}
+
+    def _restore(match: _re.Match) -> str:
+        lid = number_to_lid.get(int(match.group(1)))
+        return f"[{lid}]" if lid else match.group(0)
+
+    for s in sections:
+        content = s.content or ""
+        if _CITE_ANCHOR_RE.search(content):
+            continue
+        s.content = _NUMBERED_CITE_RE.sub(_restore, content)
+
+
 def apply_citation_numbering(
     sections: list[SectionResult],
     papers: list[Paper],
@@ -1597,6 +1783,9 @@ def apply_citation_numbering(
 
     返回 (reference_list, lit_id -> N 映射)。
     """
+    # 幂等保护:上一轮编号已把锚点替换成 [N],直接重跑会把 [N] 当伪锚点
+    # 剥掉导致引用丢失。先用 citations 还原内部锚点,再走统一编号流程。
+    restore_internal_citation_anchors(sections)
     by_id = {p.lit_id: p for p in papers}
     # 单一事实来源:正文里真实出现的 [lit_xxx] 锚点(按章节、按出现顺序)
     cited_ids: list[str] = []
@@ -1646,9 +1835,12 @@ def apply_citation_numbering(
             for boundary in _re.finditer(r"[。！？!?；;\n]", s.content[:match.start()]):
                 sentence_start = boundary.end()
             local = s.content[sentence_start:match.start()]
-            visible = False
+            # 上一轮编号写入的标签就是 label(p) 原文,先直接查它,避免
+            # "作者1"里的数字被作者名清洗剥掉后误判不可见而重复插标签。
+            display_label = label(p)
+            visible = bool(display_label) and display_label in local
             year = str(p.year) if p.year else ""
-            if year:
+            if not visible and year:
                 if p.source in (Source.CNKI, Source.USER_IMPORTED):
                     author_tokens = []
                     for author in p.authors or []:
@@ -1674,7 +1866,7 @@ def apply_citation_numbering(
                     )
                     for token in author_tokens
                 )
-            return f"[{n}]" if visible else f"{label(p)}[{n}]"
+            return f"[{n}]" if visible else f"{display_label}[{n}]"
         # 模型可能残留 [54] 之类未经映射的数字伪锚点，统一剥离后再替换
         # 真正的 lit_id 锚点，避免 QA 报告悬空编号。
         cleaned = _re.sub(r"\[\d{1,3}\]", "", s.content)

@@ -18,6 +18,7 @@ import {
   ElTag,
 } from 'element-plus';
 import { toast } from '@/utils/toast';
+import { getTaskTopic } from '@/api/endpoints';
 import { useTopicStore } from '@/stores/topic';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { usePapersStore } from '@/stores/papers';
@@ -75,10 +76,27 @@ const loadPapers = async () => {
       selected_only: true,
       limit: 5000,
     });
+    void fillTopicFromTask();
   } catch (e) {
     toast.error(`文献池加载失败:${String((e as Error)?.message ?? e)}`);
   } finally {
     loadingPapers.value = false;
+  }
+};
+
+/** 从文献池导入文献后,研究主题为空时用该任务检索时的主题自动填充。
+ *  主题来自后端按当前任务 id 关联的检索历史;已有主题(含用户手填)不覆盖。 */
+const fillTopicFromTask = async () => {
+  if (topicInput.value.trim() || allPapers.value.length === 0) return;
+  try {
+    const { topic } = await getTaskTopic();
+    const t = topic.trim();
+    if (t && !topicInput.value.trim()) {
+      ustore.setTopic(t);
+      topicStore.setTopic(t);
+    }
+  } catch {
+    // 主题解析失败不影响写作页主流程
   }
 };
 
@@ -413,6 +431,15 @@ const downloadMd = () => {
       <el-button v-if="running" type="danger" size="large" plain @click="stop">
         停止任务
       </el-button>
+      <el-button
+        v-if="stream.phase === 'error' && !running"
+        type="warning"
+        size="large"
+        plain
+        @click="rePlan"
+      >
+        重新划分主题
+      </el-button>
 
       <div v-if="running || stream.phase !== 'idle'" style="margin-top: 16px">
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
@@ -471,6 +498,26 @@ const downloadMd = () => {
         >
           {{ stream.detail }}
         </div>
+        <div
+          v-if="stream.harness"
+          style="margin-top: 8px; color: #909399; font-size: 12px; line-height: 1.7"
+        >
+          Agent 状态：{{ stream.harness.stage || '初始化' }} ·
+          {{ stream.harness.status || 'running' }} ·
+          第 {{ stream.harness.attempt || 0 }} 轮
+          <span v-if="stream.harness.repairs?.length"> · 已修复 {{ stream.harness.repairs.length }} 次</span>
+        </div>
+        <el-alert
+          v-if="stream.phase === 'error'"
+          type="error"
+          :closable="false"
+          show-icon
+          style="margin-top: 10px"
+          title="主题划分未完成"
+          :description="stream.error
+            ? `${stream.error}。请点击“重新划分主题”重试；已完成的文献池不会被删除。`
+            : '本次模型返回的主题结果不完整，系统没有生成伪主题。请点击“重新划分主题”重试；已完成的文献池不会被删除。'"
+        />
         <el-collapse v-if="stream.activityLog.length" style="margin-top: 10px">
           <el-collapse-item name="activity" title="实时工作记录">
             <div ref="activityLogEl" style="max-height: 180px; overflow: auto; font-size: 12px; line-height: 1.8; color: #606266">

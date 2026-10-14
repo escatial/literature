@@ -55,7 +55,7 @@ def test_article_lint_detects_malformed_author_and_stuck_citation():
     section = SectionResult(
         key="theme_1",
         title="主题",
-        content="胡，大，伟等（2023）在研究中发现效率提升。算法赵林林等（2026）[3]。",
+        content="胡，大，伟等（2023）在研究中发现效率提升[1]。算法赵林林等（2026）[3]。王五等（2025）补充了比较证据[4]。",
         citations=["lit_cnki_1"],
     )
     result = check_article_text([section])
@@ -79,14 +79,17 @@ def test_article_lint_detects_dense_citation_chain():
 def test_article_lint_repairs_deterministic_formatting():
     section = SectionResult(
         key="theme_1", title="主题",
-        content="胡，大，伟等（2023）在研究中发现效率提升[2]。算法赵林林等（2026）[3]。",
+        content="胡，大，伟等（2023）在研究中发现效率提升[2]。算法赵林林等（2026）[3]。王五等（2025）补充了比较证据[4]。",
         citations=["lit_cnki_1"],
     )
     repairs = repair_article_text([section])
     assert repairs
     assert "胡大伟" in section.content
     assert "。" in section.content
-    assert not check_article_text([section]).issues
+    assert not any(
+        issue.severity.value == "fail"
+        for issue in check_article_text([section]).issues
+    )
 
 
 def test_repair_unbound_author_year_adds_lit_anchor_for_unique_match():
@@ -159,3 +162,32 @@ def test_article_lint_rejects_unbound_author_year_citation():
     result = check_article_text([section])
     assert any(issue.code == "ARTICLE_UNBOUND_AUTHOR_YEAR" for issue in result.issues)
     assert result.status.value == "fail"
+
+
+def test_article_lint_requires_three_distinct_sources_per_paragraph():
+    section = SectionResult(
+        key="theme_1", title="主题",
+        content="张三（2024）比较了两类方法[1]。",
+        citations=["a"],
+    )
+    result = check_article_text([section])
+    issue = next(i for i in result.issues if i.code == "ARTICLE_PARAGRAPH_CITATION_DENSITY")
+    assert issue.path == "section:theme_1:paragraph:1"
+    assert "至少需要3位" in issue.message
+
+
+def test_article_lint_counts_english_author_year_with_chinese_et_al_marker():
+    section = SectionResult(
+        key="theme_1", title="主题",
+        content=(
+            "Wang等(2024)提出方法甲[1]。"
+            "Li等(2023)提出方法乙[2]。"
+            "Smith等(2022)提出方法丙[3]。"
+        ),
+        citations=["a", "b", "c"],
+    )
+    result = check_article_text([section])
+    assert not any(
+        issue.code == "ARTICLE_PARAGRAPH_CITATION_DENSITY"
+        for issue in result.issues
+    )

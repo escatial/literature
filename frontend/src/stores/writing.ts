@@ -37,6 +37,7 @@ const initialState: StreamState = {
   detail: null,
   error: null,
   activityLog: [],
+  harness: null,
 };
 
 export const useWritingStore = defineStore('writing', {

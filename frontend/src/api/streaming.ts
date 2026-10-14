@@ -133,6 +133,15 @@ export interface StreamState {
   detail: string | null;
   error: string | null;
   activityLog: { id: number; at: string; message: string }[];
+  harness: {
+    stage?: string;
+    status?: string;
+    attempt?: number;
+    elapsed_seconds?: number;
+    repairs?: unknown[];
+    error?: string | null;
+    trace?: unknown[];
+  } | null;
 }
 
 // v9.6:改为工厂函数——此前模块级单例 + {...initialState} 浅拷贝,sections/
@@ -158,6 +167,7 @@ function createInitialState(): StreamState {
     detail: null,
     error: null,
     activityLog: [],
+    harness: null,
   };
 }
 
@@ -256,6 +266,17 @@ async function consumeWritingSSE(
           state.waitingSeconds = 0;
         }
         switch (evt.event) {
+          case 'agent_state': {
+            state.harness = evt.data.harness ?? null;
+            const h = state.harness;
+            if (h?.error) {
+              state.detail = `Agent ${h.stage ?? '任务'} 已阻断：${h.error}`;
+              addActivity(state.detail ?? '模型输出格式不符合协议，正在自动修复...');
+            } else if (h?.stage) {
+              state.detail = `Agent 阶段：${h.stage} · 第 ${h.attempt ?? 0} 轮 · 状态 ${h.status ?? 'running'}`;
+            }
+            break;
+          }
           case 'heartbeat':
             state.elapsedSeconds = Math.max(
               state.elapsedSeconds,
@@ -338,7 +359,29 @@ async function consumeWritingSSE(
               const themes = Array.isArray(evt.data.themes) ? evt.data.themes.filter(Boolean) : [];
               const summary = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 块第 ${evt.data.attempt ?? 1} 次响应：解析 ${evt.data.parsed_groups ?? 0} 个主题，有效 ${evt.data.valid_groups ?? 0} 个，覆盖 ${evt.data.covered ?? 0}/${evt.data.papers ?? 0} 篇`;
               state.detail = summary;
-              addActivity(`${summary}${themes.length ? `；主题：${themes.slice(0, 12).join('、')}${themes.length > 12 ? '等' : ''}` : '；未得到有效主题'}`);
+              const decision = evt.data.decision === 'repair' ? '；检查未通过，进入自动修复' : '；检查通过';
+              addActivity(`${summary}${decision}${themes.length ? `；主题：${themes.slice(0, 12).join('、')}${themes.length > 12 ? '等' : ''}` : '；未得到有效主题'}`);
+            } else if (kind === 'llm_error') {
+              const reason = `${evt.data.error_type ?? '模型错误'}：${evt.data.message ?? '无详细信息'}`;
+              state.detail = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块第 ${evt.data.attempt ?? 1} 次调用失败：${reason}`;
+              addActivity(state.detail ?? '模型输出格式不符合协议，正在自动修复...');
+            } else if (kind === 'format_repair_started') {
+              const repairMessage = evt.data.message ?? '模型输出格式不符合协议，正在自动修复...';
+              state.detail = repairMessage;
+              addActivity(repairMessage);
+            } else if (kind === 'format_repair_done') {
+              state.detail = `主题分类格式修复完成：解析 ${evt.data.groups ?? 0} 个主题，正在继续校验...`;
+              addActivity(state.detail);
+            } else if (kind === 'format_repair_failed') {
+              state.detail = `主题分类格式修复失败：${evt.data.message ?? '未返回可用 JSON'}`;
+              addActivity(state.detail);
+            } else if (kind === 'chunk_failed') {
+              state.detail = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块失败：${evt.data.message ?? '未形成有效主题'}`;
+              addActivity(state.detail);
+            } else if (kind === 'theme_validation_failed') {
+              const issues = Array.isArray(evt.data.issues) ? evt.data.issues.join('；') : '';
+              state.detail = `${evt.data.message ?? '主题方案校验失败'}${issues ? ` ${issues}` : ''}`;
+              addActivity(state.detail);
             } else if (kind === 'chunk_done') {
               const themes = Array.isArray(evt.data.themes) ? evt.data.themes.filter(Boolean) : [];
               state.detail = `第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块完成：保留 ${evt.data.groups ?? 0} 个主题，覆盖 ${evt.data.covered ?? 0}/${evt.data.count ?? 0} 篇。`;
@@ -370,6 +413,10 @@ async function consumeWritingSSE(
               state.detail = `AI 质检：模型提交被驳回（${evt.data.reason ?? '校验未通过'}），要求修正重提...`;
             } else if (kind === 'timeout') {
               state.detail = evt.data.message ?? 'AI 质检未在限定轮次内完成，保留初版分组。';
+            } else if (kind === 'still_alive') {
+              // 心跳:长调用期间仅刷新等待提示,不写活动日志,避免每 5 秒刷屏。
+              const wait = Number(evt.data.elapsed_since_call ?? 0);
+              state.detail = `模型仍在返回中（本次调用已等待 ${Math.round(wait)} 秒）...`;
             } else {
               state.detail = evt.data.message ?? 'AI 质检：正在检查分组合理性...';
               addActivity(String(state.detail));
@@ -510,6 +557,9 @@ async function consumeWritingSSE(
             state.phase = 'error';
             state.error = evt.data.message;
             state.detail = evt.data.message;
+            // 保留可重试的业务状态，页面可以明确提示用户重新划分，
+            // 不把后端异常误显示成仍在运行。
+            state.waitingSeconds = 0;
             break;
         }
         onUpdate({ ...state });

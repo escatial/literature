@@ -58,7 +58,7 @@ def test_validate_submission_numeric_passes_min_groups_for_large_pool():
     submission = [
         {"name": name, "ids": ids}
         for name, ids in zip(
-            ["协同治理机制", "绩效评估方法", "数字化转型路径", "公众参与研究"],
+            ["协同治理机制", "绩效评估方法", "数字化转型路径", "公共介入行为"],
             buckets,
         )
     ]
@@ -108,7 +108,7 @@ def test_agent_resplits_fallback_group_with_numeric_ids(monkeypatch):
         submission = [
             {"name": name, "ids": ids}
             for name, ids in zip(
-                ["协同治理机制", "绩效评估方法", "数字化转型路径", "公众参与研究"],
+                ["协同治理机制", "绩效评估方法", "数字化转型路径", "公共介入行为"],
                 buckets,
             )
         ]
