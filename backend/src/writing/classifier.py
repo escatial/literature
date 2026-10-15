@@ -267,6 +267,50 @@ def _group_name_conflicts(name: str, used_names: set[str]) -> bool:
     return False
 
 
+def _best_title_phrase(title: str, pool_language: str | None = None) -> str:
+    """从单篇标题提取最长合格中文主题短语(降级命名的核心提取器)。
+
+    规则(2026-10-15 两起线上短碎片名事故后重写):
+    - 短语门槛 6 字:4-5 字的口号/半截词("世界都在吃")不作为主题名原料;
+    - 标题超过长度上限时才按从句切分,且取信息量更大的半边 ——
+      此前无条件取标记词前缀,"产业链视角下福建泉州海洋渔业产业现代化
+      发展研究"被切成"产业链视角"(视角残片),而对象词"福建泉州海洋渔业
+      产业现代化发展"在标记之后;
+    - 切出的半边剥掉学术尾缀(研究/分析/探讨/综述/述评),避免超长触发
+      标点收束而整个丢弃。
+    """
+    best = ""
+    for phrase in _re.findall(r"[\u4e00-\u9fff]{6,}", title or ""):
+        candidate = phrase
+        for lead in _TITLE_LEAD_WORDS:
+            candidate = _re.sub(rf"^{lead}", "", candidate)
+        if len(candidate) > 12:
+            for marker in _TITLE_CLAUSE_MARKERS:
+                if marker in candidate:
+                    prefix, _, after = candidate.partition(marker)
+                    sides = []
+                    for part in (prefix, after):
+                        part = _re.sub(r"(研究|分析|探讨|综述|述评)$", "", part).strip()
+                        if len(part) >= 4:
+                            sides.append(part)
+                    if sides:
+                        candidate = max(sides, key=len)
+                    break
+        while len(candidate) > 12 and candidate[-1] in "与和及的等之其路":
+            candidate = candidate[:-1]
+        if len(candidate) > _GROUP_NAME_MAX_LEN:
+            pieces = [p.strip() for p in _re.split(r"[：:，,；;。.!！?？]", candidate) if p.strip()]
+            candidate = max(pieces, key=len) if pieces else ""
+        if (
+            len(candidate) >= 6
+            and not _TITLE_FRAGMENT_SEAM_RE.match(candidate)
+            and _group_name_acceptable(candidate, pool_language=pool_language)
+        ):
+            if len(candidate) > len(best):
+                best = candidate
+    return best[:_GROUP_NAME_MAX_LEN]
+
+
 def _derive_group_name(papers: list[Paper], lit_ids: list[str], index: int = 1) -> str:
     """从真实代表文献标题提取可读主题名，不依赖任何领域词典。
 
@@ -279,34 +323,7 @@ def _derive_group_name(papers: list[Paper], lit_ids: list[str], index: int = 1) 
     if representative is None:
         return ""
     title = (representative.title or "").strip()
-    phrases = []
-    for phrase in _re.findall(r"[\u4e00-\u9fff]{4,}", title):
-        candidate = phrase
-        for lead in _TITLE_LEAD_WORDS:
-            candidate = _re.sub(rf"^{lead}", "", candidate)
-        # 标题中的“X的Y”“X背景下Y”通常已经给出可读的研究对象；
-        # 优先保留前置对象，避免把整句标题硬截断成半个词。
-        for marker in _TITLE_CLAUSE_MARKERS:
-            if marker in candidate:
-                prefix = candidate.split(marker, 1)[0]
-                if len(prefix) >= 4:
-                    candidate = prefix
-                    break
-        while len(candidate) > 12 and candidate[-1] in "与和及的等之其路":
-            candidate = candidate[:-1]
-        # 不再按固定字符数截断标题。固定截断会把“自主着陆”截成
-        # “应急自”这类半个词；只有在自然学术结尾处才收束，超长且
-        # 没有边界的片段直接交给可接受性校验拒绝。
-        if len(candidate) > _GROUP_NAME_MAX_LEN:
-            # 只按标题自身的标点或自然分句边界收束，不使用领域词表截断。
-            pieces = [p.strip() for p in _re.split(r"[：:，,；;。.!！?？]", candidate) if p.strip()]
-            candidate = max(pieces, key=len) if pieces else ""
-        if len(candidate) >= 4 and _group_name_acceptable(
-            candidate, pool_language=_pool_dominant_language(papers),
-        ):
-            phrases.append(candidate)
-    if phrases:
-        return max(phrases, key=len)[:_GROUP_NAME_MAX_LEN]
+    return _best_title_phrase(title, _pool_dominant_language(papers))
     words = [
         w for w in _re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", title)
         if w.lower() not in _ENGLISH_STOPWORDS
@@ -1282,17 +1299,11 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
         # 先从簇中心文献标题提取真实研究对象。它比把高频二元字机械拼成
         # “无人与人机与配送”更接近可读的学术主题，也完全不依赖领域词典。
         representative_title = papers[seeds[index]].title or papers[indices[0]].title or ""
-        chinese_phrases = [
-            _re.sub(r"^(基于|关于|面向)", "", phrase)
-            for phrase in _re.findall(r"[\u4e00-\u9fff]{4,}", representative_title)
-        ]
-        chinese_phrases = [
-            _re.sub(r"(研究|分析|探讨|综述)$", "", phrase).strip()
-            for phrase in chinese_phrases
-        ]
-        chinese_phrases = [phrase for phrase in chinese_phrases if len(phrase) >= 4]
-        if chinese_phrases:
-            return max(chinese_phrases, key=len)[:_GROUP_NAME_MAX_LEN]
+        chinese_name = _best_title_phrase(
+            representative_title, _pool_dominant_language(papers),
+        )
+        if chinese_name:
+            return chinese_name
 
         title_words = [
             word for word in _re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", representative_title)
@@ -1649,6 +1660,7 @@ def _plan_theme_axes(
     lazy_floor = 3 if len(papers) >= 18 else max(2, _min_groups(len(papers)))
     floor = max(2, _min_groups(len(papers)))
     last_error: Exception | None = None
+    last_raw = ""
     for attempt, temperature in ((1, 0.2), (2, 0.4), (3, 0.6)):
         import threading as _thr_plan
         _hb_stop = _thr_plan.Event()
@@ -1680,6 +1692,7 @@ def _plan_theme_axes(
                 )
             finally:
                 _hb_stop.set()
+            last_raw = raw
         except Exception as exc:
             last_error = exc
             logger.warning("主题轴规划 LLM 调用失败(attempt=%d): %s", attempt, exc)
@@ -1702,6 +1715,42 @@ def _plan_theme_axes(
             "主题轴规划第 %d 次输出不可用(axes=%d, floor=%d, lazy_floor=%d),原文预览=%s",
             attempt, len(axes), floor, lazy_floor, str(raw)[:300],
         )
+    # MiniMax 偶发把「分组内容可用、只是没按 JSON 输出」的方案写成
+    # markdown 散文(线上实测:三次输出都是编号列表,主题簇归纳得很好)。
+    # 直接放弃会整场作废并降级到本地聚类;用一次廉价转换调用把最后一版
+    # 散文转成严格 JSON,内容不重排、命名交给既有校验。
+    if last_raw.strip():
+        try:
+            if progress:
+                progress({
+                    "kind": "axis_plan_salvage_started",
+                    "message": "模型输出格式异常,正在抢救已生成的分组方案...",
+                })
+            salvage_raw = messages_create(
+                system=(
+                    "你是格式转换器。把输入的主题分组方案(自由文本)转成严格 JSON,"
+                    "保留全部分组信息,不新增、不合并、不重命名。"
+                    "每个主题的 name 必须是 ≤12 字的中文学术名词短语,"
+                    "research_question 是一句话中文研究问题。只输出 JSON 对象:"
+                    '{"themes": [{"name": "...", "research_question": "..."}]}'
+                ),
+                user=f"研究主题:{topic}\n\n分组方案文本:\n{last_raw[:3500]}",
+                max_tokens=2500, temperature=0.0,
+                response_format={"type": "json_object"},
+                timeout=90.0, max_retries=0,
+            )
+            axes = _normalize_axes(_parse_axis_response(salvage_raw), len(papers), language)
+            if len(axes) >= floor:
+                if progress:
+                    progress({
+                        "kind": "axis_plan_done",
+                        "themes": [a.name for a in axes],
+                        "message": f"分组方案抢救成功,共 {len(axes)} 个主题。",
+                    })
+                return axes
+            logger.warning("主题轴散文抢救输出不可用(axes=%d)", len(axes))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("主题轴散文抢救失败: %s", exc)
     raise ValueError(
         f"主题轴规划失败:{last_error or '模型输出不包含可用的主题方案'}"
     )
