@@ -185,6 +185,9 @@ def check_citation_accuracy(
     all_issues.extend(_check_dup_identity(papers))
     all_issues.extend(_check_source_authority(papers))
     all_issues.extend(_check_year_sanity(papers, max_year))
+    # v9.10: 同一第一作者同年多篇 → 夹注无法唯一区分,提前预警
+    from qa.author_style import check_same_author_year
+    all_issues.extend(check_same_author_year(papers))
 
     has_fail = any(i.severity == QACheckStatus.FAIL for i in all_issues)
     has_warn = any(i.severity == QACheckStatus.WARN for i in all_issues)

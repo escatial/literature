@@ -11,6 +11,7 @@ import os
 
 os.environ.setdefault("WRITING_SYNTHESIS", "0")
 os.environ.setdefault("QA_SUPPORT_JUDGE", "0")
+os.environ.setdefault("QA_SPOTCHECK", "0")  # 回源核验需外网,单测不打真实接口
 
 # LLM key 隔离:tests/crawler/integration/test_admin_api.py 导入 main.py 时,
 # main 顶层的 load_dotenv() 会把 backend/.env 的真实 MINIMAX/DEEPSEEK/GPT key

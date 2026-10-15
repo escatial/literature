@@ -149,6 +149,28 @@ class QARunner:
                 log.exception("support judge raised")
                 results.append(_skipped("support_001", "引用支持性裁判", str(exc)))
 
+        # 7) 夹注作者表达一致性(v9.10,纯规则)
+        if getattr(self.ruleset, "check_author_style", False):
+            try:
+                from qa.author_style import check_author_et_al
+                r = check_author_et_al(sections, papers)
+                results.append(r)
+                executed += 1
+            except Exception as exc:  # noqa: BLE001
+                log.exception("author style check raised")
+                results.append(_skipped("author_style_001", "夹注作者表达一致性核查", str(exc)))
+
+        # 8) 成稿抽查回源(v9.10,需外网;QA_SPOTCHECK=0 关闭,失败不阻断)
+        if getattr(self.ruleset, "check_spotcheck", False):
+            try:
+                from qa.spotcheck import check_source_spotcheck
+                r = check_source_spotcheck(papers)
+                results.append(r)
+                executed += 1
+            except Exception as exc:  # noqa: BLE001
+                log.exception("spot check raised")
+                results.append(_skipped("spotcheck_001", "成稿抽查回源核验", str(exc)))
+
         return _summarize(results, started, executed, self.ruleset)
 
 

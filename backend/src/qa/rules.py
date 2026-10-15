@@ -96,6 +96,10 @@ class QARuleSet:
     # QA_SUPPORT_JUDGE=1 显式开启,灰度期只产 WARN)。
     check_claims: bool = True
     check_support: bool = False
+    # v9.10: 夹注作者表达一致性(等/和/et al. vs 真实作者数,纯规则);
+    # 成稿抽查回源(固定种子 30% 回 Crossref,需外网,QA_SPOTCHECK=0 关闭)。
+    check_author_style: bool = True
+    check_spotcheck: bool = True
     fail_fast: bool = False
     required_pass_rate: float = 1.0
     quota: QuotaThresholds = field(default_factory=QuotaThresholds)
@@ -106,6 +110,7 @@ class QARuleSet:
         return cls(
             quota=QuotaThresholds.from_env(),
             check_support=_env_bool("QA_SUPPORT_JUDGE", False),
+            check_spotcheck=_env_bool("QA_SPOTCHECK", True),
         )
 
     def to_dict(self) -> dict[str, Any]:
