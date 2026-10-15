@@ -75,6 +75,10 @@ def _quality_rejection(paper: Paper) -> str | None:
 def _parse_decisions(raw: str) -> list[dict]:
     """解析筛选结构,兼容 JSON object 模式下的明确数组包装。"""
     cleaned = re.sub(r"```(?:json)?|```", "", raw).strip()
+    if not cleaned:
+        # MiniMax M3 偶发 200 OK 但正文为空(思考内容吃掉输出预算):
+        # 必须与"非 JSON"区分开,空正文走整批重采样,拆半没有意义。
+        raise ScreeningError("筛选结果为空")
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError as exc:
@@ -118,8 +122,8 @@ def _screen_chunk(
     raw = messages_create(
         SYSTEM,
         user,
-        # 每条多输出 3 个维度分,预算相应上调,避免 JSON 被截断触发拆半重试
-        max_tokens=6500,
+        # 每条输出 4 个维度分 + reason,预算相应上调,避免 JSON 被截断触发拆半重试
+        max_tokens=8000,
         max_retries=_SCREENING_MAX_RETRIES,
         timeout=_SCREENING_TIMEOUT_SECONDS,
         response_format={"type": "json_object"},
@@ -131,6 +135,7 @@ def _screen_chunk_with_fallback(
     papers: list[Paper],
     topic: str,
     abstract_chars: int,
+    _retried: bool = False,
 ) -> list[dict]:
     """解析或覆盖不完整时缩小请求范围,绝不默认补齐结果。"""
     try:
@@ -139,6 +144,7 @@ def _screen_chunk_with_fallback(
     except ScreeningError as exc:
         retryable = (
             "不是合法 JSON" in str(exc)
+            or "筛选结果为空" in str(exc)
             or "未覆盖 lit_id" in str(exc)
         )
         # 模型可能返回合法但不完整的 JSON,与截断 JSON 一样拆半重试。
@@ -146,6 +152,17 @@ def _screen_chunk_with_fallback(
         # 重复 lit_id 已在 _normalize_chunk_decisions 内去重容忍,不会到这里。
         if not retryable or len(papers) <= 1:
             raise
+        if not _retried:
+            # 空正文/整体退化的输出与批大小无关(MiniMax 偶发,新采样即愈),
+            # 整批重采样一次比立刻拆半更有效:拆半会把请求数翻倍且修不了
+            # 系统性抖动(线上 423 篇池实测:空正文 + 子批 lit_id 全空)。
+            log.warning(
+                "筛选批次输出异常(size=%d),整批重采样重试: %s",
+                len(papers), str(exc)[:80],
+            )
+            return _screen_chunk_with_fallback(
+                papers, topic, abstract_chars, _retried=True
+            )
         midpoint = len(papers) // 2
         return (
             _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars)
@@ -197,7 +214,12 @@ def _normalize_chunk_decisions(
             raise ScreeningError("筛选结果包含非对象项")
         lit_id = str(decision.get("lit_id", ""))
         if not lit_id:
-            raise ScreeningError("筛选结果 lit_id 为空")
+            # 与幻觉 lit_id 同策略:丢弃+告警,漏掉的真实 lit_id 交给
+            # missing_ids 校验触发整批重采样/拆半重试。线上 423 篇池实测,
+            # 低预算退化输出会出现 {"lit_id": "", ...} 条目,直接 raise 会
+            # 让整场 7 分钟的筛选作废。
+            log.warning("筛选结果某条 lit_id 为空,已丢弃该条决策")
+            continue
         if lit_id not in expected_ids:
             # batch 已去重,LLM 输出 batch 之外的 lit_id 属于幻觉/抄错:
             # 丢弃该条决策;若因此漏掉真实 lit_id,missing_ids 分支拆半重试
