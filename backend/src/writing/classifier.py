@@ -90,8 +90,21 @@ _NARRATIVE_GROUP_NAMES = frozenset({
 # 不绑定任何具体研究领域。
 _TRUNCATED_GROUP_SUFFIX_RE = _re.compile(r"(?:与|和|及|的|等|之|其)$")
 _TITLE_LEAD_RE = _re.compile(r"^(?:基于|面向|考虑|关于|针对|采用|通过)")
-# 组名长度上限:超出 12 字的 LLM 描述倾向堆砌,不再像标题
-_GROUP_NAME_MAX_LEN = 20
+# 组名长度上限:classify-plan 的口径是 3-12 字;代码级兜底取 16 ——
+# 既有回归用例里有 13/16 字合法名(如"突发公共卫生事件对水产行业的影响"),
+# 而线上泄漏的标题中段碎片是 19/20 字
+# ("背景下福清沙浦镇海产品内容营销策略研究"),16 恰好拦住后者。
+_GROUP_NAME_MAX_LEN = 16
+# 标题切头残渣:主题名以这些接缝字开头,说明是从某篇标题中段切出来的
+# 碎片而非综合命名(线上案例:"的新疆昌吉市鲜活水产品的营销渠道优化研究")。
+_TITLE_FRAGMENT_SEAM_RE = _re.compile(r"^(?:的|了|之)")
+# 标题修饰词:名字与标题的残余差若只含这些词,属于"去修饰的泛化改写"
+# (回归用例:"我国水产品出口企业国际营销策略研究"→"水产品出口企业国际
+# 营销策略"),不算标题复制;残余含内容词(如"乡村振兴""沙浦镇")才是碎片。
+_TITLE_MODIFIER_TOKENS = (
+    "我国", "中国", "国内", "国外", "背景下", "情境下", "条件下", "环境下",
+    "研究", "分析", "探讨", "综述", "述评", "对策", "启示", "现状", "进展",
+)
 # 两遍式阈值:达到该规模的主题池走「全局定轴 → 固定主题归组」两遍式,
 # 小池子单次调用一步完成定轴+归组。模块级常量便于测试覆盖默认行为。
 _CHUNK_THRESHOLD = 30
@@ -155,7 +168,11 @@ def _group_name_acceptable(
         if pool_language == "zh":
             has_chinese = any("\u4e00" <= ch <= "\u9fff" for ch in name)
             if not has_chinese:
-                if not _re.search(r"\b(?:[A-Z]{2,}|[A-Z]\d[A-Z]?)\b", name):
+                # 缩写豁免必须是白名单内的学术缩写(AI/B2B/ERP...),而不是
+                # "含任意全大写词"——旧正则下英文标题里的普通大写词(COVID)
+                # 会让英文标题碎片名在中文池直接放行。
+                tokens = _re.findall(r"[A-Za-z][A-Za-z0-9-]*", name)
+                if not any(tok.upper() in _EN_ACRONYM_ALLOWLIST for tok in tokens):
                     return False
         return True
     if len(name) > _GROUP_NAME_MAX_LEN:
@@ -195,15 +212,45 @@ def _clean_group_name(name: str) -> str:
     return name.strip()
 
 
+def _title_residual_is_modifier_only(title: str, name: str) -> bool:
+    """名字是标题子串时,判断未被覆盖的残余是否只含修饰词(泛化改写)。"""
+    idx = title.find(name)
+    if idx < 0:
+        return False
+    residual = title[:idx] + title[idx + len(name):]
+    for token in sorted(_TITLE_MODIFIER_TOKENS, key=len, reverse=True):
+        residual = residual.replace(token, "")
+    residual = _TITLE_LEAD_RE.sub("", residual)
+    return len(residual) < 2
+
+
 def _looks_like_title_prefix(name: str, papers: list[Paper], lit_ids: list[str]) -> bool:
-    """拒绝模型把长标题截断后直接当作主题名(含与某篇标题完全相同的情形)。"""
+    """拒绝模型把论文标题(整段/去头中段)直接当作主题名。
+
+    两层判定:
+    - 前缀/连续子串:名字是组内某篇标题的连续片段。前缀(≥6 字)与中段
+      子串(≥12 字,降低合成名偶然命中的误伤)分别设阈值 —— 此前只查
+      startswith,"乡村振兴背景下福清…"砍头成"背景下福清…"即可逃逸。
+    - 切头残渣:名字以"的/了/之"开头,必然是标题接缝碎片。
+    """
     compact_name = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", name or "")
     if len(compact_name) < 6:
         return False
+    if _TITLE_FRAGMENT_SEAM_RE.match((name or "").strip()):
+        return True
     by_id = {p.lit_id: p for p in papers}
+    allow_substring = len(compact_name) >= 12
     for lit_id in lit_ids:
         title = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", by_id.get(lit_id).title if by_id.get(lit_id) else "")
-        if title and len(title) >= len(compact_name) and title.startswith(compact_name):
+        if not title or len(title) < len(compact_name):
+            continue
+        if title.startswith(compact_name):
+            return True
+        if (
+            allow_substring
+            and compact_name in title
+            and not _title_residual_is_modifier_only(title, compact_name)
+        ):
             return True
     return False
 
@@ -254,7 +301,9 @@ def _derive_group_name(papers: list[Paper], lit_ids: list[str], index: int = 1) 
             # 只按标题自身的标点或自然分句边界收束，不使用领域词表截断。
             pieces = [p.strip() for p in _re.split(r"[：:，,；;。.!！?？]", candidate) if p.strip()]
             candidate = max(pieces, key=len) if pieces else ""
-        if len(candidate) >= 4 and _group_name_acceptable(candidate):
+        if len(candidate) >= 4 and _group_name_acceptable(
+            candidate, pool_language=_pool_dominant_language(papers),
+        ):
             phrases.append(candidate)
     if phrases:
         return max(phrases, key=len)[:_GROUP_NAME_MAX_LEN]
@@ -307,7 +356,7 @@ def _unique_evidence_group_name(
             continue
         if (
             candidate and not _group_name_conflicts(candidate, used_names)
-            and _group_name_acceptable(candidate)
+            and _group_name_acceptable(candidate, pool_language=_pool_dominant_language(papers))
             and not _looks_like_title_prefix(candidate, papers, lit_ids)
         ):
             return candidate
@@ -352,6 +401,9 @@ def _finalize_theme_groups(
     if not normalized:
         raise ValueError("主题结果没有形成可验证的研究问题边界，请重新划分")
 
+    # 中文池的纯英文桶必须持中文组名(展示层硬约束),再回收孤儿文献。
+    _rename_english_groups_for_zh_pool(papers, normalized, topic)
+
     # 漏分文献按标题相似度回收到最接近的主题，保证分类覆盖全集。
     _reassign_orphans(papers, [p.lit_id for p in papers if p.lit_id not in seen_ids], normalized)
 
@@ -359,9 +411,68 @@ def _finalize_theme_groups(
     return _balance_oversize_groups(papers, normalized, topic)
 
 
-def _groups_acceptable(groups: list[Group]) -> bool:
+def _groups_acceptable(groups: list[Group], pool_language: str | None = None) -> bool:
     """LLM 分组结果是否全部可接受(数量达标 + 组名合格)。"""
-    return bool(groups) and all(_group_name_acceptable(g.name) for g in groups)
+    return bool(groups) and all(
+        _group_name_acceptable(g.name, pool_language=pool_language) for g in groups
+    )
+
+
+def _zh_label_for_english_group(topic: str, used_names: set[str]) -> str:
+    """中文池里纯英文主题组的确定性中文兜底名。
+
+    语言不是主题,但英文证据无法确定性译成中文学术短语;此时用研究主题
+    派生「XX国际研究」式诚实标签(该组内容就是主题的英文文献),绝不让
+    英文标题碎片直接出现在中文综述的确认面板
+    (线上案例:主题 3 = "Sea Table Role Traceability")。
+    """
+    base = (_clean_group_name(topic or "") or "研究主题")[:8]
+    for candidate in (
+        f"{base}国际研究",
+        f"{base}国际研究进展",
+        f"{base}英文文献研究",
+    ):
+        if candidate not in used_names and _group_name_acceptable(
+            candidate, pool_language="zh",
+        ):
+            return candidate
+    for idx in range(2, 10):
+        candidate = f"{base}国际研究{idx}"
+        if candidate not in used_names and _group_name_acceptable(
+            candidate, pool_language="zh",
+        ):
+            return candidate
+    return ""
+
+
+def _rename_english_groups_for_zh_pool(
+    papers: list[Paper], groups: list[Group], topic: str,
+) -> None:
+    """zh 主导池中,纯英文文献组的组名必须是中文(就地修改)。
+
+    英文桶本身允许存在(该主题确实只有单一语言证据),但章节名是中文
+    综述的展示层信息;组内没有任何中文证据、且当前名字不含中文时,
+    替换为主题派生的中文标签。
+    """
+    if _pool_dominant_language(papers) != "zh":
+        return
+    by_id = {p.lit_id: p for p in papers}
+    used = {g.name for g in groups}
+    for group in groups:
+        has_chinese = any(
+            lid in by_id and _is_chinese_paper(by_id[lid]) for lid in group.lit_ids
+        )
+        if has_chinese or _re.search(r"[一-鿿]", group.name or ""):
+            continue
+        label = _zh_label_for_english_group(topic, used - {group.name})
+        if label:
+            logger.warning(
+                "中文池纯英文主题组「%s」更名为「%s」(组内 %d 篇均为英文文献)",
+                group.name, label, len(group.lit_ids),
+            )
+            used.discard(group.name)
+            group.name = label
+            used.add(label)
 
 
 def _is_chinese_paper(paper: Paper) -> bool:
@@ -680,7 +791,9 @@ def _repair_invalid_group_response(raw: str, *, topic: str, papers: list[Paper],
         return []
 
 
-def _build_groups(items: list[dict], valid_ids: set[str]) -> tuple[list[Group], set[str]]:
+def _build_groups(
+    items: list[dict], valid_ids: set[str], pool_language: str | None = None,
+) -> tuple[list[Group], set[str]]:
 
     for item in items:
         item.setdefault("research_question", None)
@@ -696,7 +809,7 @@ def _build_groups(items: list[dict], valid_ids: set[str]) -> tuple[list[Group], 
         if not ids:
             continue
         name = _clean_group_name(name)
-        if not _group_name_acceptable(name):
+        if not _group_name_acceptable(name, pool_language=pool_language):
             continue
         if name in names_seen:
             # 同名主题无法形成可读章节，保留首次出现的组，后续文献交给
@@ -855,12 +968,16 @@ def _split_group_balanced(
             ))
             continue
         name = _unique_evidence_group_name(papers, bucket, used_names, j + 1)
-        if not name or _group_name_conflicts(name, used_names) or not _group_name_acceptable(name):
+        if not name or _group_name_conflicts(name, used_names) or not _group_name_acceptable(
+            name, pool_language=_pool_dominant_language(papers),
+        ):
             base = _clean_group_name(group.name) or _clean_group_name(topic) or "研究综述"
             base_name = f"{base[:12]}·第{j + 1}部分"
             name = base_name
             counter = 2
-            while _group_name_conflicts(name, used_names) or not _group_name_acceptable(name):
+            while _group_name_conflicts(name, used_names) or not _group_name_acceptable(
+                name, pool_language=_pool_dominant_language(papers),
+            ):
                 name = f"{base_name}({counter})"
                 counter += 1
         payload.name = name
@@ -1029,6 +1146,7 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
             donor = max(donors, key=lambda j: len(buckets[j]))
             bucket.append(buckets[donor].pop())
     by_id = {p.lit_id: p for p in papers}
+    pool_lang = _pool_dominant_language(papers)
     groups = []
     used_names: set[str] = set()
     for i, bucket in enumerate(buckets):
@@ -1044,14 +1162,14 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
             papers, bucket, used_names, i + 1,
         )
         # 混合语言主题优先使用中文证据命名；不再用英文标题兜底覆盖中文章节。
-        if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label):
+        if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label, pool_language=pool_lang):
             # 使用同一簇其他文献中的真实短语做语义消歧；绝不拼接“研究议题N”。
             for lid in bucket[1:]:
                 candidate = _unique_evidence_group_name(papers, [lid], used_names, i + 1)
                 if candidate and not _group_name_conflicts(candidate, used_names):
                     label = candidate
                     break
-        if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label):
+        if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label, pool_language=pool_lang):
             # 标题高度重复时，从标题中的第二个自然短语取证（例如“需求约束”“
             # 风险控制”等）。这是文献证据，不是领域词典或编号占位符。
             rep_title = representative.title or ""
@@ -1059,11 +1177,11 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
                        if x not in _GENERIC_GROUP_NAMES]
             for phrase in phrases:
                 candidate = _clean_group_name(phrase)
-                if (_group_name_acceptable(candidate)
+                if (_group_name_acceptable(candidate, pool_language=pool_lang)
                         and not _group_name_conflicts(candidate, used_names)):
                     label = candidate
                     break
-        if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label):
+        if not label or _group_name_conflicts(label, used_names) or not _group_name_acceptable(label, pool_language=pool_lang):
             # 标题高度同质、各桶证据名同名冲突时，用代表标题中文前缀+序号
             # 消歧（与 _semantic_cluster_groups 的 base+index 先例一致，根
             # 仍是真实文献标题而非占位词）。不能把所有桶并回一组：几十篇
@@ -1075,7 +1193,7 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
             chinese = "".join(_re.findall(r"[\u4e00-\u9fff]", representative.title or ""))[:8]
             base = chinese or _clean_group_name(topic) or "研究综述"
             candidate = f"{base[:9]}{i + 1}"
-            if _group_name_acceptable(candidate):
+            if _group_name_acceptable(candidate, pool_language=pool_lang):
                 groups.append(Group(name=candidate, lit_ids=bucket))
                 used_names.add(candidate)
                 continue
@@ -1089,7 +1207,7 @@ def _deterministic_fallback_groups(papers: list[Paper], topic: str) -> list[Grou
         # 极端标题缺失时只能使用用户给定的研究主题作为单一总主题；这比
         # 输出编号/占位章节更诚实，也不会写死任何领域词。
         label = _clean_group_name(topic)
-        if _group_name_acceptable(label):
+        if _group_name_acceptable(label, pool_language=_pool_dominant_language(papers)):
             return [Group(name=label, lit_ids=[p.lit_id for p in papers])]
     covered = {lid for g in groups for lid in g.lit_ids}
     _reassign_orphans(papers, [p.lit_id for p in papers if p.lit_id not in covered], groups)
@@ -1211,20 +1329,29 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
     # 避免确认面板出现两个无法区分的“of与in与to”或同名主题。
     used_names: set[str] = set()
     by_lid = {p.lit_id: p for p in papers}
+    pool_lang = _pool_dominant_language(papers)
     for index, group in enumerate(groups, start=1):
-        if group.name in used_names or not _group_name_acceptable(group.name):
+        if group.name in used_names or not _group_name_acceptable(group.name, pool_language=pool_lang):
             representative = by_lid.get(group.lit_ids[0], papers[0])
             chinese = "".join(_re.findall(r"[\u4e00-\u9fff]", representative.title or ""))
             words = [
                 w for w in _re.findall(r"[A-Za-z][A-Za-z0-9-]{1,}", representative.title or "")
                 if w.lower() not in _ENGLISH_STOPWORDS
             ]
-            base = chinese[:8] if chinese else " ".join(words[:2])
-            if not base:
-                # 没有可提取标题词时不伪造领域名称；让上层明确拒绝该簇，
-                # 由重新划分或人工确认处理，而不是展示“主题方向N”。
-                continue
-            group.name = (base[:9] + str(index)).strip()
+            if chinese:
+                group.name = (chinese[:9] + str(index)).strip()
+            else:
+                # zh 池的纯英文簇:语言不是主题,展示层必须中文。用主题派生
+                # 的「XX国际研究」标签保证命名防线可收敛 —— 此前这里会
+                # 生成英文标签再被质量检查打回,整个 local_fallback 阻塞为
+                # 0 组(线上复现:423 篇池三策略全 blocked)。
+                label = (
+                    _zh_label_for_english_group(topic, used_names)
+                    if pool_lang == "zh" else ""
+                )
+                if not label:
+                    continue
+                group.name = label
         used_names.add(group.name)
     groups = [g for g in groups if g.lit_ids]
     # 退化防护:同质/低区分度池子里,文献与各簇中心的相似度几乎相同,
@@ -1292,26 +1419,40 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
                 clean = _clean_group_name(str(name))
                 original = group.name
                 used_names.discard(original)
-                if _group_name_acceptable(clean) and clean not in used_names:
+                if (_group_name_acceptable(
+                        clean, pool_language=_pool_dominant_language(papers))
+                        and clean not in used_names):
                     group.name = clean
-                elif _group_name_acceptable(original) and original not in used_names:
+                elif (_group_name_acceptable(
+                        original, pool_language=_pool_dominant_language(papers))
+                        and original not in used_names):
                     group.name = original
                 used_names.add(group.name)
         except Exception as exc:
             logger.warning("本地聚类主题命名失败，保留证据主题名: %s", exc)
+    # 中文池的纯英文簇同样必须持中文组名。
+    _rename_english_groups_for_zh_pool(papers, groups, topic)
     # 命名器可能少返回或返回重复名；最终再做一次全量收敛。
     used_names: set[str] = set()
     resolved: list[Group] = []
     for index, group in enumerate(groups, start=1):
         candidate = None
-        if _group_name_acceptable(group.name) and group.name not in used_names:
+        if (_group_name_acceptable(
+                group.name, pool_language=_pool_dominant_language(papers))
+                and group.name not in used_names):
             candidate = group.name
         if candidate is None:
-            evidence_name = local_name(
-                [i for i, paper in enumerate(papers) if paper.lit_id in set(group.lit_ids)],
-                min(index - 1, len(seeds) - 1),
+            # 证据改名走统一的中文优先链路(_unique_evidence_group_name
+            # 会优先取簇内中文文献标题并带池语言校验):此前用 local_name
+            # 裸命名 + 无池语言检查,英文簇的英文名在 zh 池永远不合格,
+            # 整个 local_fallback 被命名防线打回为 0 组。
+            evidence_name = _unique_evidence_group_name(
+                papers, group.lit_ids, used_names, index,
             )
-            if _group_name_acceptable(evidence_name) and evidence_name not in used_names:
+            if (
+                _group_name_acceptable(evidence_name, pool_language=pool_lang)
+                and evidence_name not in used_names
+            ):
                 candidate = evidence_name
         if candidate is None:
             # 命名模型失败且证据名冲突:用代表标题中文前缀+序号消歧,
@@ -1320,7 +1461,8 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
             chinese = "".join(_re.findall(r"[\u4e00-\u9fff]", representative.title or ""))[:8]
             base = chinese or _clean_group_name(topic) or "研究综述"
             numbered = f"{base[:9]}{index}"
-            if _group_name_acceptable(numbered) and numbered not in used_names:
+            if (_group_name_acceptable(numbered, pool_language=pool_lang)
+                    and numbered not in used_names):
                 candidate = numbered
         if candidate is None and resolved:
             # 仍无法命名的簇并入前一组:文献不丢、组名唯一,优于整体报错。
@@ -1329,7 +1471,10 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
         group.name = candidate or group.name
         resolved.append(group)
         used_names.add(group.name)
-    return _balance_oversize_groups(papers, resolved, topic)
+    # 池级终检:语言一致性 + 标题碎片(LLM 命名也可能产出近似标题复制名),
+    # 与 LLM 分组路径共用同一套出口校验。
+    retitled = _retitle_groups_for_pool(papers, resolved, topic)
+    return _balance_oversize_groups(papers, retitled, topic)
 
 
 def _output_token_budget(papers: list[Paper]) -> int:
@@ -1686,7 +1831,9 @@ def _assign_papers_to_axes(
                 raw, topic=topic, papers=papers, progress=progress,
             )
         mapped = _map_group_items(items, index_of)
-        built, _ = _build_groups(mapped, valid_ids)
+        built, _ = _build_groups(
+            mapped, valid_ids, pool_language=_pool_dominant_language(papers),
+        )
         anchored = _anchor_groups_to_axes(built, axes)
         covered = len({lid for g in anchored for lid in g.lit_ids})
         if progress:
@@ -1738,7 +1885,9 @@ def _assign_papers_to_axes(
             if len(items) >= len(papers):
                 items = []
             mapped = _map_group_items(items, index_of)
-            best, _ = _build_groups(mapped, valid_ids)
+            best, _ = _build_groups(
+                mapped, valid_ids, pool_language=_pool_dominant_language(papers),
+            )
         except Exception as exc:
             logger.warning("主题自主分组兜底失败: %s", exc)
     if not best:
@@ -1996,7 +2145,9 @@ def classify_by_theme(
             # 不要覆盖此前已形成的有效分组；调用方会继续进入下一轮修复。
             return []
         items = _map_group_items(items, index_of)
-        groups, _ = _build_groups(items, valid_ids)
+        groups, _ = _build_groups(
+            items, valid_ids, pool_language=_pool_dominant_language(papers),
+        )
         if progress:
             coverage = len({lid for group in groups for lid in group.lit_ids})
             progress({

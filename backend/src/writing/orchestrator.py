@@ -30,7 +30,7 @@ from agent.harness import (
 from retrieval.types import Paper, Source
 from screening.llm_filter import screen_batch, screen_batch_stream
 from writing import classifier as _classifier_mod
-from writing.classifier import Group, classify, _title_similarity
+from writing.classifier import Group, classify, _title_similarity, _pool_dominant_language
 from writing.relevance import (
     RelevanceScore,
     build_concept_groups,
@@ -90,6 +90,7 @@ def build_review_sections(
     classify_mode: str,
     groups: list[Group],
     topic: str = "",
+    pool_language: str | None = None,
 ) -> list[SectionSpec]:
     """根据分类结果构造综述章节。
 
@@ -112,7 +113,9 @@ def build_review_sections(
 
     for idx, group in enumerate(groups, start=1):
         clean_name = _clean_group_name(group.name)
-        if not _group_name_acceptable(clean_name) or clean_name in used_names:
+        if not _group_name_acceptable(
+            clean_name, pool_language=pool_language,
+        ) or clean_name in used_names:
             raise ValueError(f"第 {idx} 个主题名称不可靠，请重新划分主题：{group.name or '空名称'}")
         used_names.add(clean_name)
         sections.append(
@@ -1303,7 +1306,10 @@ def plan_review_stream(
                 if theme_meta else None
             ),
         })
-        section_specs = build_review_sections(classify_mode, groups, topic)
+        section_specs = build_review_sections(
+            classify_mode, groups, topic,
+            pool_language=_pool_dominant_language(papers),
+        )
         yield _sse_event("plan_complete", {
             "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
             "section_titles": [spec.title for spec in section_specs],
@@ -1379,7 +1385,10 @@ def generate_review_stream(
             })
             yield _sse_event("writing_started", {
                 "message": "主题已确认，开始生成综述正文。",
-                "total_sections": len(build_review_sections(classify_mode, groups, topic)),
+                "total_sections": len(build_review_sections(
+            classify_mode, groups, topic,
+            pool_language=_pool_dominant_language(papers),
+        )),
             })
         else:
             yield _sse_event("screening_started", {
@@ -1439,7 +1448,10 @@ def generate_review_stream(
 
         # v9.6:补传 topic——漏传时组名不合格的标题退化成通用名「主题研究进展」,
         # 与阶段 1 预览(L741)/同步路径(L980)不一致
-        section_specs = build_review_sections(classify_mode, groups, topic)
+        section_specs = build_review_sections(
+            classify_mode, groups, topic,
+            pool_language=_pool_dominant_language(papers),
+        )
         sections: list[SectionResult] = []
         all_dropped: list[str] = []
         for idx, spec in enumerate(section_specs):
@@ -1669,7 +1681,10 @@ def generate_review(
             log.warning("主题综合失败,已降级为直接写作: %s", exc)
             synthesis_map = {}
 
-    section_specs = build_review_sections(classify_mode, groups, topic)
+    section_specs = build_review_sections(
+            classify_mode, groups, topic,
+            pool_language=_pool_dominant_language(papers),
+        )
     sections: list[SectionResult] = []
     all_dropped: list[str] = []
     grade_map = _grade_map(relevance_report)

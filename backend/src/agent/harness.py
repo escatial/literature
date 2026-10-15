@@ -140,6 +140,25 @@ def inspect_theme_groups(groups: list[Any], papers: list[Any]) -> list[AgentChec
             {"names": names},
         ),
     ]
+    # 组名质量(碎片/占位/纯英文)走 classifier 同一套校验:此前结构核查
+    # 只查非空+唯一,标题碎片与英文章节名能通过 harness 进入确认面板
+    # (线上案例:主题 3 = "Sea Table Role Traceability")。
+    try:
+        from writing.classifier import _group_name_acceptable, _pool_dominant_language
+        pool_lang = _pool_dominant_language(papers)
+        bad_names = [
+            name for name in names
+            if not _group_name_acceptable(name, pool_language=pool_lang)
+        ]
+        checks.append(AgentCheck(
+            "theme_name_quality",
+            not bad_names,
+            [f"主题名称不可靠: {', '.join(bad_names[:3])}"] if bad_names else [],
+            {"bad_names": bad_names},
+        ))
+    except Exception:  # noqa: BLE001
+        # 校验器不可用时保持原检查集,不让结构核查本身失败
+        pass
     return checks
 
 
