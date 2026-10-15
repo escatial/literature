@@ -50,11 +50,12 @@ SYSTEM = """你是学术论文写作前的文献筛选助手。
 
 严格输出 JSON 对象(不要其他文字,不要 markdown 代码块):
 {"results": [
-  {"lit_id": "<原文 lit_id>", "relevant": true|false, "abstract_ok": true|false,
+  {"no": <输入中的编号数字>, "relevant": true|false, "abstract_ok": true|false,
    "field_match": 0-100, "method_applicability": 0-100, "conclusion_value": 0-100,
    "method_rigor": 0-100, "reason": "<一句话中文原因>"}
 ]}
-必须为输入中的每一个 lit_id 输出且只能输出一次。"""
+每条的 no 必须逐字填输入里的编号数字;严禁编造不存在的编号,严禁遗漏。
+必须为输入中的每一个编号输出且只能输出一次。"""
 
 # LLM 相关性维度字段。缺失时由 writing.relevance 用保守默认值兜底,
 # 不在筛选层伪造分数。method_rigor 仅透传给相关性报告与审计层,
@@ -104,19 +105,25 @@ def _screen_chunk(
     topic: str,
     abstract_chars: int,
 ) -> list[dict]:
-    """筛选一个有界批次,避免单次 JSON 输出被模型截断。"""
+    """筛选一个有界批次,避免单次 JSON 输出被模型截断。
+
+    输入载荷用批内数字编号(no),模型只回显编号,由本模块按位置回填
+    真实 lit_id —— 25 位十六进制串的逐字抄写是 LLM 的高频错误源
+    (线上 423 篇池实测:b775 抄成 b375),编号方案根治这一类抖动。
+    """
     payload = [
         {
-            "lit_id": p.lit_id,
+            "no": idx,
             "title": p.title,
             "abstract": (p.abstract or "")[:abstract_chars],
         }
-        for p in papers
+        for idx, p in enumerate(papers, start=1)
     ]
     user = (
         f"研究主题:{topic}\n"
-        f"候选论文:\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
+        f"候选论文(no 是每篇的唯一编号):\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n"
         "请输出严格 JSON 对象,格式为 {\"results\":[...]},覆盖全部候选论文。"
+        "每条的 no 必须逐字填输入里的编号数字,严禁编造不存在的编号。"
         "每个 reason 最多 80 个字。"
     )
     raw = messages_create(
@@ -193,49 +200,49 @@ def _normalize_chunk_decisions(
     llm_decisions: list[dict],
     batch: list[Paper],
 ) -> list[dict]:
-    """校验单批筛选结果,确保每个输入 lit_id 恰好出现一次。
+    """校验单批筛选结果:编号回填 lit_id,确保每个输入编号恰好出现一次。
 
     设计原则:
       - 上游已经按 lit_id 去重,故 batch 内必无重复 paper 实例。
-      - LLM 必须为 batch 中每个 lit_id 返回决策,字段类型必须正确。
-      - 缺失 lit_id / 非法 JSON raise ScreeningError,
-        由上游 _screen_chunk_with_fallback 拆分重试或终止流程。
-      - LLM 同批重复输出同一 lit_id 是常见抖动:保留第一条即可,不终止。
-      - v9.7:LLM 抄错/幻觉出 batch 之外的 lit_id(25 字符十六进制串,
-        抄错一位很常见)同样是模型抖动 —— 丢弃该条并告警,不再终止。
-        真正漏掉的 lit_id 由下方 missing_ids 校验兜底(拆半重试)。
+      - 模型只回显批内数字编号(no),本函数按位置映射回真实 lit_id。
+      - 缺失编号 / 非法 JSON raise ScreeningError,
+        由上游 _screen_chunk_with_fallback 整批重采样或拆分重试。
+      - 退化/抄错条目(无 no、非数字、批外编号)一律丢弃+告警,不终止;
+        真正漏掉的编号由下方 missing 校验兜底。
     """
-    expected_ids = {p.lit_id for p in batch}
-    seen_ids: set[str] = set()
+    number_map = {idx: p.lit_id for idx, p in enumerate(batch, start=1)}
+    seen_nos: set[int] = set()
     normalized: list[dict] = []
 
     for decision in llm_decisions:
         if not isinstance(decision, dict):
             raise ScreeningError("筛选结果包含非对象项")
-        lit_id = str(decision.get("lit_id", ""))
-        if not lit_id:
-            # 与幻觉 lit_id 同策略:丢弃+告警,漏掉的真实 lit_id 交给
-            # missing_ids 校验触发整批重采样/拆半重试。线上 423 篇池实测,
-            # 低预算退化输出会出现 {"lit_id": "", ...} 条目,直接 raise 会
-            # 让整场 7 分钟的筛选作废。
-            log.warning("筛选结果某条 lit_id 为空,已丢弃该条决策")
+        raw_no = decision.get("no")
+        if isinstance(raw_no, bool) or raw_no is None:
+            # 退化条目(低预算输出会出现缺 no 的对象):丢弃+告警,
+            # 漏掉的编号交给 missing 校验触发整批重采样/拆半重试。
+            log.warning("筛选结果某条缺少编号 no,已丢弃该条决策")
             continue
-        if lit_id not in expected_ids:
-            # batch 已去重,LLM 输出 batch 之外的 lit_id 属于幻觉/抄错:
-            # 丢弃该条决策;若因此漏掉真实 lit_id,missing_ids 分支拆半重试
-            log.warning("筛选结果包含未知 lit_id,已丢弃: %s(不在本批中)", lit_id)
+        try:
+            no = int(str(raw_no).strip())
+        except (TypeError, ValueError):
+            log.warning("筛选结果 no 非数字(%r),已丢弃该条决策", raw_no)
             continue
-        if lit_id in seen_ids:
+        if no not in number_map:
+            # 编号越界/抄错:丢弃该条决策;若因此漏掉真实编号,missing 分支兜底
+            log.warning("筛选结果包含未知编号 %s(不在本批中),已丢弃", no)
+            continue
+        if no in seen_nos:
             # 重复输出属于模型抖动,保留第一条决策,避免整批终止
-            log.warning("筛选结果重复 lit_id: %s(保留第一条决策)", lit_id)
+            log.warning("筛选结果重复编号 %s(保留第一条决策)", no)
             continue
         if not isinstance(decision.get("relevant"), bool):
-            raise ScreeningError(f"筛选结果 relevant 非布尔值: {lit_id}")
+            raise ScreeningError(f"筛选结果 relevant 非布尔值: no={no}")
         if not isinstance(decision.get("abstract_ok"), bool):
-            raise ScreeningError(f"筛选结果 abstract_ok 非布尔值: {lit_id}")
-        seen_ids.add(lit_id)
+            raise ScreeningError(f"筛选结果 abstract_ok 非布尔值: no={no}")
+        seen_nos.add(no)
         item = {
-            "lit_id": lit_id,
+            "lit_id": number_map[no],
             "relevant": decision["relevant"],
             "abstract_ok": decision["abstract_ok"],
             "reason": str(decision.get("reason", ""))[:200],
@@ -248,10 +255,10 @@ def _normalize_chunk_decisions(
             item[key] = round(min(100.0, max(0.0, float(value))), 2)
         normalized.append(item)
 
-    missing_ids = expected_ids - seen_ids
-    if missing_ids:
+    missing = [p.lit_id for idx, p in enumerate(batch, start=1) if idx not in seen_nos]
+    if missing:
         raise ScreeningError(
-            "筛选结果未覆盖 lit_id: " + ", ".join(sorted(missing_ids))
+            "筛选结果未覆盖 lit_id: " + ", ".join(sorted(missing))
         )
     return normalized
 
