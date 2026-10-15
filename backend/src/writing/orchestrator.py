@@ -170,6 +170,8 @@ def build_review_blueprint(
     classify_mode: str,
     groups: list[Group],
     screened_out_ids: list[str] | None = None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> dict:
     """Build a review design card and evidence matrix from verified metadata."""
     screened = set(screened_out_ids or [])
@@ -267,8 +269,13 @@ def build_review_blueprint(
             "group": group_of.get(paper.lit_id, "未归组"),
         })
     years = [p.year for p in papers if p.year]
+    research_question_field = topic.strip()
+    rqs = [str(q).strip() for q in (research_questions or []) if str(q).strip()]
     return {
-        "research_question": topic.strip(),
+        "research_question": research_question_field,
+        # v9.9: RQ 与综述目标独立存档,不再拿 topic 顶着 research_question
+        "research_questions": rqs,
+        "review_goal": (review_goal or "").strip() or None,
         "scope": {
             "time_range": [min(years) if years else None, max(years) if years else None],
             "sources": sorted({getattr(p.source, "value", str(p.source)) for p in papers}),
@@ -932,6 +939,9 @@ def _section_requires_quality_retry(result: SectionResult) -> bool:
 def _retry_section_quality(
     *, spec, topic: str, groups: list[Group], papers: list[Paper], grades: dict[str, str],
     result: SectionResult,
+    synthesis_map: dict[str, dict] | None = None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> SectionResult:
     """在 QA 前对低质量章节做一次独立重写，避免把半成品直接交付。"""
     if not _section_requires_quality_retry(result):
@@ -942,7 +952,12 @@ def _retry_section_quality(
         old_score = _article_quality_score(result.content or "", len(result.citations))
         # 模型偶发输出截断句，连续重试两次；每次都重新做证据绑定。
         for attempt in range(2):
-            retry = write_section(spec, topic, groups, papers, grades=grades)
+            retry = write_section(
+                spec, topic, groups, papers, grades=grades,
+                synthesis_map=synthesis_map,
+                research_questions=research_questions,
+                review_goal=review_goal,
+            )
             ensure_section_evidence(retry, papers)
             new_score = _article_quality_score(retry.content or "", len(retry.citations))
             if new_score >= old_score and not _section_requires_quality_retry(retry):
@@ -1049,6 +1064,40 @@ def _run_post_write_qa(
 
 
 _THEME_STRATEGIES = ("default", "minimal_abstracts", "local_fallback")
+
+
+def _run_theme_synthesis(
+    topic: str,
+    groups: list[Group],
+    papers: list[Paper],
+    research_questions: list[str] | None,
+) -> tuple[dict[str, dict], dict]:
+    """主题综合:全池证据抽取 + 按主题共识/争议/方法差异/空白综合。
+
+    失败由调用方捕获后降级为直接写作(空 synthesis_map),不阻塞主流程。
+    """
+    from evidence.extractor import extract_pool_evidence
+    from synthesis.agent import build_all_syntheses
+    evidence_map = extract_pool_evidence(papers, topic)
+    synthesis_map, meta = build_all_syntheses(
+        groups, papers, evidence_map, topic, research_questions,
+    )
+    meta = dict(meta or {})
+    meta["evidence_extracted"] = sum(
+        1 for e in evidence_map.values() if e.get("extracted")
+    )
+    return synthesis_map, meta
+
+
+def _synthesis_active(classify_mode: str, groups: list[Group]) -> bool:
+    """主题综合总开关:仅主题模式且开启 WRITING_SYNTHESIS(默认开)时执行。
+
+    locale(国内外对照)模式没有可比较的主题轴,综合层暂不参与。
+    """
+    if classify_mode != "theme" or not groups:
+        return False
+    from synthesis.agent import synthesis_enabled
+    return synthesis_enabled()
 
 
 def _run_theme_classification_loop(
@@ -1163,6 +1212,8 @@ def plan_review_stream(
     classify_mode: str,
     stop_event=None,
     progress=None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> Generator[str, None, None]:
     """两阶段·阶段1 主题规划:筛选 + 相关性分级 + 分类,停在主题确认点,不写正文。
 
@@ -1261,7 +1312,11 @@ def plan_review_stream(
             # LLM 分组失败时 classify 会降级单组兜底:告知前端醒目提示重新划分
             # ≥9 篇的池单组都不符合 _min_groups 下限,一律提示
             "classify_fallback": classify_mode == "theme" and len(papers) >= 9 and len(groups) <= 1,
-            "blueprint": build_review_blueprint(topic, papers, classify_mode, groups, screened_out),
+            "blueprint": build_review_blueprint(
+                topic, papers, classify_mode, groups, screened_out,
+                research_questions=research_questions,
+                review_goal=review_goal,
+            ),
         })
     except RuntimeError as e:
         if str(e) == "用户已停止写作":
@@ -1285,13 +1340,18 @@ def generate_review_stream(
     confirmed_groups: list[Group] | None = None,
     relevance_report: dict | None = None,
     stop_event=None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> Generator[str, None, None]:
     """流式生成综述,按事件 yield SSE 字符串。
 
     两阶段模式:confirmed_groups 非 None 时为阶段2(主题已由用户确认,直接写正文)。
     此时 papers 须传主题规划阶段(plan_review_stream)筛选后的文献,
     relevance_report 传规划阶段返回的分级清单(缺失时写作不带分级提示)。
+    v9.9: research_questions / review_goal 注入写作与述评;主题模式在写作前
+    先跑主题综合(证据抽取 + 共识/争议结构化),失败自动降级。
     """
+    input_count = len(papers)
     try:
         def check_stop():
             if stop_event is not None and stop_event.is_set():
@@ -1354,6 +1414,29 @@ def generate_review_stream(
 
         grade_map = _grade_map(relevance_report)
 
+        # === 主题综合层(v9.9):证据抽取 + 共识/争议结构化,写作前完成 ===
+        synthesis_map: dict[str, dict] = {}
+        synthesis_meta: dict | None = None
+        if _synthesis_active(classify_mode, groups):
+            yield _sse_event("synthesis_started", {
+                "themes": len(groups),
+                "message": "正在进行主题级证据抽取与共识/争议综合推理...",
+            })
+            try:
+                synthesis_map, synthesis_meta = _run_theme_synthesis(
+                    topic, groups, papers, research_questions,
+                )
+                yield _sse_event("synthesis_done", {
+                    **(synthesis_meta or {}),
+                    "themes": sorted(synthesis_map.keys()),
+                })
+            except Exception as exc:  # noqa: BLE001
+                synthesis_map = {}
+                synthesis_meta = None
+                yield _sse_event("synthesis_skipped", {
+                    "reason": f"主题综合失败,已降级为直接写作: {exc}",
+                })
+
         # v9.6:补传 topic——漏传时组名不合格的标题退化成通用名「主题研究进展」,
         # 与阶段 1 预览(L741)/同步路径(L980)不一致
         section_specs = build_review_sections(classify_mode, groups, topic)
@@ -1382,6 +1465,9 @@ def generate_review_stream(
             try:
                 for piece, done, res in write_section_stream(
                     spec, topic, groups, section_papers, grades=grade_map,
+                    synthesis_map=synthesis_map,
+                    research_questions=research_questions,
+                    review_goal=review_goal,
                 ):
                     if piece:
                         total_chars += len(piece)
@@ -1406,6 +1492,9 @@ def generate_review_stream(
                             papers=section_papers,
                             grades=grade_map,
                             result=res,
+                            synthesis_map=synthesis_map,
+                            research_questions=research_questions,
+                            review_goal=review_goal,
                         )
                         completed = True
                         sections.append(res)
@@ -1518,6 +1607,15 @@ def generate_review_stream(
             "dropped_citations": all_dropped,
             "qa_report": qa_payload,
             "qa_error": qa_failure,
+            # v9.9: PRISMA 式流程统计(识别→筛选→纳入→主题→章节→综合)
+            "flow_stats": {
+                "input_papers": input_count,
+                "screened_out": len(screened_out),
+                "included": len(papers),
+                "themes": len(groups),
+                "sections": len(sections),
+                "synthesis_themes": len(synthesis_map),
+            },
         })
 
     except RuntimeError as e:
@@ -1541,6 +1639,8 @@ def generate_review(
     do_screening: bool = True,
     confirmed_groups: list[Group] | None = None,
     relevance_report: dict | None = None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> ReviewResult:
     """一次性生成完整综述(测试/向后兼容用)。
 
@@ -1558,6 +1658,17 @@ def generate_review(
         papers, screened_out, relevance_report = _screen_papers(topic, papers, do_screening)
         groups = classify(papers, topic, classify_mode)
 
+    # 主题综合层(与流式路径一致:失败降级,不阻塞写作)
+    synthesis_map: dict[str, dict] = {}
+    if _synthesis_active(classify_mode, groups):
+        try:
+            synthesis_map, _ = _run_theme_synthesis(
+                topic, groups, papers, research_questions,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("主题综合失败,已降级为直接写作: %s", exc)
+            synthesis_map = {}
+
     section_specs = build_review_sections(classify_mode, groups, topic)
     sections: list[SectionResult] = []
     all_dropped: list[str] = []
@@ -1574,6 +1685,9 @@ def generate_review(
                 groups,
                 section_papers,
                 grades=grade_map,
+                synthesis_map=synthesis_map,
+                research_questions=research_questions,
+                review_goal=review_goal,
             )
             ensure_section_evidence(res, section_papers)
             # 章节完成后先做一次本地质量门禁；题录兜底稿、内部推理泄漏稿
@@ -1585,6 +1699,9 @@ def generate_review(
                 papers=section_papers,
                 grades=grade_map,
                 result=res,
+                synthesis_map=synthesis_map,
+                research_questions=research_questions,
+                review_goal=review_goal,
             )
         except Exception as exc:
             log.warning(

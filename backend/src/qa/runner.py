@@ -127,6 +127,28 @@ class QARunner:
                 log.exception("citation_format check raised")
                 results.append(_skipped("citation_format_001", "引用格式规范性核查", str(exc)))
 
+        # 5) 论断-证据审计(v9.9,纯规则:单一文献支撑/低严谨性单撑)
+        if getattr(self.ruleset, "check_claims", False):
+            try:
+                from qa.claims import check_claim_audit
+                r = check_claim_audit(sections, papers)
+                results.append(r)
+                executed += 1
+            except Exception as exc:  # noqa: BLE001
+                log.exception("claim audit raised")
+                results.append(_skipped("claim_audit_001", "论断-证据审计", str(exc)))
+
+        # 6) 引用支持性裁判(v9.9,LLM,默认关闭;失败不阻断其余核查)
+        if getattr(self.ruleset, "check_support", False):
+            try:
+                from qa.support import check_citation_support
+                r = check_citation_support(sections, papers)
+                results.append(r)
+                executed += 1
+            except Exception as exc:  # noqa: BLE001
+                log.exception("support judge raised")
+                results.append(_skipped("support_001", "引用支持性裁判", str(exc)))
+
         return _summarize(results, started, executed, self.ruleset)
 
 

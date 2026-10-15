@@ -193,6 +193,9 @@ class WritingRequest(BaseModel):
     confirmed_groups: list[GroupOut] | None = None
     # 阶段1返回的《文献相关性分级清单》,阶段2回传供写作带分级提示;缺省可空。
     relevance_report: dict | None = None
+    # v9.9: 研究问题(RQ1/RQ2/...)与综述目标,注入写作与述评,构成论证主线。
+    research_questions: list[str] | None = None
+    review_goal: str | None = None
 
 
 class SectionOut(BaseModel):
@@ -227,6 +230,8 @@ def writing_generate(req: WritingRequest) -> WritingResponse:
             if req.confirmed_groups is not None else None
         ),
         relevance_report=req.relevance_report,
+        research_questions=req.research_questions,
+        review_goal=req.review_goal,
     )
     # 若 orchestrator 已不再产出 reference_list 字段,这里回退重建。
     if not result.reference_list:
@@ -339,6 +344,8 @@ async def writing_generate_stream(req: WritingRequest):
         confirmed_groups=confirmed,
         relevance_report=req.relevance_report,
         stop_event=stop_event,
+        research_questions=req.research_questions,
+        review_goal=req.review_goal,
     ))
 
 
@@ -348,6 +355,10 @@ class PlanRequest(BaseModel):
     topic: str
     papers: list[PaperIn]
     classify_mode: str  # "locale" | "theme"
+    # v9.9: 阶段1即采集研究问题,前端确认主题时即可回显;当前仅在
+    # blueprint.research_questions 存档,阶段2写作时由请求再次传入。
+    research_questions: list[str] | None = None
+    review_goal: str | None = None
 
 
 @router.post("/writing/plan-stream")
@@ -376,4 +387,6 @@ async def writing_plan_stream(req: PlanRequest):
         classify_mode=req.classify_mode,
         stop_event=stop_event,
         progress=publish_classify_progress(stop_event, publish),
+        research_questions=req.research_questions,
+        review_goal=req.review_goal,
     ))

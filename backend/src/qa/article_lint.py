@@ -45,6 +45,19 @@ _AUTHOR_YEAR = re.compile(
     r")\s*[（(]\s*(?:19|20)\d{2}\s*[）)]",
     re.IGNORECASE,
 )
+# 因果断言越界:证明/证实/验证/确立等"因果确定性"动词,与因果表述(因果/导致/
+# 决定了/归因)出现在同一句。横截面问卷类文献池不支持此类强因果表述
+# (参考方案 §9 "不得把相关关系写成因果关系");只报强断言形态,
+# 普通的"X 影响 Y""X 与 Y 有关"不误报。
+_CAUSAL_OVERREACH = re.compile(
+    r"(?:证明|证实|验证|确立|厘清|揭示了?|澄清了?)"
+    r"[^。！？!?\n]{0,60}?(?:因果关系|因果效应|因果机制|因果|导致|决定了|决定着|归因于)"
+)
+# 同义弱形态:因果动词在前、证据动词在后("…的因果(关系)…得到了证明/验证")
+_CAUSAL_OVERREACH_REV = re.compile(
+    r"(?:因果关系|因果效应|因果机制)"
+    r"[^。！？!?\n]{0,40}?(?:得到?了?(?:证明|证实|验证)|被(?:证明|证实|验证))"
+)
 _FALLBACK_EVIDENCE_PREFIXES = (
     "补充证据显示",
     "与本节问题相邻的研究中",
@@ -360,6 +373,20 @@ def check_article_text(sections: list[SectionResult], papers=None) -> QACheckRes
                     section_key=section.key,
                     snippet=text[start:match.end() + 60],
                 ))
+        # 因果断言越界:横截面问卷证据不支撑"证明/证实…因果"式表述,
+        # 只告警不阻断,由作者人工复核措辞(参见参考方案 §9 相关性≠因果)。
+        if section.key != "comment":
+            for pattern in (_CAUSAL_OVERREACH, _CAUSAL_OVERREACH_REV):
+                for match in pattern.finditer(text):
+                    start = max(0, match.start() - 60)
+                    issues.append(QAIssue(
+                        "ARTICLE_CAUSAL_OVERREACH", QACheckStatus.WARN,
+                        "content", f"section:{section.key}",
+                        "正文出现因果确定性表述(证明/证实…导致/因果),"
+                        "横截面证据通常仅支持相关或影响关系,请复核措辞",
+                        section_key=section.key,
+                        snippet=text[start:match.end() + 60],
+                    ))
         for match in _raw_numeric_anchor_issues(text):
             start = max(0, match.start() - 60)
             issues.append(QAIssue(

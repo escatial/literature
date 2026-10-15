@@ -121,14 +121,45 @@ class PromptTemplate:
         if "suite" not in params:
             raise ValueError("not a suite file (missing 'suite' in meta block)")
 
-        # 提取所有 ```section <id> ... ``` 块
-        sec_re = re.compile(
-            r"^```section[ \t]+([\w-]+)[ \t]*\n(.*?)^```[ \t]*$",
-            re.DOTALL | re.MULTILINE,
-        )
+        # 提取所有 ```section <id> ... ``` 块(逐行扫描 + 围栏配对)。
+        # - id 允许为空:无 id 的首块是 _base 共享规则段(下方 ``{{base:...}}``
+        #   展开依赖它);此前正则强制要求 id,_base 永远解析不到。
+        # - 必须配对处理内部围栏:section 里常见的 ```` ```json ```` 示例块,
+        #   其纯 ```` ``` ```` 收尾行会被 naive 正则误认成 section 结束,
+        #   导致 classify 的主题质量硬约束、humanize 的 score_mode 说明
+        #   整段从生产 prompt 中丢失(线上实测确认)。
+        sec_open_re = re.compile(r"^```section[ \t]*([\w-]*)[ \t]*$")
+        fence_open_re = re.compile(r"^```[\w-]+[ \t]*$")  # ```json / ```text 等
+        fence_close_re = re.compile(r"^```[ \t]*$")
         sections: dict[str, str] = {}
-        for m in sec_re.finditer(body):
-            sections[m.group(1)] = m.group(2).strip()
+        current_id: str | None = None
+        current_lines: list[str] = []
+        inner_fences = 0
+        for line in body.split("\n"):
+            if current_id is None:
+                m = sec_open_re.match(line)
+                if m:
+                    current_id = m.group(1)
+                    current_lines = []
+                    inner_fences = 0
+                continue
+            if fence_open_re.match(line):
+                inner_fences += 1
+                current_lines.append(line)
+                continue
+            if fence_close_re.match(line):
+                if inner_fences > 0:
+                    inner_fences -= 1
+                    current_lines.append(line)
+                    continue
+                sections[current_id] = "\n".join(current_lines).strip()
+                current_id = None
+                current_lines = []
+                continue
+            current_lines.append(line)
+        # 文件结束时 section 未闭合:按已有内容收纳,不静默丢弃
+        if current_id is not None and current_id not in sections:
+            sections[current_id] = "\n".join(current_lines).strip()
 
         # 兼容旧版:某些 suite 文件第一个 ```section 块不带 id(就是 _base),
         # 现在 _base 块里的共享规则永远不会被加载。如果出现这种情况,把它

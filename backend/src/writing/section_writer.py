@@ -318,12 +318,98 @@ def _build_grade_rule(
     return rule
 
 
+# === v9.9: 主题综合(synthesis)素材注入 ===
+
+def _alias_refs(lit_ids: list[str], alias_map: dict[str, str]) -> str:
+    real_to_alias = {real: alias for alias, real in alias_map.items()}
+    return ", ".join(real_to_alias.get(lid, lid) for lid in lit_ids)
+
+
+def _build_theme_synthesis_block(
+    synthesis: dict, alias_map: dict[str, str]
+) -> str:
+    """主题章的综合素材块:共识/争议/方法差异/空白,文献以别名指代。"""
+    lines: list[str] = [
+        "【主题综合素材(前序综合阶段产出,必须消化进正文;括号内为文献清单别名)】"
+    ]
+    for item in synthesis.get("consensus") or []:
+        lines.append(
+            f"- 共识: {item['claim']} (支撑: {_alias_refs(item['lit_ids'], alias_map)})"
+        )
+    for item in synthesis.get("controversies") or []:
+        a, b = item["side_a"], item["side_b"]
+        causes = "、".join(c["cause"] for c in item.get("possible_causes") or [])
+        line = (
+            f"- 争议: {item['claim']} —— 一方({_alias_refs(a['lit_ids'], alias_map)})"
+            f"{a.get('position') or ''};另一方({_alias_refs(b['lit_ids'], alias_map)})"
+            f"{b.get('position') or ''}"
+        )
+        if causes:
+            line += f";可能原因(推测,正文须以推测语气表述): {causes}"
+        lines.append(line)
+    for diff in synthesis.get("method_differences") or []:
+        lines.append(f"- 方法差异: {diff}")
+    for gap in synthesis.get("gaps") or []:
+        if gap.get("kind") == "confirmed":
+            lines.append(f"- 证据性空白: {gap['gap']} (依据: {gap.get('evidence') or '见上'})")
+        else:
+            lines.append(
+                f"- 检索性空白: {gap['gap']} (只能表述为『现有文献较少涉及』,"
+                "严禁写成『尚无研究』)"
+            )
+    return "\n".join(lines)
+
+
+def _build_comment_synthesis_block(synthesis_map: dict | None) -> str:
+    """述评章的跨主题素材:争议点与空白(不引用文献,只概括)。"""
+    if not synthesis_map:
+        return ""
+    lines: list[str] = ["【跨主题综合素材(本段不出现任何文献夹注,仅作概括性表述)】"]
+    for key in sorted(synthesis_map.keys()):
+        synthesis = synthesis_map[key] or {}
+        for item in synthesis.get("controversies") or []:
+            causes = "、".join(c["cause"] for c in item.get("possible_causes") or [])
+            suffix = f"(可能原因: {causes})" if causes else ""
+            lines.append(f"- 争议点: {item['claim']}{suffix}")
+    confirmed = [
+        g["gap"]
+        for s in synthesis_map.values() if s
+        for g in (s.get("gaps") or []) if g.get("kind") == "confirmed"
+    ]
+    retrieved = [
+        g["gap"]
+        for s in synthesis_map.values() if s
+        for g in (s.get("gaps") or []) if g.get("kind") != "confirmed"
+    ]
+    for gap in confirmed:
+        lines.append(f"- 研究空白(有证据支撑): {gap}")
+    for gap in retrieved:
+        lines.append(f"- 研究空白(仅未检索到,表述为『现有研究较少』): {gap}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _build_rq_block(
+    research_questions: list[str] | None, review_goal: str | None
+) -> str:
+    parts: list[str] = []
+    rqs = [str(q).strip() for q in (research_questions or []) if str(q).strip()]
+    if rqs:
+        parts.append("研究问题(正文论证须服务于此):\n" + "\n".join(f"- {q}" for q in rqs))
+    goal = (review_goal or "").strip()
+    if goal:
+        parts.append(f"综述目标: {goal}")
+    return "\n".join(parts)
+
+
 def _prepare_section_context(
     section: SectionSpec,
     topic: str,
     groups: list[Group],
     papers: list[Paper],
     grades: dict[str, str] | None = None,
+    synthesis_map: dict[str, dict] | None = None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> tuple[str, str, set[str], dict[str, str], bool]:
     allowed = {p.lit_id for p in papers}
     is_comment = section.key == "comment"
@@ -379,6 +465,26 @@ def _prepare_section_context(
             "每个正文段落至少应比较或并置3位不同学者及其文献；不足3篇时必须扩展该段的文献对话，"
             "不能用同一篇文献重复凑数。"
         )
+    # v9.9: 主题综合素材(theme 章 = 本主题条目;comment 章 = 跨主题空白/争议)
+    if synthesis_map:
+        if is_comment:
+            synthesis_block = _build_comment_synthesis_block(synthesis_map)
+        else:
+            synthesis = synthesis_map.get(section.key)
+            synthesis_block = (
+                _build_theme_synthesis_block(synthesis, alias_map)
+                if synthesis else ""
+            )
+        if synthesis_block:
+            section_role += "\n" + synthesis_block
+    if is_comment:
+        rqs = [str(q).strip() for q in (research_questions or []) if str(q).strip()]
+        if rqs:
+            section_role += (
+                "\n述评末尾必须以『文献述评 → 研究空白 → 引出研究问题』的顺序,"
+                "明确说明上述不足如何引出并回应以下研究问题: "
+                + ";".join(rqs)
+            )
 
     system = render(
         "literature-review:section",
@@ -391,12 +497,16 @@ def _prepare_section_context(
         humanize=True,
         role_hint=role_hint,
     )
-    user = (
-        f"研究主题:{topic}\n\n"
-        f"章节:{section.title}\n\n"
-        f"分组概览:{', '.join(g.name for g in groups) if groups else '无分组'}\n\n"
-        "请输出本章节正文。"
+    user_parts = [f"研究主题:{topic}"]
+    rq_block = _build_rq_block(research_questions, review_goal)
+    if rq_block:
+        user_parts.append(rq_block)
+    user_parts.append(f"章节:{section.title}")
+    user_parts.append(
+        f"分组概览:{', '.join(g.name for g in groups) if groups else '无分组'}"
     )
+    user_parts.append("请输出本章节正文。")
+    user = "\n\n".join(user_parts)
     return system, user, allowed, alias_map, is_comment
 
 
@@ -1256,10 +1366,20 @@ def write_section(
     papers: list[Paper],
     model: str | None = None,
     grades: dict[str, str] | None = None,
+    synthesis_map: dict[str, dict] | None = None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> SectionResult:
-    """写一章。papers 是本章允许引用的全集,grades 是 lit_id -> 相关性等级。"""
+    """写一章。papers 是本章允许引用的全集,grades 是 lit_id -> 相关性等级。
+
+    v9.9: synthesis_map(theme_key -> 综合条目)与 research_questions/review_goal
+    可选注入;缺省行为与旧版完全一致。
+    """
     system, user, allowed, alias_map, is_comment = _prepare_section_context(
         section, topic, groups, papers, grades,
+        synthesis_map=synthesis_map,
+        research_questions=research_questions,
+        review_goal=review_goal,
     )
     required = 0 if is_comment else _min_citation_target(len(papers))
     raw = _invoke_section_chain(system=system, user=user, model=model)
@@ -1333,10 +1453,16 @@ def write_section_stream(
     papers: list[Paper],
     model: str | None = None,
     grades: dict[str, str] | None = None,
+    synthesis_map: dict[str, dict] | None = None,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
 ) -> Generator[tuple[str, bool, SectionResult | None], None, None]:
     """流式写一章:逐 token 返回,最后附带最终章节结果。"""
     system, user, allowed, alias_map, is_comment = _prepare_section_context(
         section, topic, groups, papers, grades,
+        synthesis_map=synthesis_map,
+        research_questions=research_questions,
+        review_goal=review_goal,
     )
     raw_parts: list[str] = []
     for piece in messages_stream(system=system, user=user, max_tokens=8000, model=model):

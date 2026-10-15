@@ -43,6 +43,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class QuotaThresholds:
     """文献数量合规性的阈值集合,可通过环境变量覆盖默认。
@@ -85,6 +92,10 @@ class QARuleSet:
     check_binding: bool = True
     check_quota: bool = True
     check_citation_format: bool = True
+    # v9.9: 论断-证据审计(纯规则,默认启用);支持性裁判(LLM,默认关闭,
+    # QA_SUPPORT_JUDGE=1 显式开启,灰度期只产 WARN)。
+    check_claims: bool = True
+    check_support: bool = False
     fail_fast: bool = False
     required_pass_rate: float = 1.0
     quota: QuotaThresholds = field(default_factory=QuotaThresholds)
@@ -92,7 +103,10 @@ class QARuleSet:
 
     @classmethod
     def default(cls) -> "QARuleSet":
-        return cls(quota=QuotaThresholds.from_env())
+        return cls(
+            quota=QuotaThresholds.from_env(),
+            check_support=_env_bool("QA_SUPPORT_JUDGE", False),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

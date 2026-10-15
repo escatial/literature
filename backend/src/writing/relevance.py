@@ -327,13 +327,18 @@ def _paper_text(paper: Paper) -> str:
 
 @dataclass
 class RelevanceScore:
-    """单篇文献的四维度评估结果。"""
+    """单篇文献的四维度评估结果。
+
+    method_rigor(v9.9 新增)只做透传展示与审计输入(低严谨性文献不得
+    单独支撑关键判断),不参与 total 加权与 grade 分级,保持既有分级行为。
+    """
 
     lit_id: str
     keyword_overlap: float
     field_match: float
     method_applicability: float
     conclusion_value: float
+    method_rigor: float | None = None
     reason: str = ""
     match_points: list[str] = field(default_factory=list)
 
@@ -379,6 +384,7 @@ class RelevanceScore:
                 "field_match": self.field_match,
                 "method_applicability": self.method_applicability,
                 "conclusion_value": self.conclusion_value,
+                "method_rigor": self.method_rigor,
             },
         }
 
@@ -472,6 +478,11 @@ def grade_papers(
             field_match=_coerce_score(decision.get("field_match")),
             method_applicability=_coerce_score(decision.get("method_applicability")),
             conclusion_value=_coerce_score(decision.get("conclusion_value")),
+            method_rigor=(
+                _coerce_score(decision.get("method_rigor"))
+                if decision.get("method_rigor") is not None
+                else None
+            ),
             reason=str(decision.get("reason", "")),
         )
         score.match_points = _match_points(topic, paper, score, concept_groups)

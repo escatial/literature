@@ -33,13 +33,18 @@ SYSTEM = """你是学术论文写作前的文献筛选助手。
 - abstract_ok=false:摘要缺失、只有极短描述、明显被截断,或信息不足以支撑学术综述。
 - 不要根据常识补全摘要中没有的信息。
 
-同时给出三个 0-100 的整数相关性维度分(用于后续分层筛选):
+同时给出四个 0-100 的整数评分维度(前三个用于后续分层筛选,method_rigor 用于引用审计):
 - field_match 研究领域匹配度:100 表示研究领域与用户主题完全贴合(同一研究对象与问题域);
   60-89 表示邻近领域;0-59 表示领域明显偏离。
 - method_applicability 研究方法适用性:100 表示其研究方法可被本主题直接参考或借鉴;
   70-99 表示可部分借鉴;0-69 表示方法不适用或摘要未交代方法。
 - conclusion_value 结论参考价值:100 表示结论可直接作为本主题的核心论据;
   分数越低表示结论越只能作为背景信息。
+- method_rigor 方法严谨性:评价该研究自身的证据质量——设计能否支撑其结论
+  (实验/纵向 > 横截面问卷;样本规模与代表性;是否报告效应量/稳健性;
+  测量工具是否可靠)。100 表示设计严谨、结论可信;0-59 表示设计有明显缺陷
+  或摘要完全未交代方法。该分数只影响引用审计(低严谨性文献不得单独支撑
+  关键判断),不影响 relevant 判定。
 维度分不确定时给保守分,不要凭空拔高;但这不影响 relevant 判定——
 语义相关就如实给 relevant=true。
 
@@ -47,13 +52,14 @@ SYSTEM = """你是学术论文写作前的文献筛选助手。
 {"results": [
   {"lit_id": "<原文 lit_id>", "relevant": true|false, "abstract_ok": true|false,
    "field_match": 0-100, "method_applicability": 0-100, "conclusion_value": 0-100,
-   "reason": "<一句话中文原因>"}
+   "method_rigor": 0-100, "reason": "<一句话中文原因>"}
 ]}
 必须为输入中的每一个 lit_id 输出且只能输出一次。"""
 
 # LLM 相关性维度字段。缺失时由 writing.relevance 用保守默认值兜底,
-# 不在筛选层伪造分数。
-_DIMENSION_FIELDS = ("field_match", "method_applicability", "conclusion_value")
+# 不在筛选层伪造分数。method_rigor 仅透传给相关性报告与审计层,
+# 不参与相关性分级阈值(v1 保持既有分级行为不变)。
+_DIMENSION_FIELDS = ("field_match", "method_applicability", "conclusion_value", "method_rigor")
 
 
 def _quality_rejection(paper: Paper) -> str | None:

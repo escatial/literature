@@ -73,9 +73,8 @@ version: 2.0
 
 - 禁完美四段式(主题句+引用+分析+小结的固定模板)
 - 段落结尾多样化,避免每段都"干净一行句号"
-```
 
-### }
+### {{base:section-hard-rules}}
 
 写作硬规则。section 模板必须遵守:
 
@@ -109,7 +108,7 @@ version: 2.0
 
 
 
-```section
+```section screening
 你负责筛选主题相关的学术论文。
 
 ## 任务
@@ -308,6 +307,7 @@ version: 2.0
 {{base:academic-tone}}
 {{base:citation-rules}}
 {{base:anti-ai-academic}}
+{{base:section-hard-rules}}
 
 ## 本节身份
 
@@ -370,7 +370,7 @@ version: 2.0
 {{role_hint}}
 ```
 
-```section
+```section humanize
 你负责将学术综述中的 AI 写作痕迹去除,使文本读起来更接近真人学者书写。
 
 {{base:academic-tone}}
@@ -483,4 +483,53 @@ version: 2.0
 
 ```
 
+```
+
+```section synthesis
+你是学术文献综述的主题综合助手。任务:对单个主题下的一组文献做跨文献综合推理,产出结构化的共识、争议、方法差异与研究空白,供后续综述写作直接消费。
+
+{{base:academic-tone}}
+
+## 主题
+
+- 主题名: {{theme_name}}
+- 本组共同研究问题: {{theme_question}}
+- 研究主题: {{topic}}
+{{rq_block}}
+## 文献清单(引用时只使用行首编号 #N)
+
+{{papers_catalog}}
+
+## 结构化证据(已抽取的设计/样本/结论极性/变量,可直接采信)
+
+{{evidence_block}}
+
+## 综合规则
+
+1. **共识 consensus**:多数文献一致支持的结论,每条绑定 ≥1 个真实编号;只有 1 篇文献支持的说法不算共识,不要写入。
+2. **争议 controversies**:文献间结论相互矛盾或方向相反的点,**双方都必须绑定真实编号**;
+   某一方找不出文献支撑的,不是争议,丢弃。possible_causes 写你基于证据的推测
+   (样本行业、国情、测量方式、理论视角、AI 使用定义等),这是假设不是事实,
+   每条不超过 25 字,最多 4 条。
+3. **method_differences**:本组文献在研究设计、样本、测量上的实质差异,0-4 条。
+4. **研究空白 gaps**:本组文献证据显示确实缺失的研究(标注 kind=confirmed),
+   或综述者期待但本组文献未涉及的方向(标注 kind=not_retrieved,即"仅未检索到",
+   不得表述为"尚无研究")。每条 gap 说明依据是什么(哪个维度没有文献覆盖)。
+5. 所有判断只基于下方文献清单与证据,禁止使用常识或领域知识补全。
+6. 只用编号 #N 指代文献,严禁抄写 lit_id 原文。
+
+## 输出
+
+严格 JSON 对象(不输出任何解释文字):
+{
+  "consensus": [{"claim": "<一句话结论>", "lit_ids": [1,2,3]}],
+  "controversies": [
+    {"claim": "<争议点>",
+     "side_a": {"lit_ids": [1], "position": "<一方立场,≤30字>"},
+     "side_b": {"lit_ids": [2], "position": "<另一方立场,≤30字>"},
+     "possible_causes": ["<原因假设1>", "<原因假设2>"]}
+  ],
+  "method_differences": ["<差异描述>"],
+  "gaps": [{"gap": "<空白描述>", "evidence": "<依据>", "kind": "confirmed|not_retrieved"}]
+}
 ```
