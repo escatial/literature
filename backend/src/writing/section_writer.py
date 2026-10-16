@@ -1039,19 +1039,36 @@ def _paragraph_citation_ids(text: str) -> list[list[str]]:
     return [list(dict.fromkeys(CITE_RE.findall(paragraph))) for paragraph in paragraphs]
 
 
+_MIN_PROSE_PARAGRAPH_CHARS = 40
+
+
 def _paragraph_density_failures(text: str, minimum: int = 3) -> list[int]:
-    """Return zero-based paragraph indexes with fewer than ``minimum`` sources."""
+    """Return zero-based paragraph indexes with fewer than ``minimum`` sources.
+
+    超短段落(<40 字,LLM 残根/过渡句)不参与 3 源要求:给残根段凑 3 源
+    只能靠重复引用(线上英文桶事故的重复模板句正是这么来的)。
+    """
     return [
         index
-        for index, ids in enumerate(_paragraph_citation_ids(text))
-        if len(ids) < minimum
+        for index, (ids, paragraph) in enumerate(_paragraph_citation_ids_with_text(text))
+        if len(paragraph) >= _MIN_PROSE_PARAGRAPH_CHARS and len(ids) < minimum
     ]
+
+
+def _paragraph_citation_ids_with_text(text: str) -> list[tuple[list[str], str]]:
+    """段落 → (去重引用 id 列表, 段落原文),供密度检查同时看两者。"""
+    out: list[tuple[list[str], str]] = []
+    for paragraph in [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]:
+        ids = list(dict.fromkeys(CITE_RE.findall(paragraph)))
+        out.append((ids, paragraph))
+    return out
 
 
 def _ensure_paragraph_evidence(
     result: SectionResult,
     papers: list[Paper],
     minimum: int = 3,
+    section_target: int | None = None,
 ) -> SectionResult:
     """Ensure every substantive theme paragraph has three traceable sources.
 
@@ -1067,9 +1084,17 @@ def _ensure_paragraph_evidence(
         result.density_warning = True
         return result
     allowed = {p.lit_id: p for p in papers if p.lit_id}
+    # 全节已出现的文献不得重复引用(线上事故:同一模板句在段内/段间
+    # 重复三次 —— 每个缺源段落都重新引用同样的文献,且与节级补句互
+    # 相不知情)。
+    section_cited = set(CITE_RE.findall(result.content or ""))
     rebuilt: list[str] = []
     changed = False
     for paragraph in paragraphs:
+        if len(paragraph) < _MIN_PROSE_PARAGRAPH_CHARS:
+            # 残根段不补句:在 12 字残根上贴 3 条模板句就是线上事故原文
+            rebuilt.append(paragraph)
+            continue
         ids = list(dict.fromkeys(CITE_RE.findall(paragraph)))
         # Count distinct lead authors as well as works.  Three papers by the
         # same author do not satisfy the paragraph-level comparison rule.
@@ -1082,15 +1107,30 @@ def _ensure_paragraph_evidence(
         missing = minimum - min(len(ids), len(author_keys) or len(ids))
         if missing > 0:
             for paper in papers:
+                if missing <= 0 or not paper.lit_id or paper.lit_id in ids:
+                    continue
+                if paper.lit_id in section_cited:
+                    # 已在全节其他段落引用:重复引用违反"每篇只引一次",
+                    # 宁可让该段落计不足(density_warning),也不复制模板句。
+                    continue
+                if section_target is not None and len(result.citations) >= section_target:
+                    # 节级引用已达目标配额:继续补句会超出"每篇只引一次+
+                    # 总量受控"的契约(回归用例:重建陈旧 citations 后应
+                    # 恰好补到目标数,而不是多出一篇)。
+                    break
+                display = _paper_display_author_year(paper)
+                if not display:
+                    continue  # 首作者不可用(脏数据单字母),跳过
                 lead = next((str(a).strip().lower() for a in (paper.authors or []) if str(a).strip()), paper.lit_id)
-                if missing <= 0 or not paper.lit_id or paper.lit_id in ids or lead in author_keys:
+                if lead in author_keys:
                     continue
                 phrase = _title_topic_phrase(paper.title or "")
                 paragraph += (
-                    f" {_paper_display_author_year(paper)}围绕{phrase}"
+                    f" {display}围绕{phrase}"
                     f"提供了相邻问题的研究证据[{paper.lit_id}]。"
                 )
                 ids.append(paper.lit_id)
+                section_cited.add(paper.lit_id)
                 author_keys.add(lead)
                 missing -= 1
                 changed = True
@@ -1105,11 +1145,20 @@ def _ensure_paragraph_evidence(
 
 
 def _paper_display_author_year(paper: Paper) -> str:
-    """生成仅用于自动补证据句的作者(年份)显示文本。"""
+    """生成仅用于自动补证据句的作者(年份)显示文本。
+
+    首作者不可用(中文不足 2 个汉字;英文提取不出 ≥2 个字母的姓氏,
+    例如脏数据只剩首字母 "N")时返回空串,调用方必须跳过该文献 ——
+    宁可少一条补证据句,也不能产出 "N et al.（2022）" 这种伪作者名
+    (线上 423 篇池英文桶实测)。
+    """
     authors = [str(a).strip() for a in (paper.authors or []) if str(a).strip()]
     if not authors:
-        name = "相关研究"
-    elif re.search(r"[\u4e00-\u9fff]", authors[0]):
+        return ""
+    if re.search(r"[\u4e00-\u9fff]", authors[0]):
+        first = re.sub(r"[^\u4e00-\u9fff]", "", authors[0])
+        if len(first) < 2:
+            return ""
         if len(authors) == 1:
             name = authors[0]
         elif len(authors) == 2:
@@ -1120,12 +1169,20 @@ def _paper_display_author_year(paper: Paper) -> str:
         raw = authors[0].rstrip(".").strip()
         if "," in raw:
             surname = raw.split(",", 1)[0].strip()
+            parts = [surname]
         else:
             parts = raw.split()
-            # PubMed 常用 “Family Initials”(Gauba P/Zhang Z)，OpenAlex
-            # 常用 “Given Family”(Mingyang Lyu)。单字末 token 时取首 token，
-            # 否则取末 token，避免生成 “P et al.” 之类的伪作者名。
-            surname = parts[0] if len(parts) > 1 and len(parts[-1].rstrip(".")) <= 2 else (parts[-1] if parts else raw)
+        # PubMed 常用 “Family Initials”(Gauba P/Zhang Z)，OpenAlex
+        # 常用 “Given Family”(Mingyang Lyu)。优先取 ≥2 个字母的 token;
+        # 全是单字母(脏数据 "N"/"Z")时视为不可用,返回空串。
+        solid = [
+            tok for tok in parts
+            if len(tok.rstrip(".")) >= 2
+            and re.fullmatch(r"[A-Za-z][A-Za-z\-']*", tok.rstrip("."))
+        ]
+        if not solid:
+            return ""
+        surname = solid[-1] if parts.index(solid[-1]) > 0 else solid[0]
         name = surname + (" et al." if len(authors) > 1 else "")
     return f"{name}（{paper.year}）" if paper.year else name
 
@@ -1137,18 +1194,26 @@ def _title_topic_phrase(title: str) -> str:
     原文塞进书名号)。这里把标题清洗成"研究主题短语":剥掉基于/面向类
     引导语和 研究/分析/探讨 类尾缀,保留核心研究对象。
     """
-    text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9 ]", " ", title or "")
-    text = re.sub(r"^(?:基于|面向|关于|考虑)\s*", "", text.strip())
+    text = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9 \-]", " ", title or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^(?:基于|面向|关于|考虑)\s*", "", text)
     text = re.sub(r"(?:案例分析|研究|分析|探讨|综述|述评)+$", "", text).strip()
     if re.search(r"[A-Za-z]", text):
-        words = [
-            w for w in text.split()
-            if w.lower() not in {"a", "an", "the", "of", "on", "in", "for", "and"}
-        ]
-        phrase = " ".join(words[:8])
-        if len(phrase) > 60:
-            phrase = phrase[:60].rsplit(" ", 1)[0]
-        return phrase.strip() or "related issues"
+        words = [w for w in text.split() if w]
+        # 只剥首尾停用词,保留句中功能词 —— "Prediction Based on Bayesian"
+        # 剥掉 on 会留下 "Based Bayesian" 这种词沙(线上英文桶实测)。
+        stop = {"a", "an", "the", "of", "on", "in", "for", "and", "to", "based"}
+        while words and words[0].lower() in stop:
+            words.pop(0)
+        while words and words[-1].lower() in stop:
+            words.pop()
+        cap = min(10, len(words))
+        while cap > 2 and words[cap - 1].lower() in stop:
+            cap -= 1
+        words = words[:cap]
+        if len(words) >= 2:
+            return " ".join(words)
+        return "related issues"
     compact = re.sub(r"\s+", "", text)
     if not compact:
         return "相关议题"
@@ -1186,9 +1251,12 @@ def _append_evidence_sentences(
             break
         if not paper.lit_id or paper.lit_id in existing:
             continue
+        display = _paper_display_author_year(paper)
+        if not display:
+            continue  # 首作者不可用(脏数据单字母),跳过,不产出伪作者名
         phrase = _title_topic_phrase(paper.title or "")
         additions.append(
-            f"与本节问题相邻的研究中，{_paper_display_author_year(paper)}"
+            f"与本节问题相邻的研究中，{display}"
             f"围绕{phrase}讨论了相关对象与决策约束[{paper.lit_id}]。"
         )
         existing.add(paper.lit_id)
@@ -1217,7 +1285,7 @@ def ensure_section_evidence(
         return result
     target = _min_citation_target(len(papers)) if required is None else required
     _append_evidence_sentences(result, papers, target)
-    _ensure_paragraph_evidence(result, papers, minimum=3)
+    _ensure_paragraph_evidence(result, papers, minimum=3, section_target=target)
     result.density_warning = (
         len(result.citations) < target
         or bool(_paragraph_density_failures(result.content, minimum=3))
