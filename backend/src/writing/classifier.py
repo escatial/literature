@@ -1635,6 +1635,49 @@ def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None 
     return axes
 
 
+def _salvage_axes_from_prose(
+    raw: str, papers: list[Paper], topic: str, language: str, *,
+    progress=None,
+) -> list[Group]:
+    """把 MiniMax 写成自由文本的分组方案抢救成主题轴(一次转换调用)。
+
+    线上散文日实测:第一次输出的分组内容就是好的,只是没按 JSON 输出。
+    每次尝试失败后立即抢救,比等三次全败再抢救省 2 轮 x 1-2 分钟。
+    """
+    if not (raw or "").strip():
+        return []
+    try:
+        if progress:
+            progress({
+                "kind": "axis_plan_salvage_started",
+                "message": "模型输出格式异常,正在抢救已生成的分组方案...",
+            })
+        salvage_raw = messages_create(
+            system=(
+                "你是格式转换器。把输入的主题分组方案(自由文本)转成严格 JSON,"
+                "保留全部分组信息,不新增、不合并、不重命名。"
+                "每个主题的 name 必须是 ≤12 字的中文学术名词短语,"
+                "research_question 是一句话中文研究问题。只输出 JSON 对象:"
+                '{"themes": [{"name": "...", "research_question": "..."}]}'
+            ),
+            user=(
+                f"研究主题:{topic}"
+                "\n\n分组方案文本:"
+                f"\n{raw[:3500]}"
+            ),
+            max_tokens=2500, temperature=0.0,
+            response_format={"type": "json_object"},
+            timeout=90.0, max_retries=0,
+        )
+        axes = _normalize_axes(_parse_axis_response(salvage_raw), len(papers), language)
+        if axes:
+            logger.info("主题轴散文抢救成功:%d 个主题", len(axes))
+        return axes
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("主题轴散文抢救失败: %s", exc)
+        return []
+
+
 def _plan_theme_axes(
     papers: list[Paper], topic: str, language: str, *,
     abstract_limit: int, progress=None,
@@ -1704,6 +1747,11 @@ def _plan_theme_axes(
                 })
             continue
         axes = _normalize_axes(_parse_axis_response(raw), len(papers), language)
+        if len(axes) < floor and raw.strip():
+            # 每次失败立即尝试散文抢救(不等三次全败,散文日第一次即可成功)
+            axes = _salvage_axes_from_prose(
+                raw, papers, topic, language, progress=progress,
+            ) or axes
         if len(axes) >= floor and (len(axes) >= lazy_floor or attempt >= 3):
             if progress:
                 progress({

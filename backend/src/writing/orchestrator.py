@@ -1243,7 +1243,7 @@ def plan_review_stream(
         # 主题模式直接聚类全部候选，导致只共享机器学习等泛词的无关文献混入。
         yield _sse_event("screening_started", {
             "total": len(papers),
-            "message": "正在进行主题相关性与摘要质量筛选,每批 24 篇,最多并行处理 2 批...",
+            "message": "正在进行主题相关性与摘要质量筛选,每批 36 篇,最多 4 批并行...",
         })
         screening_iterator = iter(_screen_papers_stream(topic, papers, True))
         while True:
@@ -1393,7 +1393,7 @@ def generate_review_stream(
         else:
             yield _sse_event("screening_started", {
                 "total": len(papers),
-                "message": "正在进行主题相关性与摘要质量筛选,每批 24 篇,最多并行处理 2 批...",
+                "message": "正在进行主题相关性与摘要质量筛选,每批 36 篇,最多 4 批并行...",
             })
             screening_iterator = iter(_screen_papers_stream(topic, papers, do_screening))
             while True:

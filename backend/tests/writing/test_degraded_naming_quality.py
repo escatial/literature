@@ -61,37 +61,41 @@ def test_short_title_kept_whole():
 
 _PROSE = (
     "1. **Regional brand building** - Papers about 高邮大虾 (#3) and 灵山岛海参 (#10)\n"
-    "2. **E-commerce marketing** - Papers about 生鲜电商 (#5) and 直播带货 (#7)"
+    "2. **E-commerce marketing** - Papers about 生鲜电商 (#5) and 直播带货 (#7)\n"
+    "3. **Consumer behavior** - Papers about 消费者购买意愿 (#12) and 消费偏好 (#15)"
 )
 _SALVAGED_JSON = json.dumps({"themes": [
     {"name": "区域水产品品牌建设", "research_question": "区域特色水产品如何建设品牌"},
     {"name": "生鲜电商营销渠道", "research_question": "生鲜电商如何重构营销渠道"},
+    {"name": "水产品消费行为", "research_question": "消费者为何购买水产品"},
 ]}, ensure_ascii=False)
 
 
 def test_plan_salvages_prose_output(monkeypatch):
-    """三次散文输出后,转换调用把最后一版散文转成 JSON,方案不作废。"""
+    """散文输出后立即抢救:第 1 次散文 + 第 1 次转换即通过,不再空转两轮。"""
     calls = {"n": 0}
 
     def fake_llm(system, user, **kwargs):
         calls["n"] += 1
-        if calls["n"] <= 3:
-            return _PROSE  # 三次 markdown 散文(线上实测形态)
+        if calls["n"] == 1:
+            return _PROSE  # 第一次 markdown 散文(线上实测形态)
         assert "格式转换器" in system and "分组方案文本" in user
         return _SALVAGED_JSON
 
     monkeypatch.setattr(clf, "messages_create", fake_llm)
     papers = [_paper(i, f"水产品品牌建设研究{i}", ) for i in range(1, 31)]
     axes = clf._plan_theme_axes(papers, "水产品营销策略", "zh", abstract_limit=600)
-    assert [a.name for a in axes] == ["区域水产品品牌建设", "生鲜电商营销渠道"]
+    assert [a.name for a in axes] == [
+        "区域水产品品牌建设", "生鲜电商营销渠道", "水产品消费行为",
+    ]
     assert axes[0].research_question
-    assert calls["n"] == 4  # 3 次散文 + 1 次抢救
+    assert calls["n"] == 2  # 1 次散文 + 1 次抢救(v9.10:不等三次全败)
 
 
 def test_plan_salvage_failure_still_raises(monkeypatch):
     """抢救也失败时保留原有抛错语义(不让坏数据静默通过)。"""
     def fake_llm(system, user, **kwargs):
-        return _PROSE  # 抢救调用也返回散文 → _normalize_axes 空 → 抛错
+        return _PROSE  # 每次尝试与抢救都返回散文 → _normalize_axes 空 → 抛错
 
     monkeypatch.setattr(clf, "messages_create", fake_llm)
     papers = [_paper(i, f"水产品品牌建设研究{i}") for i in range(1, 31)]
