@@ -57,6 +57,8 @@ export interface PlanPayload {
     screened_out_ids: string[];
     /** LLM 主题划分失败,单组兜底(前端应提示重新划分) */
   classify_fallback?: boolean;
+  /** v9.10: 分类策略透明化 —— degraded=true 表示 LLM 主题轴未交付,本次为本地快速聚类兜底 */
+  classification?: { strategies: string[]; degraded: boolean };
   blueprint?: ReviewBlueprint;
 }
 
@@ -455,11 +457,14 @@ async function consumeWritingSSE(
               papers: evt.data.papers ?? [],
               screened_out_ids: evt.data.screened_out_ids ?? [],
               classify_fallback: evt.data.classify_fallback === true,
+              classification: evt.data.classification,
               blueprint: evt.data.blueprint,
             };
             state.detail = state.plan.classify_fallback
               ? `模型主题划分未完全达标，已启用本地多主题兜底；请检查各主题后再开始写作。`
-              : `主题划分完成，共 ${state.plan.groups.length} 个主题，请确认或调整后开始写作。`;
+              : state.plan.classification?.degraded
+                ? `模型主题轴方案未交付，本次为本地快速聚类兜底结果；主题名为标题证据命名，建议重试或手动调整主题名。`
+                : `主题划分完成，共 ${state.plan.groups.length} 个主题，请确认或调整后开始写作。`;
             break;
           }
           case 'section_preparing':

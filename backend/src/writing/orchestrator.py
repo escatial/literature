@@ -1318,6 +1318,13 @@ def plan_review_stream(
             # LLM 分组失败时 classify 会降级单组兜底:告知前端醒目提示重新划分
             # ≥9 篇的池单组都不符合 _min_groups 下限,一律提示
             "classify_fallback": classify_mode == "theme" and len(papers) >= 9 and len(groups) <= 1,
+            # v9.10: 分类策略透明化 —— 降级到本地聚类时前端显著提示
+            # (LLM 主题轴方案未交付,本次分组与命名均为快速聚类质量)。
+            "classification": {
+                "strategies": (theme_meta or {}).get("strategies")
+                or (["llm"] if agent_meta is None else ["llm", "llm_agent"]),
+                "degraded": "local_fallback" in ((theme_meta or {}).get("strategies") or []),
+            },
             "blueprint": build_review_blueprint(
                 topic, papers, classify_mode, groups, screened_out,
                 research_questions=research_questions,
