@@ -79,15 +79,19 @@ def test_generate_review_survives_qa_fail(monkeypatch):
     groups = [orch.Group(name="治理机制", lit_ids=[p.lit_id for p in papers])]
 
     def fake_write_section(spec, topic, groups_, section_papers, grades=None, **kwargs):
+        # 真实形态的正文章节(带夹注与锚点):QA FAIL 是元数据问题,
+        # 不应连带触发"写作引擎失败"的交付门禁
         return SectionResult(
             key=getattr(spec, "key", "theme_1"),
             title=getattr(spec, "title", "治理机制"),
-            content="占位正文。",
-            citations=[],
+            content="张三（2023）指出治理机制有效，李四（2024）比较了渠道差异。",
+            citations=[p.lit_id for p in section_papers],
             dropped_citations=[],
         )
 
     monkeypatch.setattr(orch, "write_section", fake_write_section)
+    # 重写链会走真实 LLM/恢复稿,与本测试对象(QA FAIL 交付)无关
+    monkeypatch.setattr(orch, "_retry_section_quality", lambda **kw: kw["result"])
     result = generate_review(
         topic="基层治理", papers=papers, classify_mode="theme",
         confirmed_groups=groups, do_screening=False,

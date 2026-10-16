@@ -138,6 +138,8 @@ def test_stream_skips_synthesis_when_disabled(monkeypatch):
         raise AssertionError("synthesis 不应在关闭时执行")
     monkeypatch.setattr(orch, "_run_theme_synthesis", fail)
 
+    monkeypatch.setattr(orch, "_retry_section_quality", lambda **kw: kw["result"])
+
     def fake_write_section_stream(spec, topic, groups_, section_papers, **kw):
         yield "", True, _section_result(spec)
     monkeypatch.setattr(orch, "write_section_stream", fake_write_section_stream)
@@ -161,6 +163,8 @@ def test_stream_degrades_when_synthesis_fails(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("LLM 不可用")
     monkeypatch.setattr(orch, "_run_theme_synthesis", boom)
+
+    monkeypatch.setattr(orch, "_retry_section_quality", lambda **kw: kw["result"])
 
     def fake_write_section_stream(spec, topic, groups_, section_papers, **kw):
         yield "", True, _section_result(spec)

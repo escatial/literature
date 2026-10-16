@@ -62,6 +62,14 @@ _FALLBACK_EVIDENCE_PREFIXES = (
     "补充证据显示",
     "与本节问题相邻的研究中",
 )
+# 兜底句模板的标志短语(子串式检测):模板句式随版本演化过,
+# 只按行首前缀检测会漏掉新句式(线上英文桶实测漏检)。
+_FALLBACK_EVIDENCE_MARKERS = (
+    "提供了相邻问题的研究证据",
+    "讨论了相关对象与决策约束",
+    "其题录证据可用于界定该研究路径",
+    "题录已核验",
+)
 _PARAGRAPH_NUMERIC_CITATION = re.compile(r"\[(\d{1,3})\]")
 _PARAGRAPH_LIT_CITATION = re.compile(r"\[lit_[^\]]+\]")
 _PARAGRAPH_AUTHOR_YEAR = re.compile(
@@ -337,7 +345,9 @@ def check_article_text(sections: list[SectionResult], papers=None) -> QACheckRes
         if section.key != "comment":
             nonempty_lines = [line.strip() for line in text.splitlines() if line.strip()]
             fallback_count = sum(
-                line.startswith(_FALLBACK_EVIDENCE_PREFIXES) for line in nonempty_lines
+                line.startswith(_FALLBACK_EVIDENCE_PREFIXES)
+                or any(marker in line for marker in _FALLBACK_EVIDENCE_MARKERS)
+                for line in nonempty_lines
             )
             # Any template fallback sentence is a delivery defect.  It is
             # acceptable as an internal recovery signal, but it must not leak

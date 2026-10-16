@@ -1183,6 +1183,10 @@ def _paper_display_author_year(paper: Paper) -> str:
         if not solid:
             return ""
         surname = solid[-1] if parts.index(solid[-1]) > 0 else solid[0]
+        # 全大写 2-4 字母是 PubMed 的姓名缩写("LB"/"JBB"),不是姓氏 ——
+        # 照拼会产出 "LB et al.（2024）"(线上英文桶实测),视为不可用。
+        if re.fullmatch(r"[A-Z]{2,4}", surname):
+            return ""
         name = surname + (" et al." if len(authors) > 1 else "")
     return f"{name}（{paper.year}）" if paper.year else name
 

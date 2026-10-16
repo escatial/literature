@@ -902,10 +902,11 @@ def _evidence_recovery_section_result(spec, topic: str, papers: list[Paper]):
         if not paper.lit_id:
             continue
         author_year = _paper_display_author_year(paper)
+        if not author_year:
+            continue  # 首作者不可用(脏数据缩写/单字母),跳过,不产出伪作者名
         phrase = _title_topic_phrase(paper.title or "")
         evidence.append(
-            f"{author_year}针对{phrase}等议题讨论了与本主题相关的研究对象、决策变量或分析方法，"
-            f"其题录证据可用于界定该研究路径的适用边界[{paper.lit_id}]。"
+            f"{author_year}研究了{phrase}相关议题，题录已核验[{paper.lit_id}]。"
         )
         citations.append(paper.lit_id)
     if evidence:
@@ -924,6 +925,45 @@ def _evidence_recovery_section_result(spec, topic: str, papers: list[Paper]):
         citations=citations,
         dropped_citations=[],
     )
+
+
+_RECOVERY_DRAFT_SIGNATURES = (
+    "题录已核验",
+    "提供了相邻问题的研究证据",
+    "讨论了相关对象与决策约束",
+)
+
+
+def _recovery_draft_ratio(sections: list[SectionResult]) -> float:
+    """主题章节中「纯题录恢复稿」的占比(非述评章)。
+
+    判定为恢复稿(任一):
+    - 含恢复稿导语"以下研究均来自当前文献池"(该导语是恢复稿独有的指纹);
+    - ≥3 句且 8 成以上句子是补证据模板句。
+    只补了两三条证据句的正文薄段不算恢复稿(那由 QA FALLBACK_ONLY 明细
+    覆盖),避免把可交付的薄稿误升级成硬失败。
+    """
+    theme_sections = [s for s in sections if s.key != "comment"]
+    if not theme_sections:
+        return 0.0
+    bad = 0
+    for section in theme_sections:
+        content = section.content or ""
+        if "以下研究均来自当前文献池" in content:
+            bad += 1
+            continue
+        sentences = [
+            x.strip() for x in _re.split(r"[。！？!?\n]", content) if x.strip()
+        ]
+        if len(sentences) < 3:
+            continue
+        hits = sum(
+            1 for sentence in sentences
+            if any(sig in sentence for sig in _RECOVERY_DRAFT_SIGNATURES)
+        )
+        if hits / len(sentences) >= 0.8:
+            bad += 1
+    return bad / len(theme_sections)
 
 
 def _section_requires_quality_retry(result: SectionResult) -> bool:
@@ -1546,6 +1586,18 @@ def generate_review_stream(
                     "dropped_citations": res.dropped_citations,
                 })
 
+        # 交付门禁:若多数主题章节只是题录恢复稿(LLM 写作连续失败的产物),
+        # 明确报错让用户重试,而不是把一堵模板墙静默交付(v9.7 软门禁只
+        # 覆盖"局部兜底",覆盖不了"全线失败"的极端场景)。
+        if _recovery_draft_ratio(sections) >= 0.5:
+            import sys as _sys
+            print("GATE-DEBUG ratio:", _recovery_draft_ratio(sections),
+                  {s.key: s.content[:60] for s in sections}, file=_sys.stderr)
+            raise ValueError(
+                "写作引擎连续失败，各章节仅能生成题录清单而非正文。"
+                "文献池与主题划分不受影响，请稍后重试写作。"
+            )
+
         # 打通正文锚点与参考文献编号:分配全局编号、替换正文 [lit_xxx] -> [N]
         ref, _number_map = apply_citation_numbering(sections, papers)
         finalized_sections = [
@@ -1733,6 +1785,13 @@ def generate_review(
             res = _placeholder_section_result(spec, topic, section_papers)
         sections.append(res)
         all_dropped.extend(res.dropped_citations)
+
+    # 交付门禁(与流式路径一致):全模板墙不静默交付
+    if _recovery_draft_ratio(sections) >= 0.5:
+        raise ValueError(
+            "写作引擎连续失败，各章节仅能生成题录清单而非正文。"
+            "文献池与主题划分不受影响，请稍后重试写作。"
+        )
 
     # 统一编号:正文 [lit_xxx] -> [N],与参考文献列表顺序一致(调用方渲染列表)
     reference_list, _ = apply_citation_numbering(sections, papers)
