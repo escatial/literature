@@ -1682,12 +1682,50 @@ def _salvage_axes_from_prose(
         return []
 
 
+def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None) -> str:
+    """把全池文献按阅读顺序拼接成一篇"大文档",作为主题轴规划的输入。
+
+    用户策略(v9.10):先拼接、再划分 —— 主题划分应基于通读全部文献,
+    而不是被截断到几百字的残缺目录。因此:
+    - 每篇 = 行首编号 #N + 题名 + 完整摘要(默认不截断);
+    - 总预算(PLAN_CORPUS_CHARS,默认 24 万字符)放不下时先按篇均摊缩减
+      摘要,极端时剩余文献只保留题名 —— 编号连续,任何文献都不丢号。
+    """
+    import os as _os
+    if budget_chars is None:
+        try:
+            budget_chars = int(_os.environ.get("PLAN_CORPUS_CHARS", "240000"))
+        except ValueError:
+            budget_chars = 240_000
+    n = len(papers)
+    if not papers:
+        return ""
+    per_paper = max(300, budget_chars // max(1, n))
+    lines: list[str] = []
+    used = 0
+    for idx, paper in enumerate(papers, start=1):
+        abstract = (paper.abstract or "").strip()
+        if len(abstract) > per_paper:
+            abstract = abstract[:per_paper].rstrip() + "…"
+        block = f"# {idx} | {paper.title}\n摘要:{abstract or '(无摘要)'}"
+        if used + len(block) > budget_chars and lines:
+            # 预算耗尽:剩余文献保留编号与题名,不丢号
+            for j in range(idx, n + 1):
+                lines.append(f"# {j} | {papers[j - 1].title}")
+            break
+        lines.append(block)
+        used += len(block) + 2
+    return "\n\n".join(lines)
+
+
 def _plan_theme_axes(
     papers: list[Paper], topic: str, language: str, *,
     abstract_limit: int, progress=None,
 ) -> list[Group]:
     """第一遍:单次调用通读全部题录,产出全局主题轴(名称 + 研究问题)。"""
-    catalog = _catalog_lines(papers, abstract_limit)
+    # 用户策略:先拼接成大文档再划分 —— 完整摘要进上下文,
+    # 主题轴基于通读全部文献而非残缺目录
+    catalog = _build_corpus_document(papers)
     system = render(
         "literature-review:classify-plan",
         topic=topic,

@@ -57,6 +57,49 @@ def test_short_title_kept_whole():
     assert clf._best_title_phrase("渔村的营销转型", "zh") == "渔村的营销转型"
 
 
+# ---------- 大文档规划(用户策略:先拼接、再划分) ----------
+
+def test_corpus_document_budget_and_numbering():
+    from writing.classifier import _build_corpus_document
+    papers = [
+        Paper(lit_id="a", source=Source.CNKI, title="甲主题研究", authors=["张三"], journal="J", year=2024, abstract="全" * 3000),
+        Paper(lit_id="b", source=Source.OPENALEX, title="Salmon marketing", authors=["Lee"], journal="J", year=2025, abstract="x" * 500),
+        Paper(lit_id="c", source=Source.CNKI, title="无摘要文献", authors=["王五"], journal="J", year=2023, abstract=None),
+    ]
+    doc = _build_corpus_document(papers)
+    # 预算内:完整摘要、连续编号、无摘要也有占位
+    assert all(f"# {i}" in doc for i in (1, 2, 3))
+    assert "全" * 3000 in doc
+    assert "(无摘要)" in doc
+    # 超预算:摘要按篇缩减,但任何文献都不丢号
+    doc2 = _build_corpus_document(papers, budget_chars=800)
+    assert ("全" * 3000) not in doc2
+    assert all(f"# {i}" in doc2 for i in (1, 2, 3))
+
+
+def test_plan_uses_corpus_document(monkeypatch):
+    """plan 阶段的 catalog 应为全池大文档(完整摘要),而非 600 字截断目录。"""
+    captured = {}
+
+    def fake_llm(system, user, **kwargs):
+        captured["system"] = system
+        return json.dumps({"themes": [
+            {"name": "区域水产品品牌建设", "research_question": "区域特色水产品如何建设品牌"},
+            {"name": "生鲜电商营销渠道", "research_question": "生鲜电商如何重构营销渠道"},
+            {"name": "水产品消费行为", "research_question": "消费者为何购买水产品"},
+        ]}, ensure_ascii=False)
+
+    monkeypatch.setattr(clf, "messages_create", fake_llm)
+    papers = [
+        Paper(lit_id=f"lit_{i:03d}", source=Source.CNKI, title=f"水产品品牌建设研究{i}",
+              authors=["张三"], journal="J", year=2024, abstract="全" * 1500)
+        for i in range(1, 31)
+    ]
+    clf._plan_theme_axes(papers, "水产品营销策略", "zh", abstract_limit=600)
+    system_text = captured["system"]
+    # 完整摘要(1500 字)未按 600 截断 → 大文档生效
+    assert "全" * 1500 in system_text
+
 # ---------- plan 阶段散文抢救 ----------
 
 _PROSE = (
