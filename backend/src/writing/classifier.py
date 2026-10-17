@@ -1726,11 +1726,26 @@ def _corpus_display_author_year(paper: Paper) -> str:
     return f"{name}{year}"
 
 
+_CORPUS_MIN_ABSTRACT_CHARS = 10
+
+
+def _corpus_candidates(papers: list[Paper]) -> list[Paper]:
+    """拼接初筛:剔除没有摘要(缺失或过短残句)的文献。
+
+    用户规则:没有摘要的观点卡没有内容可拼,直接剔除,不进大文档。
+    """
+    return [
+        p for p in papers
+        if len((p.abstract or "").strip()) >= _CORPUS_MIN_ABSTRACT_CHARS
+    ]
+
+
 def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None) -> str:
     """把全池文献拼接成一篇"大文档",作为主题轴规划与写作的统一输入。
 
     用户策略(v9.10):先拼接、再划分 —— 每篇文献一条观点卡:
         XXX（年份）认为：<摘要全文>
+    - 拼接前剔除无摘要文献(_corpus_candidates);
     - 总预算(PLAN_CORPUS_CHARS,默认 24 万字符)放不下时按篇均摊缩减
       摘要;极端时剩余文献只保留「作者（年份）认为：(摘要缺失)」占位
       —— 陈述句形态保持不变,任何文献都不丢。
@@ -1769,8 +1784,14 @@ def _plan_theme_axes(
 ) -> list[Group]:
     """第一遍:单次调用通读全部题录,产出全局主题轴(名称 + 研究问题)。"""
     # 用户策略:先拼接成大文档再划分 —— 完整摘要进上下文,
-    # 主题轴基于通读全部文献而非残缺目录
-    catalog = _build_corpus_document(papers)
+    # 主题轴基于通读全部文献而非残缺目录;无摘要文献先剔除
+    candidates = _corpus_candidates(papers)
+    if not candidates:
+        raise ValueError(
+            "文献池中没有带摘要的文献，无法拼接大文档进行主题划分。"
+            "请导入含摘要的文献后重试。"
+        )
+    catalog = _build_corpus_document(candidates)
     system = render(
         "literature-review:classify-plan",
         topic=topic,

@@ -17,7 +17,8 @@ from retrieval.types import Paper, Source
 def _paper(i, title, source=Source.CNKI):
     return Paper(
         lit_id=f"lit_{i:03d}", source=source, title=title,
-        authors=["张三"], journal="J", year=2023, abstract="摘要",
+        authors=["张三"], journal="J", year=2023,
+        abstract="这是一份用于测试的研究摘要内容",
     )
 
 
@@ -66,15 +67,19 @@ def test_corpus_document_budget_and_numbering():
         Paper(lit_id="b", source=Source.OPENALEX, title="Salmon marketing", authors=["Lee"], journal="J", year=2025, abstract="x" * 500),
         Paper(lit_id="c", source=Source.CNKI, title="无摘要文献", authors=["王五"], journal="J", year=2023, abstract=None),
     ]
-    doc = _build_corpus_document(papers)
-    # 观点卡格式:XXX（年份）认为：摘要;预算内完整摘要;无摘要占位
+    from writing.classifier import _corpus_candidates
+    candidates = _corpus_candidates(papers)
+    assert len(candidates) == 2  # 无摘要的第三篇被初筛剔除
+    doc = _build_corpus_document(candidates)
+    # 观点卡格式:XXX（年份）认为：摘要;预算内完整摘要
     assert "张三（2024）认为：" in doc
     assert "全" * 3000 in doc
-    assert "(摘要缺失)" in doc
-    # 超预算:摘要按篇缩减,但任何文献都不丢(占位句形态保持)
-    doc2 = _build_corpus_document(papers, budget_chars=800)
+    # 无摘要文献被初筛剔除(不再以占位句进入大文档)
+    assert "无摘要文献" not in doc
+    assert "(摘要缺失)" not in doc
+    # 超预算:摘要按篇缩减,但不丢有摘要的文献
+    doc2 = _build_corpus_document(_corpus_candidates(papers), budget_chars=800)
     assert ("全" * 3000) not in doc2
-    assert doc2.count("认为：(摘要缺失)") >= 1
 
 
 def test_plan_uses_corpus_document(monkeypatch):

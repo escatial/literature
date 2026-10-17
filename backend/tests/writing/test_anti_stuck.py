@@ -14,7 +14,7 @@ def _paper(i: int) -> Paper:
         lit_id=f"lit_cnki_{i:016x}", source=Source.CNKI,
         title=f"心题纸 {i}",
         authors=[f"作家{i}"], journal="测试", year=2024,
-        abstract=f"摘要 {i}",
+        abstract=f"这是第{i}篇文献的测试摘要内容,用于主题划分",
     )
 
 

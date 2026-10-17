@@ -114,12 +114,19 @@ def corpus_document(
     db: Session = Depends(get_db),
 ):
     """返回当前任务文献池拼接的大文档(主题划分的真实 LLM 输入)。"""
-    from writing.classifier import _build_corpus_document
+    from writing.classifier import _build_corpus_document, _corpus_candidates
 
     task_id = _resolve_task_id(x_task_id)
     papers = _task_papers_as_retrieval(db, task_id)
-    document = _build_corpus_document(papers)
-    return {"papers": len(papers), "chars": len(document), "document": document}
+    candidates = _corpus_candidates(papers)
+    document = _build_corpus_document(candidates)
+    return {
+        "papers": len(papers),
+        "included": len(candidates),
+        "excluded_no_abstract": len(papers) - len(candidates),
+        "chars": len(document),
+        "document": document,
+    }
 
 
 @router.get("/corpus-document/docx")
@@ -135,8 +142,9 @@ def corpus_document_docx(
     if not papers:
         raise HTTPException(404, "当前任务文献池为空")
 
-    from writing.classifier import _build_corpus_document, _corpus_display_author_year
+    from writing.classifier import _build_corpus_document, _corpus_candidates, _corpus_display_author_year
 
+    papers = _corpus_candidates(papers)
     document = _build_corpus_document(papers)
     # 每条观点卡行尾追加 [N];脚注 = GB/T 著录(与行序一一对应)
     md_lines: list[str] = []
