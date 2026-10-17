@@ -131,8 +131,18 @@ def _add_footnote_definition(doc: Document, fn_id: int, text: str) -> None:
     r_sp.append(t_sp)
     p.append(r_sp)
 
-    # 脚注正文
+    # 脚注正文(宋体/Times New Roman 小五 9pt)
     r1 = OxmlElement("w:r")
+    rPr1 = OxmlElement("w:rPr")
+    rFonts1 = OxmlElement("w:rFonts")
+    rFonts1.set(qn("w:ascii"), "Times New Roman")
+    rFonts1.set(qn("w:hAnsi"), "Times New Roman")
+    rFonts1.set(qn("w:eastAsia"), "宋体")
+    rPr1.append(rFonts1)
+    sz1 = OxmlElement("w:sz")
+    sz1.set(qn("w:val"), "18")  # 9pt 小五
+    rPr1.append(sz1)
+    r1.append(rPr1)
     t1 = OxmlElement("w:t")
     t1.text = text
     t1.set(qn("xml:space"), "preserve")
@@ -210,6 +220,7 @@ def render_docx_with_footnotes(
     out_path: str,
     papers: list,
     title: str = "文献综述",
+    refs_text: str | None = None,
 ) -> DocxBuildResult:
     """主入口:把 Markdown 综述 + 论文元数据渲染为带 Word 原生脚注的 .docx。
 
@@ -223,8 +234,10 @@ def render_docx_with_footnotes(
     Returns:
         DocxBuildResult(out_path, footnote_count, reference_count, body_paragraphs)
     """
-    # 1. 先用 citeproc 渲染参考文献清单(统一按引用顺序编号 [1..N])
-    refs_text = render_reference_list(papers)
+    # 1. 参考文献清单:导出场景直接使用存储的编号清单(与正文 [N] 对齐);
+    # 生成场景用 citeproc 按引用顺序渲染 [1..N]
+    if not refs_text:
+        refs_text = render_reference_list(papers)
 
     # 2. 把 references 拆成 list[FootnoteItem]
     fn_items: list[FootnoteItem] = []
@@ -245,11 +258,12 @@ def render_docx_with_footnotes(
     # 3. 创建 Document
     doc = Document()
 
-    # 默认中文字体
+    # 默认排版(学位论文规格):中文宋体、英文 Times New Roman、小四、1.5 倍行距
     style = doc.styles["Normal"]
     style.font.name = "Times New Roman"
-    style.font.size = Pt(10.5)
+    style.font.size = Pt(12)  # 小四
     style.element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+    style.paragraph_format.line_spacing = 1.5
 
     # 4. 确保 footnotes 部件存在
     _ensure_footnotes_part(doc)
@@ -280,7 +294,8 @@ def render_docx_with_footnotes(
             p = doc.add_paragraph()
             run = p.add_run(line)
             run.font.name = "Times New Roman"
-            run.font.size = Pt(10.5)
+            run.font.size = Pt(12)  # 小四
+            run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
             # v9.6:把段落中所有 [N] 都替换为脚注引用(此前只替换第一个)
             if _replace_anchors_with_footnote_refs(p, max_index=len(fn_items)):
                 body_paragraphs += 1
@@ -291,8 +306,11 @@ def render_docx_with_footnotes(
         p = doc.add_paragraph()
         run = p.add_run(f"[{fn.index}] {fn.text}")
         run.font.name = "Times New Roman"
-        run.font.size = Pt(10.5)
+        run.font.size = Pt(12)  # 小四
+        run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
 
+    # 8. 排版兜底:全部非标题段落 1.5 倍行距;所有 run 中文宋体/西文 Times
+    _apply_thesis_typography(doc)
     doc.save(out_path)
 
     return DocxBuildResult(
@@ -301,6 +319,26 @@ def render_docx_with_footnotes(
         reference_count=len(fn_items),
         body_paragraphs=body_paragraphs,
     )
+
+
+def _apply_thesis_typography(doc) -> None:
+    """学位论文排版兜底:非标题段落 1.5 倍行距;全部 run 中文宋体、
+    西文 Times New Roman、小四。标题沿用 Word 内置标题样式字号,
+    但中文字体仍统一为宋体。"""
+    for paragraph in doc.paragraphs:
+        style_name = (paragraph.style.name or "") if paragraph.style is not None else ""
+        is_heading = style_name.startswith(("Heading", "Title"))
+        if not is_heading:
+            paragraph.paragraph_format.line_spacing = 1.5
+        for run in paragraph.runs:
+            run.font.name = "Times New Roman"
+            run.font.size = Pt(12)
+            rPr = run._element.get_or_add_rPr()
+            rFonts = rPr.rFonts
+            if rFonts is None:
+                rFonts = OxmlElement("w:rFonts")
+                rPr.append(rFonts)
+            rFonts.set(qn("w:eastAsia"), "宋体")
 
 
 __all__ = ["render_docx_with_footnotes", "DocxBuildResult", "FootnoteItem"]

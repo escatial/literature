@@ -121,6 +121,20 @@ def _sse_stream_response(stream_fn) -> StreamingResponse:
     )
 
 
+@router.post("/writing/corpus-preview")
+def writing_corpus_preview(req: WritingRequest):
+    """预览"文献拼接大文档"(主题轴规划的真实输入,先拼接、再划分)。"""
+    from writing.classifier import _build_corpus_document
+
+    papers = [p.to_paper() for p in req.papers]
+    document = _build_corpus_document(papers)
+    return {
+        "papers": len(papers),
+        "chars": len(document),
+        "document": document,
+    }
+
+
 @router.post("/writing/stop")
 def writing_stop() -> dict:
     """立即请求停止当前写作流；循环会在当前 LLM/网络调用返回后退出。"""
