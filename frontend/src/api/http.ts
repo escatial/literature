@@ -7,6 +7,8 @@ const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefi
 // dev 走 vite proxy, prod/自定义环境可通过 VITE_API_BASE 指向后端 origin。
 const baseURL = getApiBaseURL(backendOrigin);
 
+export const apiBaseURL = baseURL;
+
 export const http = axios.create({
   baseURL,
   timeout: 180_000,

@@ -18,6 +18,7 @@ import {
   ElTag,
 } from 'element-plus';
 import { toast } from '@/utils/toast';
+import { apiBaseURL } from '@/api/http';
 import { getTaskTopic } from '@/api/endpoints';
 import { useTopicStore } from '@/stores/topic';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
@@ -244,6 +245,11 @@ const qaStatusTagType = (status: string) =>
 
 // ============ 两阶段·阶段1:先划分主题,用户确认后才能写正文 ============
 
+const exportWord = () => {
+  // 后端生成带原生脚注的 docx(宋体小四/Times New Roman/1.5 倍行距)
+  window.open(`${apiBaseURL}/reviews/latest/export/docx`, '_blank');
+};
+
 const start = async () => {
   if (!topicInput.value.trim()) {
     toast.error('请先填写研究主题(可在本页直接编辑)');
@@ -439,6 +445,15 @@ const downloadMd = () => {
         @click="rePlan"
       >
         重新划分主题
+      </el-button>
+      <el-button
+        v-if="stream.phase === 'complete'"
+        type="success"
+        size="large"
+        plain
+        @click="exportWord"
+      >
+        导出 Word（含脚注）
       </el-button>
 
       <div v-if="running || stream.phase !== 'idle'" style="margin-top: 16px">
