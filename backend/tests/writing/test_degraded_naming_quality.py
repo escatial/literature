@@ -67,14 +67,14 @@ def test_corpus_document_budget_and_numbering():
         Paper(lit_id="c", source=Source.CNKI, title="无摘要文献", authors=["王五"], journal="J", year=2023, abstract=None),
     ]
     doc = _build_corpus_document(papers)
-    # 预算内:完整摘要、连续编号、无摘要也有占位
-    assert all(f"# {i}" in doc for i in (1, 2, 3))
+    # 观点卡格式:XXX（年份）认为：摘要;预算内完整摘要;无摘要占位
+    assert "张三（2024）认为：" in doc
     assert "全" * 3000 in doc
-    assert "(无摘要)" in doc
-    # 超预算:摘要按篇缩减,但任何文献都不丢号
+    assert "(摘要缺失)" in doc
+    # 超预算:摘要按篇缩减,但任何文献都不丢(占位句形态保持)
     doc2 = _build_corpus_document(papers, budget_chars=800)
     assert ("全" * 3000) not in doc2
-    assert all(f"# {i}" in doc2 for i in (1, 2, 3))
+    assert doc2.count("认为：(摘要缺失)") >= 1
 
 
 def test_plan_uses_corpus_document(monkeypatch):

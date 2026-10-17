@@ -1708,14 +1708,32 @@ def _salvage_axes_from_prose(
         return []
 
 
-def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None) -> str:
-    """把全池文献按阅读顺序拼接成一篇"大文档",作为主题轴规划的输入。
+def _corpus_display_author_year(paper: Paper) -> str:
+    """大文档条目的作者(年份)显示;脏数据首作者回退为「佚名」。"""
+    authors = [str(a).strip() for a in (paper.authors or []) if str(a).strip()]
+    year = f"（{paper.year}）" if paper.year else ""
+    if not authors:
+        return f"佚名{year}"
+    first = authors[0]
+    if _re.search(r"[一-鿿]", first):
+        compact = _re.sub(r"[^一-鿿]", "", first)
+        name = first if len(compact) >= 2 else "佚名"
+    else:
+        tokens = [tok for tok in _re.findall(r"[A-Za-z][A-Za-z\-']*", first) if len(tok) >= 2]
+        name = tokens[-1] if tokens else "佚名"
+    if len(authors) > 1:
+        name += "等" if _re.search(r"[一-鿿]", name) else " et al."
+    return f"{name}{year}"
 
-    用户策略(v9.10):先拼接、再划分 —— 主题划分应基于通读全部文献,
-    而不是被截断到几百字的残缺目录。因此:
-    - 每篇 = 行首编号 #N + 题名 + 完整摘要(默认不截断);
-    - 总预算(PLAN_CORPUS_CHARS,默认 24 万字符)放不下时先按篇均摊缩减
-      摘要,极端时剩余文献只保留题名 —— 编号连续,任何文献都不丢号。
+
+def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None) -> str:
+    """把全池文献拼接成一篇"大文档",作为主题轴规划与写作的统一输入。
+
+    用户策略(v9.10):先拼接、再划分 —— 每篇文献一条观点卡:
+        XXX（年份）认为：<摘要全文>
+    - 总预算(PLAN_CORPUS_CHARS,默认 24 万字符)放不下时按篇均摊缩减
+      摘要;极端时剩余文献只保留「作者（年份）认为：(摘要缺失)」占位
+      —— 陈述句形态保持不变,任何文献都不丢。
     """
     import os as _os
     if budget_chars is None:
@@ -1733,11 +1751,12 @@ def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None)
         abstract = (paper.abstract or "").strip()
         if len(abstract) > per_paper:
             abstract = abstract[:per_paper].rstrip() + "…"
-        block = f"# {idx} | {paper.title}\n摘要:{abstract or '(无摘要)'}"
+        display = _corpus_display_author_year(paper)
+        block = f"{display}认为：{abstract or '(摘要缺失)'}"
         if used + len(block) > budget_chars and lines:
-            # 预算耗尽:剩余文献保留编号与题名,不丢号
             for j in range(idx, n + 1):
-                lines.append(f"# {j} | {papers[j - 1].title}")
+                placeholder = _corpus_display_author_year(papers[j - 1])
+                lines.append(f"{placeholder}认为：(摘要缺失)")
             break
         lines.append(block)
         used += len(block) + 2

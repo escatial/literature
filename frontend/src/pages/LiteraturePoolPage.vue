@@ -29,6 +29,7 @@ import {
   usePapersStore,
 } from '@/stores/papers';
 import { exportPreviewPapers, batchSelectPapers } from '@/api/endpoints';
+import { http, apiBaseURL } from '@/api/http';
 import type { ExportPreviewResponse, LangPoolRange, YearDistItem } from '@/api/endpoints';
 import { useSessionStore } from '@/stores/session';
 import type { Paper } from '@/api/types';
@@ -266,6 +267,28 @@ const segHeight = (n: number) => `${Math.round((n / maxDistCount.value) * 100)}%
 
 /** 去写作:把当前筛选结果批量导入写作池(replace),然后跳转写作页 */
 const importing = ref(false);
+
+// ---------- v9.10: 文献拼接大文档(后续划分/写作的 LLM 输入) ----------
+const corpusLoading = ref(false);
+const corpusDialogVisible = ref(false);
+const corpusText = ref("");
+const corpusMeta = ref("");
+
+const openCorpus = async () => {
+  corpusLoading.value = true;
+  try {
+    const resp = await http.get("/papers/corpus-document");
+    corpusText.value = resp.data.document ?? "";
+    corpusMeta.value = `文献拼接大文档 · ${resp.data.papers} 篇 · ${resp.data.chars} 字符`;
+    corpusDialogVisible.value = true;
+  } finally {
+    corpusLoading.value = false;
+  }
+};
+
+const downloadCorpusDocx = () => {
+  window.open(`${apiBaseURL}/papers/corpus-document/docx`, "_blank");
+};
 const goWriting = async () => {
     if (importing.value) return;
     if (!stats.value || stats.value.total === 0) {
@@ -336,6 +359,16 @@ const goWriting = async () => {
           @click="goWriting"
         >
           ✍️ 去写作({{ stats?.total ?? 0 }} 篇)
+        </el-button>
+        <el-button
+          size="small"
+          type="success"
+          plain
+          :loading="corpusLoading"
+          :disabled="!stats || stats.total === 0"
+          @click="openCorpus"
+        >
+          📄 拼接文献大文档
         </el-button>
       </div>
     </el-card>
@@ -592,6 +625,23 @@ const goWriting = async () => {
     </el-card>
   </div>
 </template>
+
+
+<el-dialog
+  v-model="corpusDialogVisible"
+  :title="corpusMeta"
+  width="72%"
+  top="4vh"
+>
+  <div style="color: #909399; font-size: 12px; margin-bottom: 8px">
+    每条 = 「作者（年份）认为：观点(摘要)」。这份大文档就是主题划分阶段进入 LLM 的真实输入;Word 版每条观点带脚注链接到文献著录。
+  </div>
+  <el-input type="textarea" :rows="20" :model-value="corpusText" readonly />
+  <template #footer>
+    <el-button @click="corpusDialogVisible = false">关闭</el-button>
+    <el-button type="primary" @click="downloadCorpusDocx">导出 Word(脚注链接文献)</el-button>
+  </template>
+</el-dialog>
 
 <style scoped>
 .filter-group {
