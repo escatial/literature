@@ -212,12 +212,14 @@ def corpus_document_docx(
         tail_m = _entry_tail_re.search(block)
         core, tail = (block[:tail_m.start()], tail_m.group(1)) if tail_m else (block, "")
         md_lines.append(f"{core}[{i}]{tail or '。'}")
-        # 脚注优先用爬虫捕获的官方 GB/T 引文原文(raw_citation,与知网
-        # 「引用」弹窗逐字一致,含卷期页码与 DOI);缺失时才用字段拼装
+        # 脚注:中文文献优先用爬虫捕获的官方 GB/T 引文原文(raw_citation);
+        # 英文文献(无 raw_citation)用结构化字段构建标准 GB/T 条目
         is_cn = any("一" <= ch <= "鿿" for ch in (paper.raw_citation or paper.title or ""))
-        citation = _strip_doi_marks(
-            (paper.raw_citation or "").strip() or _gbt_citation(paper), is_cn,
-        )
+        raw = (paper.raw_citation or "").strip()
+        if is_cn and raw:
+            citation = _strip_doi_marks(raw, True)
+        else:
+            citation = _strip_doi_marks(_gbt_citation(paper), False)
         refs_lines.append(f"[{i}] {citation}")
     md_text = "## 文献拼接大文档\n\n" + "\n\n".join(md_lines)
 
