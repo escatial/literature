@@ -107,19 +107,57 @@ def _task_papers_as_retrieval(db: Session, task_id: str) -> list:
     return papers
 
 
+def _en_author_gbt(name: str) -> str:
+    """英文作者统一为 GB/T 惯用的「姓 名首字母」形态。
+
+    - OpenAlex 式全名 "Soroosh Sam Saghiri" → "Saghiri S S"
+    - PubMed 式 "Herraiz-Recuenco L" → 原样(已是姓+缩写)
+    - 全是单字母的脏数据("E R P")→ 原样保留首词,不做二次拼接
+    """
+    parts = [tok for tok in _re.split(r"\s+", name.strip()) if tok]
+    if len(parts) == 1:
+        return parts[0]
+    # 末 token 缩写(PubMed "Family Initials")→ "Family Initials" 原样保留
+    if _re.fullmatch(r"[A-Z]{1,3}\.?", parts[-1]):
+        return " ".join(parts)
+    family = parts[-1]
+    given = [p for p in parts[:-1] if p.lower() not in {"de", "van", "von", "del", "da"}]
+    initials = " ".join(p[0].upper() for p in given if _re.match(r"[A-Za-z]", p))
+    return f"{family} {initials}".strip()
+
+
 def _gbt_citation(paper) -> str:
-    """手工 GB/T 7714 期刊著录(脚注用,含 DOI)。"""
+    """手工 GB/T 7714 期刊著录(脚注/参考文献兜底用;按规则不含 DOI)。"""
     authors = [str(a).strip() for a in (paper.authors or []) if str(a).strip()]
     is_cn = any(any("一" <= ch <= "鿿" for ch in a) for a in authors)
-    sep = "、" if is_cn else ", "
-    suffix = "等" if is_cn else "et al."
-    head = sep.join(authors[:3])
-    if len(authors) > 3:
-        head = f"{head}{sep}{suffix}" if is_cn else f"{head}, et al."
-    cite = f"{head}。 {paper.title}[J]. {paper.journal}, {paper.year}." if is_cn else (
-        f"{head}. {paper.title}[J]. {paper.journal}, {paper.year}."
-    )
-    return cite
+    title = (paper.title or "").strip().rstrip(".")
+    journal = (paper.journal or "").strip().rstrip(".")
+    year = str(paper.year or "").strip()
+    vol = (paper.volume or "").strip()
+    iss = (paper.issue or "").strip()
+    pages = (paper.pages or "").strip()
+    seg = ""
+    if vol or iss:
+        seg = f"{vol}({iss})" if iss else vol
+    elif pages:
+        seg = pages
+    if pages and vol:
+        seg = f"{seg}:{pages}"
+    if is_cn:
+        head = "、".join(authors[:3])
+        if len(authors) > 3:
+            head += "等"
+    else:
+        head = ", ".join(_en_author_gbt(a) for a in authors[:3])
+        if len(authors) > 3:
+            head += ", et al"
+    dot = "。" if is_cn else "."
+    body = ", ".join(b for b in (journal, year, seg) if b)
+    if head and title:
+        return f"{head}. {title}[J]. {body}{dot}"
+    if title:
+        return f"{title}[J].{dot}"
+    return f"{head}.{dot}" if head else ""
 
 
 @router.get("/corpus-document")
