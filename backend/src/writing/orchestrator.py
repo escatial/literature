@@ -113,8 +113,10 @@ def build_review_sections(
 
     for idx, group in enumerate(groups, start=1):
         clean_name = _clean_group_name(group.name)
-        if not _group_name_acceptable(
-            clean_name, pool_language=pool_language,
+        from writing.classifier import _zh_theme_name_too_short
+        if (
+            not _group_name_acceptable(clean_name, pool_language=pool_language)
+            or _zh_theme_name_too_short(clean_name, pool_language)
         ) or clean_name in used_names:
             raise ValueError(f"第 {idx} 个主题名称不可靠，请重新划分主题：{group.name or '空名称'}")
         used_names.add(clean_name)

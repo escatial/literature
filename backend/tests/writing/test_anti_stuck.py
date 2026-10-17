@@ -30,8 +30,8 @@ def test_heartbeat_fires_during_slow_llm_call(monkeypatch):
         # least one still_alive within this 7-second wait.
         _t.sleep(7.0)
         return json.dumps(
-            {"groups": [{"name": "协同配送", "ids": list(range(1, 14))},
-                        {"name": "路径优化", "ids": list(range(14, 26))}]},
+            {"groups": [{"name": "协同配送研究", "ids": list(range(1, 14))},
+                        {"name": "路径优化研究", "ids": list(range(14, 26))}]},
             ensure_ascii=False,
         )
 
@@ -61,8 +61,8 @@ def test_format_repair_also_emits_heartbeat(monkeypatch):
         # Subsequent calls (format_repair) sleep so we can observe heartbeats.
         _t.sleep(6.0)
         return json.dumps(
-            {"groups": [{"name": "协同配送", "ids": list(range(1, 14))},
-                        {"name": "路径优化", "ids": list(range(14, 26))}]},
+            {"groups": [{"name": "协同配送研究", "ids": list(range(1, 14))},
+                        {"name": "路径优化研究", "ids": list(range(14, 26))}]},
             ensure_ascii=False,
         )
 
@@ -94,12 +94,12 @@ def test_harness_loop_emits_progress_during_axis_planning(monkeypatch):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
         if '"themes"' in body:
             return json.dumps({"themes": [
-                {"name": "协同配送", "research_question": "如何协同配送"},
-                {"name": "路径优化", "research_question": "如何优化路径"},
+                {"name": "协同配送研究", "research_question": "如何协同配送"},
+                {"name": "路径优化研究", "research_question": "如何优化路径"},
             ]}, ensure_ascii=False)
         return json.dumps(
-            {"groups": [{"name": "协同配送", "ids": list(range(1, 46))},
-                        {"name": "路径优化", "ids": list(range(46, 91))}]},
+            {"groups": [{"name": "协同配送研究", "ids": list(range(1, 46))},
+                        {"name": "路径优化研究", "ids": list(range(46, 91))}]},
             ensure_ascii=False,
         )
 

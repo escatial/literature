@@ -76,7 +76,7 @@ def test_generate_review_survives_qa_fail(monkeypatch):
     monkeypatch.setenv("WRITING_QA_ENABLED", "1")
 
     papers = [_paper("lit_cnki_aa01"), _paper("lit_cnki_aa02", year=2035)]  # 年份超前 → FAIL
-    groups = [orch.Group(name="治理机制", lit_ids=[p.lit_id for p in papers])]
+    groups = [orch.Group(name="治理机制研究", lit_ids=[p.lit_id for p in papers])]
 
     def fake_write_section(spec, topic, groups_, section_papers, grades=None, **kwargs):
         # 真实形态的正文章节(带夹注与锚点):QA FAIL 是元数据问题,

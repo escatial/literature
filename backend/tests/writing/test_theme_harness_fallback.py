@@ -85,9 +85,9 @@ def test_theme_harness_does_not_trigger_fallback_for_healthy_chunks(monkeypatch)
         # Healthy response with 2 themes covering all papers.
         return json.dumps({
             "groups": [
-                {"name": "品牌定位", "research_question": "Q1",
+                {"name": "水产品品牌定位", "research_question": "Q1",
                  "ids": list(range(1, 16))},
-                {"name": "渠道策略", "research_question": "Q2",
+                {"name": "水产品渠道策略", "research_question": "Q2",
                  "ids": list(range(16, 31))},
             ],
         })

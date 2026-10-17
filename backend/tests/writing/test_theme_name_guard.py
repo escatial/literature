@@ -145,3 +145,26 @@ def test_finalize_replaces_mid_title_fragment():
     for g in out:
         assert clf._group_name_acceptable(g.name, pool_language="zh"), g.name
         assert not clf._looks_like_title_prefix(g.name, papers, g.lit_ids), g.name
+
+
+# ---------- 中文主题名最低 6 字(第五起事故:"高邮大虾" 24 篇) ----------
+
+def test_product_name_too_short_rejected():
+    """单篇产品名作主题名(4 字)在策略层(轴规划 normalize)必须被拒。"""
+    assert clf._zh_theme_name_too_short("高邮大虾", "zh")
+    items = [{"name": "高邮大虾", "research_question": "高邮大虾品牌如何建设"}]
+    assert clf._normalize_axes(items, 30, "zh") == []  # 过短轴被丢弃
+
+
+def test_internal_acceptable_unchanged():
+    """底层格式校验不承担长度策略:内部占位名契约保持原样。"""
+    assert clf._group_name_acceptable("高邮大虾")
+
+
+def test_legit_names_at_length_boundary():
+    assert clf._group_name_acceptable("生鲜电商营销渠道", pool_language="zh")
+    assert clf._group_name_acceptable("电子商务模式研究", pool_language="zh")
+
+
+def test_en_pool_short_names_unaffected():
+    assert clf._group_name_acceptable("Salmon marketing", pool_language="en")

@@ -405,13 +405,19 @@ def _finalize_theme_groups(
         _pool_lang = _pool_dominant_language(papers)
         if (
             not _group_name_acceptable(name, pool_language=_pool_lang)
+            or _zh_theme_name_too_short(name, _pool_lang)
             or _looks_like_title_prefix(name, papers, ids)
             or _group_name_conflicts(name, seen_names)
         ):
             name = _unique_evidence_group_name(
                 papers, ids, seen_names, len(normalized) + 1,
             )
-        if not name or not _group_name_acceptable(name, pool_language=_pool_lang) or _group_name_conflicts(name, seen_names):
+        if (
+            not name
+            or not _group_name_acceptable(name, pool_language=_pool_lang)
+            or _zh_theme_name_too_short(name, _pool_lang)
+            or _group_name_conflicts(name, seen_names)
+        ):
             continue
         normalized.append(
             Group(name=name, lit_ids=ids, research_question=group.research_question)
@@ -437,6 +443,20 @@ def _groups_acceptable(groups: list[Group], pool_language: str | None = None) ->
     return bool(groups) and all(
         _group_name_acceptable(g.name, pool_language=pool_language) for g in groups
     )
+
+
+def _zh_theme_name_too_short(name: str, pool_language: str | None) -> bool:
+    """用户可见的中文主题名是否短于 6 字(策略级,非底层格式校验)。
+
+    4-5 字的名称往往是产品名/口号/视角残片,信息量不足以概括一个主题
+    (线上案例:"高邮大虾"名下 24 篇)。仅在面向用户的策略点调用
+    (轴规划 normalize / finalize / retitle / 面板终检),内部占位名
+    不受影响。
+    """
+    if pool_language == "en":
+        return False
+    chinese = [ch for ch in (name or "") if "一" <= ch <= "鿿"]
+    return 0 < len(chinese) < 6
 
 
 def _zh_label_for_english_group(topic: str, used_names: set[str]) -> str:
@@ -1051,7 +1071,9 @@ def _retitle_groups_for_pool(
     used = {g.name for g in groups}
     need_llm: list[Group] = []
     for index, group in enumerate(groups, start=1):
-        name_ok = _group_name_acceptable(group.name, pool_language=pool_lang)
+        name_ok = _group_name_acceptable(
+            group.name, pool_language=pool_lang
+        ) and not _zh_theme_name_too_short(group.name, pool_lang)
         title_copy = _looks_like_title_prefix(group.name, papers, group.lit_ids)
         if name_ok and not title_copy:
             continue
@@ -1623,7 +1645,11 @@ def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None 
     seen: set[str] = set()
     for item in items:
         name = _clean_group_name(str(item.get("name") or item.get("theme") or ""))
-        if not name or not _group_name_acceptable(name, pool_language=pool_language):
+        if (
+            not name
+            or _zh_theme_name_too_short(name, pool_language)
+            or not _group_name_acceptable(name, pool_language=pool_language)
+        ):
             continue
         if _group_name_conflicts(name, seen):
             continue

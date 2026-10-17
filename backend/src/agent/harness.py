@@ -144,11 +144,14 @@ def inspect_theme_groups(groups: list[Any], papers: list[Any]) -> list[AgentChec
     # 只查非空+唯一,标题碎片与英文章节名能通过 harness 进入确认面板
     # (线上案例:主题 3 = "Sea Table Role Traceability")。
     try:
-        from writing.classifier import _group_name_acceptable, _pool_dominant_language
+        from writing.classifier import (
+            _group_name_acceptable, _pool_dominant_language, _zh_theme_name_too_short,
+        )
         pool_lang = _pool_dominant_language(papers)
         bad_names = [
             name for name in names
             if not _group_name_acceptable(name, pool_language=pool_lang)
+            or _zh_theme_name_too_short(name, pool_lang)
         ]
         checks.append(AgentCheck(
             "theme_name_quality",
