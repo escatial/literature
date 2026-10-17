@@ -15,13 +15,12 @@ _DOI_MARK_RE = _re.compile(
 
 
 def _strip_doi_marks(text: str, cn: bool) -> str:
-    """生成的文档不允许出现 DOI 标识(用户硬性要求):剥掉 DOI/URL 残段
-    并规范句尾标点。DOI 本身仍留在数据库用于真实性核验。"""
-    cleaned = _DOI_MARK_RE.sub("", text or "")
-    cleaned = cleaned.rstrip(" .,;。；").strip()
-    if cleaned:
-        return cleaned + ("。" if cn else ".")
-    return cleaned
+    """生成的文档不允许出现 DOI 标识(用户硬性要求):仅移除 DOI/URL 段。
+
+    除移除 DOI 外不改写任何字符 —— 爬虫捕获的引文原文(标点、字序)
+    逐字保留,不做"句尾归一"之类自作主张的改动。
+    """
+    return _DOI_MARK_RE.sub("", text or "").strip()
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
