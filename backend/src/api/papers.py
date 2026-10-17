@@ -6,6 +6,22 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pathlib import Path
+import re as _re
+
+_DOI_MARK_RE = _re.compile(
+    r"(?:DOI\s*[:：]?\s*|https?://(?:dx\.)?doi\.org/|doi\.org/)\S+",
+    _re.IGNORECASE,
+)
+
+
+def _strip_doi_marks(text: str, cn: bool) -> str:
+    """生成的文档不允许出现 DOI 标识(用户硬性要求):剥掉 DOI/URL 残段
+    并规范句尾标点。DOI 本身仍留在数据库用于真实性核验。"""
+    cleaned = _DOI_MARK_RE.sub("", text or "")
+    cleaned = cleaned.rstrip(" .,;。；").strip()
+    if cleaned:
+        return cleaned + ("。" if cn else ".")
+    return cleaned
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -104,8 +120,6 @@ def _gbt_citation(paper) -> str:
     cite = f"{head}。 {paper.title}[J]. {paper.journal}, {paper.year}." if is_cn else (
         f"{head}. {paper.title}[J]. {paper.journal}, {paper.year}."
     )
-    if (paper.doi or "").strip():
-        cite += f" DOI:{paper.doi.strip()}."
     return cite
 
 
@@ -159,8 +173,11 @@ def corpus_document_docx(
         md_lines.append(f"{block}[{i}]")
         # 脚注优先用爬虫捕获的官方 GB/T 引文原文(raw_citation,与知网
         # 「引用」弹窗逐字一致,含卷期页码与 DOI);缺失时才用字段拼装
-        citation = (paper.raw_citation or "").strip()
-        refs_lines.append(f"[{i}] {citation or _gbt_citation(paper)}")
+        is_cn = any("一" <= ch <= "鿿" for ch in (paper.raw_citation or paper.title or ""))
+        citation = _strip_doi_marks(
+            (paper.raw_citation or "").strip() or _gbt_citation(paper), is_cn,
+        )
+        refs_lines.append(f"[{i}] {citation}")
     md_text = "## 文献拼接大文档\n\n" + "\n\n".join(md_lines)
 
     out_dir = Path(__file__).resolve().parents[2] / "outputs"
