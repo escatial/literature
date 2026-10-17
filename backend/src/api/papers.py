@@ -200,14 +200,18 @@ def corpus_document_docx(
 
     papers = _corpus_candidates(papers)
     document = _build_corpus_document(papers)
-    # 每条观点卡行尾追加 [N];脚注 = GB/T 著录(与行序一一对应)
+    # 每条观点卡的脚注标记置于「观点最后一个字之后、标点之前」(用户硬性
+    # 要求,对齐知网脚注惯例):先剥离观点句尾的标点,插锚后再把标点接回
     md_lines: list[str] = []
     refs_lines: list[str] = []
+    _entry_tail_re = _re.compile(r"([\s]*[”’」』）)\]]*[\s]*[。．.!！?？;；,，]+[\s]*[”’」』）)\]]*)$")
     for i, paper in enumerate(papers, start=1):
         block = _corpus_display_author_year(paper) + "认为：" + (
             (paper.abstract or "").strip() or "(摘要缺失)"
         )
-        md_lines.append(f"{block}[{i}]")
+        tail_m = _entry_tail_re.search(block)
+        core, tail = (block[:tail_m.start()], tail_m.group(1)) if tail_m else (block, "")
+        md_lines.append(f"{core}[{i}]{tail or '。'}")
         # 脚注优先用爬虫捕获的官方 GB/T 引文原文(raw_citation,与知网
         # 「引用」弹窗逐字一致,含卷期页码与 DOI);缺失时才用字段拼装
         is_cn = any("一" <= ch <= "鿿" for ch in (paper.raw_citation or paper.title or ""))
