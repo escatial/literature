@@ -968,6 +968,53 @@ def _recovery_draft_ratio(sections: list[SectionResult]) -> float:
     return bad / len(theme_sections)
 
 
+def _polish_and_verify_section(
+    result: SectionResult,
+    papers: list[Paper],
+    *,
+    progress=None,
+) -> SectionResult:
+    """润色后的章节级核查+自动修复闭环(用户策略:agent 应自我纠错)。
+
+    流程: humanize(3轮,引用保持) → article_lint → 自动修复 → 再查
+    不合格的段落在此修复,而不是等到最终 QA 才暴露。
+    修复失败时保留原稿(density_warning 如实标记),不伪造通过。
+    """
+    from humanizer.agent import humanize_three_rounds
+    from qa.article_lint import check_article_text, repair_article_text
+
+    # -- Phase 1: humanize 3 轮(引用保持由 humanize 内部保证) --
+    def llm_call(system, user, max_tokens=8000, **kw):
+        from llm.client import messages_create
+        return messages_create(system, user, max_tokens=max_tokens)
+
+    try:
+        polished, _diffs = humanize_three_rounds(text=result.content or "", caller=llm_call)
+        if polished and polished != result.content:
+            result.content = polished
+    except Exception as exc:
+        log.warning("章节 %s 润色失败,保留原文: %s", result.key, exc)
+
+    # -- Phase 2: 章节级核查 + 自动修复 --
+    for attempt in range(2):
+        check = check_article_text([result], papers=papers)
+        if check.status.value == "pass":
+            break
+        # 确定性修复(article_lint 自带)
+        repair_article_text([result], papers=papers)
+        re_check = check_article_text([result], papers=papers)
+        if re_check.status.value == "pass":
+            break
+        if attempt == 0:
+            # 还有问题 → 再修一轮(修复函数是幂等的,二次调用安全)
+            repair_article_text([result], papers=papers)
+
+    # -- Phase 3: 最终校验 --
+    final = check_article_text([result], papers=papers)
+    result.density_warning = final.status.value == "fail"
+    return result
+
+
 def _section_requires_quality_retry(result: SectionResult) -> bool:
     """判断章节是否仍是占位/题录兜底稿，需要重新请求模型。"""
     try:
@@ -1557,6 +1604,8 @@ def generate_review_stream(
                             research_questions=research_questions,
                             review_goal=review_goal,
                         )
+                        # 润色+核查闭环(用户策略:agent 自我纠错)
+                        res = _polish_and_verify_section(res, section_papers)
                         completed = True
                         sections.append(res)
                         all_dropped.extend(res.dropped_citations)
@@ -1779,6 +1828,7 @@ def generate_review(
                 research_questions=research_questions,
                 review_goal=review_goal,
             )
+            res = _polish_and_verify_section(res, section_papers)
         except Exception as exc:
             log.warning(
                 "章节 %s 写作失败,生成占位章节: %s",
