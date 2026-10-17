@@ -623,25 +623,24 @@ const goWriting = async () => {
         />
       </el-tabs>
     </el-card>
+
+    <el-dialog
+      v-model="corpusDialogVisible"
+      :title="corpusMeta"
+      width="72%"
+      top="4vh"
+    >
+      <div style="color: #909399; font-size: 12px; margin-bottom: 8px">
+        每条 = 「作者（年份）认为：观点(摘要)」。这份大文档就是主题划分阶段进入 LLM 的真实输入;Word 版每条观点带脚注链接到文献著录。
+      </div>
+      <el-input type="textarea" :rows="20" :model-value="corpusText" readonly />
+      <template #footer>
+        <el-button @click="corpusDialogVisible = false">关闭</el-button>
+        <el-button type="primary" @click="downloadCorpusDocx">导出 Word(脚注链接文献)</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
-
-
-<el-dialog
-  v-model="corpusDialogVisible"
-  :title="corpusMeta"
-  width="72%"
-  top="4vh"
->
-  <div style="color: #909399; font-size: 12px; margin-bottom: 8px">
-    每条 = 「作者（年份）认为：观点(摘要)」。这份大文档就是主题划分阶段进入 LLM 的真实输入;Word 版每条观点带脚注链接到文献著录。
-  </div>
-  <el-input type="textarea" :rows="20" :model-value="corpusText" readonly />
-  <template #footer>
-    <el-button @click="corpusDialogVisible = false">关闭</el-button>
-    <el-button type="primary" @click="downloadCorpusDocx">导出 Word(脚注链接文献)</el-button>
-  </template>
-</el-dialog>
 
 <style scoped>
 .filter-group {
