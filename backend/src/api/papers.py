@@ -61,6 +61,111 @@ def _resolve_task_id(x_task_id: str | None) -> str:
     return _DEFAULT_TASK_ID
 
 
+def _task_papers_as_retrieval(db: Session, task_id: str) -> list:
+    """读取任务文献池(selected)并转换为写作侧 Paper 对象。"""
+    from retrieval.types import Paper as RetrievalPaper
+    from retrieval.types import normalize_source
+
+    rows = (
+        db.execute(
+            select(PaperModel)
+            .where(PaperModel.task_id == task_id, PaperModel.selected == 1)
+            .order_by(PaperModel.id)
+        )
+        .scalars()
+        .all()
+    )
+    papers: list = []
+    for row in rows:
+        papers.append(RetrievalPaper(
+            lit_id=row.lit_id,
+            source=normalize_source(row.source or "user_imported"),
+            title=row.title or "",
+            authors=list(row.authors or []),
+            journal=row.journal or "",
+            year=row.year or 0,
+            abstract=row.abstract or "",
+            doi=row.doi,
+            source_url=row.source_url or "",
+        ))
+    return papers
+
+
+def _gbt_citation(paper) -> str:
+    """手工 GB/T 7714 期刊著录(脚注用,含 DOI)。"""
+    authors = [str(a).strip() for a in (paper.authors or []) if str(a).strip()]
+    is_cn = any(any("一" <= ch <= "鿿" for ch in a) for a in authors)
+    sep = "、" if is_cn else ", "
+    suffix = "等" if is_cn else "et al."
+    head = sep.join(authors[:3])
+    if len(authors) > 3:
+        head = f"{head}{sep}{suffix}" if is_cn else f"{head}, et al."
+    cite = f"{head}。 {paper.title}[J]. {paper.journal}, {paper.year}." if is_cn else (
+        f"{head}. {paper.title}[J]. {paper.journal}, {paper.year}."
+    )
+    if (paper.doi or "").strip():
+        cite += f" DOI:{paper.doi.strip()}."
+    return cite
+
+
+@router.get("/corpus-document")
+def corpus_document(
+    x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    db: Session = Depends(get_db),
+):
+    """返回当前任务文献池拼接的大文档(主题划分的真实 LLM 输入)。"""
+    from writing.classifier import _build_corpus_document
+
+    task_id = _resolve_task_id(x_task_id)
+    papers = _task_papers_as_retrieval(db, task_id)
+    document = _build_corpus_document(papers)
+    return {"papers": len(papers), "chars": len(document), "document": document}
+
+
+@router.get("/corpus-document/docx")
+def corpus_document_docx(
+    x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    db: Session = Depends(get_db),
+):
+    """大文档 Word 导出:每条观点卡带真实脚注,脚注 = 文献 GB/T 著录。"""
+    from delivery.docx_renderer import render_docx_with_footnotes
+
+    task_id = _resolve_task_id(x_task_id)
+    papers = _task_papers_as_retrieval(db, task_id)
+    if not papers:
+        raise HTTPException(404, "当前任务文献池为空")
+
+    from writing.classifier import _build_corpus_document, _corpus_display_author_year
+
+    document = _build_corpus_document(papers)
+    # 每条观点卡行尾追加 [N];脚注 = GB/T 著录(与行序一一对应)
+    md_lines: list[str] = []
+    refs_lines: list[str] = []
+    for i, paper in enumerate(papers, start=1):
+        block = _corpus_display_author_year(paper) + "认为：" + (
+            (paper.abstract or "").strip() or "(摘要缺失)"
+        )
+        md_lines.append(f"{block}[{i}]")
+        refs_lines.append(f"[{i}] {_gbt_citation(paper)}")
+    md_text = "## 文献拼接大文档\n\n" + "\n\n".join(md_lines)
+
+    out_dir = Path(__file__).resolve().parents[2] / "outputs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"corpus_{task_id[:8]}.docx"
+    render_docx_with_footnotes(
+        md_text=md_text,
+        out_path=str(out_path),
+        papers=[],
+        title=f"文献拼接大文档({len(papers)}篇)",
+        refs_text="\n".join(refs_lines),
+    )
+    return FileResponse(
+        str(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=f"文献拼接大文档-{len(papers)}篇.docx",
+    )
+
+
 @router.get("", response_model=PaperListResponse)
 def list_papers(
     source: str | None = None,
@@ -522,107 +627,3 @@ def new_session(
 # - Word 导出:每条观点卡带真实脚注,脚注 = 该文献的 GB/T 7714 著录
 #   (含 DOI),实现"观点 → 文献"的链接。
 # ----------------------------------------------------------------------------
-
-def _task_papers_as_retrieval(db: Session, task_id: str) -> list:
-    """读取任务文献池(selected)并转换为写作侧 Paper 对象。"""
-    from retrieval.types import Paper as RetrievalPaper
-    from retrieval.types import normalize_source
-
-    rows = (
-        db.execute(
-            select(PaperModel)
-            .where(PaperModel.task_id == task_id, PaperModel.selected == 1)
-            .order_by(PaperModel.id)
-        )
-        .scalars()
-        .all()
-    )
-    papers: list = []
-    for row in rows:
-        papers.append(RetrievalPaper(
-            lit_id=row.lit_id,
-            source=normalize_source(row.source or "user_imported"),
-            title=row.title or "",
-            authors=list(row.authors or []),
-            journal=row.journal or "",
-            year=row.year or 0,
-            abstract=row.abstract or "",
-            doi=row.doi,
-            source_url=row.source_url or "",
-        ))
-    return papers
-
-
-def _gbt_citation(paper) -> str:
-    """手工 GB/T 7714 期刊著录(脚注用,含 DOI)。"""
-    authors = [str(a).strip() for a in (paper.authors or []) if str(a).strip()]
-    is_cn = any(any("一" <= ch <= "鿿" for ch in a) for a in authors)
-    sep = "、" if is_cn else ", "
-    suffix = "等" if is_cn else "et al."
-    head = sep.join(authors[:3])
-    if len(authors) > 3:
-        head = f"{head}{sep}{suffix}" if is_cn else f"{head}, et al."
-    cite = f"{head}。 {paper.title}[J]. {paper.journal}, {paper.year}." if is_cn else (
-        f"{head}. {paper.title}[J]. {paper.journal}, {paper.year}."
-    )
-    if (paper.doi or "").strip():
-        cite += f" DOI:{paper.doi.strip()}."
-    return cite
-
-
-@router.get("/corpus-document")
-def corpus_document(
-    x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
-    db: Session = Depends(get_db),
-):
-    """返回当前任务文献池拼接的大文档(主题划分的真实 LLM 输入)。"""
-    from writing.classifier import _build_corpus_document
-
-    task_id = _resolve_task_id(x_task_id)
-    papers = _task_papers_as_retrieval(db, task_id)
-    document = _build_corpus_document(papers)
-    return {"papers": len(papers), "chars": len(document), "document": document}
-
-
-@router.get("/corpus-document/docx")
-def corpus_document_docx(
-    x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
-    db: Session = Depends(get_db),
-):
-    """大文档 Word 导出:每条观点卡带真实脚注,脚注 = 文献 GB/T 著录。"""
-    from delivery.docx_renderer import render_docx_with_footnotes
-
-    task_id = _resolve_task_id(x_task_id)
-    papers = _task_papers_as_retrieval(db, task_id)
-    if not papers:
-        raise HTTPException(404, "当前任务文献池为空")
-
-    from writing.classifier import _build_corpus_document, _corpus_display_author_year
-
-    document = _build_corpus_document(papers)
-    # 每条观点卡行尾追加 [N];脚注 = GB/T 著录(与行序一一对应)
-    md_lines: list[str] = []
-    refs_lines: list[str] = []
-    for i, paper in enumerate(papers, start=1):
-        block = _corpus_display_author_year(paper) + "认为：" + (
-            (paper.abstract or "").strip() or "(摘要缺失)"
-        )
-        md_lines.append(f"{block}[{i}]")
-        refs_lines.append(f"[{i}] {_gbt_citation(paper)}")
-    md_text = "## 文献拼接大文档\n\n" + "\n\n".join(md_lines)
-
-    out_dir = Path(__file__).resolve().parents[2] / "outputs"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"corpus_{task_id[:8]}.docx"
-    render_docx_with_footnotes(
-        md_text=md_text,
-        out_path=str(out_path),
-        papers=[],
-        title=f"文献拼接大文档({len(papers)}篇)",
-        refs_text="\n".join(refs_lines),
-    )
-    return FileResponse(
-        str(out_path),
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=f"文献拼接大文档-{len(papers)}篇.docx",
-    )
