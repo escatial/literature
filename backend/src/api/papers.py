@@ -111,12 +111,13 @@ def _gbt_citation(paper) -> str:
 @router.get("/corpus-document")
 def corpus_document(
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    task_id_query: str | None = Query(None, alias="task_id"),
     db: Session = Depends(get_db),
 ):
     """返回当前任务文献池拼接的大文档(主题划分的真实 LLM 输入)。"""
     from writing.classifier import _build_corpus_document, _corpus_candidates
 
-    task_id = _resolve_task_id(x_task_id)
+    task_id = _resolve_task_id(task_id_query or x_task_id)
     papers = _task_papers_as_retrieval(db, task_id)
     candidates = _corpus_candidates(papers)
     document = _build_corpus_document(candidates)
@@ -132,12 +133,13 @@ def corpus_document(
 @router.get("/corpus-document/docx")
 def corpus_document_docx(
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    task_id_query: str | None = Query(None, alias="task_id"),
     db: Session = Depends(get_db),
 ):
     """大文档 Word 导出:每条观点卡带真实脚注,脚注 = 文献 GB/T 著录。"""
     from delivery.docx_renderer import render_docx_with_footnotes
 
-    task_id = _resolve_task_id(x_task_id)
+    task_id = _resolve_task_id(task_id_query or x_task_id)
     papers = _task_papers_as_retrieval(db, task_id)
     if not papers:
         raise HTTPException(404, "当前任务文献池为空")

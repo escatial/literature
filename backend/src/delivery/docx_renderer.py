@@ -19,6 +19,7 @@ from typing import Iterable
 from docx import Document
 from docx.oxml import OxmlElement
 from docx.oxml.ns import nsmap, qn
+from lxml import etree
 from docx.shared import Pt
 
 from writing.orchestrator import render_reference_list
@@ -51,11 +52,24 @@ class DocxBuildResult:
     body_paragraphs: int = 0
 
 
-def _ensure_footnotes_part(doc: Document) -> None:
-    """确保文档存在 word/footnotes.xml 部件。
+def _ensure_footnotes_part(doc: Document) -> tuple:
+    """确保文档存在 word/footnotes.xml 部件,返回 (part, 已解析的 lxml 根)。
 
     python-docx 默认不创建脚注部件,需要在第一次写脚注前手动初始化。
+    返回的根节点由调用方持有并批量追加脚注,最后一次序列化写回 ——
+    此前每加一条脚注都重新解析+序列化整个 footnotes.xml,540 篇池的
+    O(N²) 处理要跑几分钟(线上英文桶实测超时)。
     """
+    from lxml import etree
+
+    fn_part = None
+    for rel in doc.part.rels.values():
+        if rel.reltype.endswith("/footnotes"):
+            fn_part = rel.target_part
+            break
+    if fn_part is not None:
+        return fn_part, etree.fromstring(fn_part.blob)
+
     try:
         # 触发 _part._add_footnotes_part 的内部方法(若已存在则忽略)
         from docx.opc.constants import CONTENT_TYPE, RELATIONSHIP_TYPE
@@ -87,22 +101,11 @@ def _ensure_footnotes_part(doc: Document) -> None:
             doc.part.package,
         )
         doc.part.relate_to(part, RELATIONSHIP_TYPE.FOOTNOTES)
+        return part, etree.fromstring(part.blob)
 
 
-def _add_footnote_definition(doc: Document, fn_id: int, text: str) -> None:
-    """向 word/footnotes.xml 追加一条 w:footnote。"""
-    from lxml import etree
-
-    fn_part = None
-    for rel in doc.part.rels.values():
-        if rel.reltype.endswith("/footnotes"):
-            fn_part = rel.target_part
-            break
-    if fn_part is None:
-        raise RuntimeError("footnotes 部件不存在;请先调用 _ensure_footnotes_part")
-
-    root = etree.fromstring(fn_part.blob)
-    W = nsmap["w"]
+def _add_footnote_definition(fn_root, fn_id: int, text: str) -> None:
+    """向已解析的 footnotes 根节点追加一条 w:footnote(内存操作,零重复解析)。"""
     fn = OxmlElement("w:footnote")
     fn.set(qn("w:id"), str(fn_id))
     p = OxmlElement("w:p")
@@ -150,8 +153,7 @@ def _add_footnote_definition(doc: Document, fn_id: int, text: str) -> None:
     p.append(r1)
 
     fn.append(p)
-    root.append(fn)
-    fn_part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    fn_root.append(fn)
 
 
 def _append_text_run(paragraph, text: str) -> None:
@@ -265,12 +267,12 @@ def render_docx_with_footnotes(
     style.element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
     style.paragraph_format.line_spacing = 1.5
 
-    # 4. 确保 footnotes 部件存在
-    _ensure_footnotes_part(doc)
+    # 4. 确保 footnotes 部件存在,拿到可复用的已解析根节点
+    _fn_part, fn_root = _ensure_footnotes_part(doc)
 
-    # 5. 写入脚注定义
+    # 5. 写入脚注定义(批量追加到内存树,最后统一序列化)
     for fn in fn_items:
-        _add_footnote_definition(doc, fn_id=fn.index, text=fn.text)
+        _add_footnote_definition(fn_root, fn_id=fn.index, text=fn.text)
 
     # 6. 写入正文(按 Markdown 简单解析:# / ## / ### / 普通段落)
     doc.add_heading(title, level=0)
@@ -311,6 +313,16 @@ def render_docx_with_footnotes(
 
     # 8. 排版兜底:全部非标题段落 1.5 倍行距;所有 run 中文宋体/西文 Times
     _apply_thesis_typography(doc)
+    # 把内存中的 footnotes 树序列化写回部件
+    fn_part = None
+    for rel in doc.part.rels.values():
+        if rel.reltype.endswith("/footnotes"):
+            fn_part = rel.target_part
+            break
+    if fn_part is not None:
+        fn_part._blob = etree.tostring(
+            fn_root, xml_declaration=True, encoding="UTF-8", standalone=True
+        )
     doc.save(out_path)
 
     return DocxBuildResult(

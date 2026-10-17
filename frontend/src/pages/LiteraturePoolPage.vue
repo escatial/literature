@@ -286,8 +286,18 @@ const openCorpus = async () => {
   }
 };
 
-const downloadCorpusDocx = () => {
-  window.open(`${apiBaseURL}/papers/corpus-document/docx`, "_blank");
+const downloadCorpusDocx = async () => {
+  // 下载必须走 axios(自动携带 X-Task-Id);window.open 发不了自定义头,
+  // 后端会因任务上下文缺失落到空池而 404(线上实测)。
+  const resp = await http.get("/papers/corpus-document/docx", {
+    responseType: "blob",
+  });
+  const url = URL.createObjectURL(resp.data);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "文献拼接大文档.docx";
+  anchor.click();
+  URL.revokeObjectURL(url);
 };
 const goWriting = async () => {
     if (importing.value) return;
