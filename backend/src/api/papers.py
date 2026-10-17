@@ -87,6 +87,7 @@ def _task_papers_as_retrieval(db: Session, task_id: str) -> list:
             abstract=row.abstract or "",
             doi=row.doi,
             source_url=row.source_url or "",
+            raw_citation=row.raw_citation,
         ))
     return papers
 
@@ -156,7 +157,10 @@ def corpus_document_docx(
             (paper.abstract or "").strip() or "(摘要缺失)"
         )
         md_lines.append(f"{block}[{i}]")
-        refs_lines.append(f"[{i}] {_gbt_citation(paper)}")
+        # 脚注优先用爬虫捕获的官方 GB/T 引文原文(raw_citation,与知网
+        # 「引用」弹窗逐字一致,含卷期页码与 DOI);缺失时才用字段拼装
+        citation = (paper.raw_citation or "").strip()
+        refs_lines.append(f"[{i}] {citation or _gbt_citation(paper)}")
     md_text = "## 文献拼接大文档\n\n" + "\n\n".join(md_lines)
 
     out_dir = Path(__file__).resolve().parents[2] / "outputs"
