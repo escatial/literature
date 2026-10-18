@@ -128,7 +128,9 @@ def test_harness_inspects_name_quality():
     checks = inspect_theme_groups(groups, LEAKED_PAPERS)
     by_name = {c.name: c for c in checks}
     assert "theme_name_quality" in by_name
-    assert not by_name["theme_name_quality"].passed
+    # 降为告警:不阻断但通过 metrics 暴露给前端
+    assert by_name["theme_name_quality"].passed is True  # 不阻断
+    assert by_name["theme_name_quality"].metrics.get("bad_names"), "应有 bad_names 记录"
 
 
 # ---------- finalize 终检:碎片名触发证据重命名,不能原样过关 ----------

@@ -405,7 +405,6 @@ def _finalize_theme_groups(
         _pool_lang = _pool_dominant_language(papers)
         if (
             not _group_name_acceptable(name, pool_language=_pool_lang)
-            or _zh_theme_name_too_short(name, _pool_lang)
             or _looks_like_title_prefix(name, papers, ids)
             or _group_name_conflicts(name, seen_names)
         ):
@@ -415,7 +414,6 @@ def _finalize_theme_groups(
         if (
             not name
             or not _group_name_acceptable(name, pool_language=_pool_lang)
-            or _zh_theme_name_too_short(name, _pool_lang)
             or _group_name_conflicts(name, seen_names)
         ):
             continue
@@ -1071,9 +1069,7 @@ def _retitle_groups_for_pool(
     used = {g.name for g in groups}
     need_llm: list[Group] = []
     for index, group in enumerate(groups, start=1):
-        name_ok = _group_name_acceptable(
-            group.name, pool_language=pool_lang
-        ) and not _zh_theme_name_too_short(group.name, pool_lang)
+        name_ok = _group_name_acceptable(group.name, pool_language=pool_lang)
         title_copy = _looks_like_title_prefix(group.name, papers, group.lit_ids)
         if name_ok and not title_copy:
             continue
@@ -1645,12 +1641,12 @@ def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None 
     seen: set[str] = set()
     for item in items:
         name = _clean_group_name(str(item.get("name") or item.get("theme") or ""))
-        if (
-            not name
-            or _zh_theme_name_too_short(name, pool_language)
-            or not _group_name_acceptable(name, pool_language=pool_language)
-        ):
+        if not name or not _group_name_acceptable(name, pool_language=pool_language):
             continue
+        if _zh_theme_name_too_short(name, pool_language):
+            # 过短名称保留但记录告警(不丢弃——丢弃会导致归组阶段无轴可用,
+            # 整个分类 blocked)。质量提示由 harness theme_name_quality 报告。
+            logger.warning("主题轴名偏短(%d字): %s (保留,建议用户手动修改)", len(name), name)
         if _group_name_conflicts(name, seen):
             continue
         if any(_title_similarity(name, used) >= 0.5 for used in seen):

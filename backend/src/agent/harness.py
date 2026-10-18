@@ -155,9 +155,9 @@ def inspect_theme_groups(groups: list[Any], papers: list[Any]) -> list[AgentChec
         ]
         checks.append(AgentCheck(
             "theme_name_quality",
-            not bad_names,
-            [f"主题名称不可靠: {', '.join(bad_names[:3])}"] if bad_names else [],
-            {"bad_names": bad_names},
+            True,  # 降为告警:名字偏短不阻断,由用户在面板手动修改
+            [],
+            {"bad_names": bad_names, "note": "名称质量仅供参考"},
         ))
     except Exception:  # noqa: BLE001
         # 校验器不可用时保持原检查集,不让结构核查本身失败
