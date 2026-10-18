@@ -418,7 +418,6 @@ const downloadMd = () => {
           <el-radio-button value="theme">按主题</el-radio-button>
         </el-radio-group>
       </div>
-      </div>
       <div style="margin-bottom: 12px; color: #909399; font-size: 12px">
         {{ form.mode === 'theme'
           ? '依据全部文献摘要聚类归纳实际研究主题,每个主题写一节'
