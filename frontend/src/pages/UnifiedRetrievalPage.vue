@@ -21,6 +21,7 @@ import { toast } from '@/utils/toast';
 import { usePapersStore } from '@/stores/papers';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { useLLMProvidersStore } from '@/stores/llmProviders';
+import { http, apiBaseURL } from '@/api/http';
 import { useSessionStore, newTimestampId } from '@/stores/session';
 import {
   queryPlan,
@@ -62,6 +63,49 @@ const testLLMConnection = async () => {
     testingLLM.value = false;
   }
 };
+
+// ---------- v9.11: MiniMax 模型选择(从上游获取 + 用户自选) ----------
+interface MiniMaxModel { id: string; owned_by: string; active: boolean }
+const availableModels = ref<MiniMaxModel[]>([]);
+const selectedModel = ref("");
+const currentModel = ref("");
+const modelsLoading = ref(false);
+const selectingModel = ref(false);
+
+const fetchUpstreamModels = async () => {
+  modelsLoading.value = true;
+  try {
+    const resp = await http.get("/review/models/upstream");
+    availableModels.value = resp.data.models ?? [];
+    currentModel.value = resp.data.active ?? "";
+    if (!selectedModel.value && availableModels.value.length) {
+      selectedModel.value = currentModel.value || availableModels.value[0]?.id || "";
+    }
+  } catch (e: any) {
+    toast.error(`获取模型列表失败: ${e?.message ?? e}`);
+  } finally {
+    modelsLoading.value = false;
+  }
+};
+
+const applyModel = async () => {
+  if (!selectedModel.value) return;
+  selectingModel.value = true;
+  try {
+    await http.post("/review/models/select", { model_id: selectedModel.value });
+    currentModel.value = selectedModel.value;
+    toast.success(`模型已切换为 ${selectedModel.value}`);
+    availableModels.value.forEach((m: MiniMaxModel) => { m.active = m.id === selectedModel.value; });
+  } catch (e: any) {
+    toast.error(`切换失败: ${e?.message ?? e}`);
+  } finally {
+    selectingModel.value = false;
+  }
+};
+
+// 页面加载时自动获取一次模型列表
+onMounted(() => { fetchUpstreamModels(); });
+
 const runStarted = ref(false);
 const runFailed = ref(false);
 const runFailureMessage = ref('');
@@ -872,6 +916,39 @@ onBeforeUnmount(() => {
       >
         测试 LLM
       </el-button>
+      <!-- v9.11: MiniMax 模型选择(从上游获取 + 用户自选) -->
+      <el-divider direction="vertical" style="height: 20px" />
+      <span style="color: #606266; font-size: 13px">模型:</span>
+      <el-select
+        v-model="selectedModel"
+        placeholder="选择模型"
+        size="small"
+        style="width: 280px"
+        :loading="modelsLoading"
+        :disabled="selectingModel"
+        clearable
+      >
+        <el-option
+          v-for="m in availableModels"
+          :key="m.id"
+          :label="m.id + (m.active ? ' (当前)' : '')"
+          :value="m.id"
+        />
+      </el-select>
+      <el-button size="small" :loading="modelsLoading" @click="fetchUpstreamModels">
+        从上游获取
+      </el-button>
+      <el-button
+        size="small"
+        type="primary"
+        plain
+        :disabled="!selectedModel || selectedModel === currentModel || selectingModel"
+        :loading="selectingModel"
+        @click="applyModel"
+      >
+        切换模型
+      </el-button>
+      <el-tag v-if="currentModel" size="small" type="info" effect="plain">当前: {{ currentModel }}</el-tag>
     </div>
   </el-card>
 
