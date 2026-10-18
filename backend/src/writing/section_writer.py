@@ -276,9 +276,9 @@ def _build_section_role(
         )
     group_names = ", ".join(g.name for g in groups)
     cite_rule = (
-        "只写与文献清单一致的作者（年份）夹注,不要输出任何 [lit_xxx] 锚点。"
-        "后端会根据作者、年份和真实文献元数据的映射自动在句末注入锚点;"
-        "未命中的夹注不生成链接,也不得编造文献。"
+        "每条观点末尾标点前写入该文献的 [lit_xxx] 锚点(严格从 available_lit_ids 取)。"
+        "格式:作者（年份）认为...观点[lit_xxx]。 后端会校验锚点并转为顺序编号脚注;"
+        "未在列表中的 lit_xxx 会被剥离,不得编造文献。"
         if require_citation
         else "本章不强求引用,如需佐证只能写文献清单中的作者（年份）,不要输出锚点。"
     )
@@ -437,11 +437,11 @@ def _prepare_section_context(
     elif require_citation:
         role_hint = (
 
-            "【章节正文里不要写 [lit_xxx] 锚点 — 后端会自动从你写的「作者(年份)」夹注里识别并在句末插入】\n"
+            "【每条观点末尾标点前写入该文献的 [lit_xxx] 锚点,锚点必须严格来自 available_lit_ids 列表】\n"
 
-            "你只负责写「作者(年份)」夹注(GB/T 7714 强制)。\n"
+            "引用格式:作者（年份）认为...观点[lit_xxx]。\n"
 
-            "夹注格式:周爱莲等(2020) / 周爱莲,蒋利(2020) / Sun et al.(2025) / Smith(2024)"
+            "示例:周爱莲等（2020）认为...策略有效[lit_cnki_abc]。 / Smith et al.（2025）found...[lit_openalex_def]。"
 
         )
     else:
