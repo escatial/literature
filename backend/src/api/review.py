@@ -36,6 +36,7 @@ class SimpleReviewResponse(BaseModel):
 class LLMTestResponse(BaseModel):
     ok: bool
     provider: str
+    model: str
     elapsed_ms: int
     response_preview: str
 
@@ -77,11 +78,15 @@ def review_llm_test() -> LLMTestResponse:
             max_retries=1,
             timeout=20.0,
         )
+        from src.llm.client import resolve_provider, get_model_override
+        rp = resolve_provider("minimax")
+        model_name = get_model_override() or rp.model
         health = get_provider_health()
         active = health.get("active_fallback_order") or [get_default_provider()]
         return LLMTestResponse(
             ok=bool(str(text).strip()),
             provider=str(active[0]),
+            model=model_name,
             elapsed_ms=round((time.perf_counter() - started) * 1000),
             response_preview=str(text).strip()[:120],
         )

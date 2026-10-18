@@ -54,7 +54,7 @@ const testLLMConnection = async () => {
   testingLLM.value = true;
   try {
     const result = await testLLM();
-    toast.success(`LLM 连接成功：${result.provider}，${result.elapsed_ms}ms，响应：${result.response_preview || '有响应'}`);
+    toast.success(`LLM 连接成功：${result.provider} / ${result.model}，${result.elapsed_ms}ms`);
     await llmProviders.refresh();
   } catch (e: any) {
     toast.error(`LLM 连接失败：${e?.message ?? e}`);

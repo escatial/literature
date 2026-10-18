@@ -56,6 +56,7 @@ export const getLLMProvidersHealth = () =>
 export interface LLMTestResponse {
   ok: boolean;
   provider: string;
+  model: string;
   elapsed_ms: number;
   response_preview: string;
 }
