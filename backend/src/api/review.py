@@ -89,6 +89,50 @@ def review_llm_test() -> LLMTestResponse:
         raise HTTPException(status_code=502, detail=f"LLM 测试失败: {exc}") from exc
 
 
+class ModelInfo(BaseModel):
+    id: str
+    owned_by: str = ""
+    active: bool = False
+
+
+class ModelSelectRequest(BaseModel):
+    model_id: str = Field(..., min_length=1)
+
+
+@router.get("/models/upstream")
+def fetch_upstream_models() -> dict:
+    """从 MiniMax 上游 API 获取所有可用模型。"""
+    from src.llm.client import fetch_available_models, get_model_override
+    models = fetch_available_models("minimax")
+    active = get_model_override()
+    for m in models:
+        m["active"] = (m["id"] == active)
+    return {"models": models, "active": active}
+
+
+@router.post("/models/select")
+def select_model(req: ModelSelectRequest) -> dict:
+    """运行时切换 MiniMax 模型(立即生效,不需要重启)。"""
+    from src.llm.client import set_model_override, fetch_available_models
+    available = {m["id"] for m in fetch_available_models("minimax")}
+    if req.model_id not in available:
+        raise HTTPException(400, f"模型 {req.model_id} 不在可用列表中。可用: {', '.join(sorted(available))}")
+    set_model_override(req.model_id)
+    return {"selected": req.model_id, "ok": True}
+
+
+@router.get("/models/current")
+def get_current_model() -> dict:
+    """返回当前生效的模型名。"""
+    from src.llm.client import get_model_override, resolve_provider
+    override = get_model_override()
+    try:
+        rp = resolve_provider("minimax")
+        return {"override": override, "effective": rp.model}
+    except Exception:
+        return {"override": override, "effective": None}
+
+
 @router.post("/simple", response_model=SimpleReviewResponse)
 def review_simple(req: SimpleReviewRequest) -> SimpleReviewResponse:
     """激进简化版: 2 LLM + 1 检索, 一次返回全文。"""

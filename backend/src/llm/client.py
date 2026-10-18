@@ -196,6 +196,51 @@ def select_providers(requested: str | None) -> tuple[str, ...]:
     return tuple(order)
 
 
+# ---- v9.11: 运行时模型选择(从上游获取 + 用户自选) ----
+
+_model_override: str | None = None
+_model_override_lock = __import__("threading").Lock()
+
+
+def set_model_override(model_id: str | None) -> None:
+    """运行时覆盖 MINIMAX_MODEL(优先级高于 env)。传 None 取消覆盖。"""
+    global _model_override
+    with _model_override_lock:
+        _model_override = model_id.strip() if model_id and model_id.strip() else None
+
+
+def get_model_override() -> str | None:
+    with _model_override_lock:
+        return _model_override
+
+
+def fetch_available_models(provider_id: str = "minimax") -> list[dict]:
+    """从上游 API 的 GET /models 端点获取可用模型列表。"""
+    spec = PROVIDER_SPECS.get(provider_id)
+    if spec is None:
+        return []
+    api_key = os.environ.get(spec.env_key) or ""
+    base = (os.environ.get(spec.env_base) or "").strip()
+    if not api_key or not base:
+        return []
+    import urllib.request, json as _json
+    req = urllib.request.Request(
+        f"{base.rstrip('/')}/models",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        models = data.get("data") or []
+        return [
+            {"id": m["id"], "owned_by": m.get("owned_by", ""), "created": m.get("created", 0)}
+            for m in models if m.get("id")
+        ]
+    except Exception as exc:
+        log.warning("获取上游模型列表失败: %s", exc)
+        return []
+
+
 def resolve_provider(provider: str | None = None) -> ResolvedProvider:
     """读取 provider 配置,校验 API key,并返回统一配置。"""
     provider_id = (provider or get_default_provider()).strip().lower()
@@ -222,6 +267,10 @@ def resolve_provider(provider: str | None = None) -> ResolvedProvider:
         raise RuntimeError(
             f"缺少 {spec.env_model} 环境变量,请在 backend/.env 中配置。"
         )
+    # 运行时覆盖优先于 env
+    override = get_model_override()
+    if override:
+        model = override
     return ResolvedProvider(
         id=provider_id,
         label=spec.label,
