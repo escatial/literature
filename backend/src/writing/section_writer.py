@@ -1515,6 +1515,109 @@ def write_section(
                     f"本章围绕“{topic}”梳理相关研究的主要问题、方法差异与证据边界。"
                 )
         ensure_section_evidence(result, list(papers), required)
+
+    # ---- v9.11: agent 自我评估 + 迭代改进(不是流水线,是闭环) ----
+    result = _self_evaluate_and_improve(
+        result, topic, papers, system, user, model,
+    )
+    return result
+
+
+_SELF_EVAL_SYSTEM = (
+    "你是文献综述质量评审专家。评价以下章节是否达到硕士论文文献综述标准。\n"
+    "逐项打分(1-10):\n"
+    "1. 分析深度: 是否比较了不同文献的观点差异,而非简单罗列\n"
+    "2. 逻辑结构: 是否有清晰的论证脉络,而非平铺直叙\n"
+    "3. 批判性: 是否指出了现有研究的不足或争议\n"
+    "4. 引用自然: 文献引用是否融入论述,而非堆砌\n"
+    "5. 语言规范: 是否符合学术写作规范\n"
+    "严格输出 JSON:\n"
+    '{"scores": {"分析深度": N, "逻辑结构": N, "批判性": N, "引用自然": N, "语言规范": N},\n'
+    ' "total": N, "verdict": "合格|需要改进",\n'
+    ' "issues": ["具体问题1", "具体问题2"],\n'
+    ' "rewrite_instructions": ["改写指令1", "改写指令2"]}\n'
+    "total ≤ 18 或 verdict=需要改进 时,必须给出具体的 rewrite_instructions。"
+    "只输出 JSON,不要其他文字。"
+)
+
+
+def _self_evaluate_and_improve(
+    result: SectionResult,
+    topic: str,
+    papers: list,
+    system: str,
+    user: str,
+    model: str | None = None,
+    max_rounds: int = 2,
+) -> SectionResult:
+    """Agent 自我评估 + 迭代改进:LLM 评审自己的输出,不合格就改写。
+
+    与 _retry_section_quality 的区别:后者只做结构检查(模板句/密度),
+    本函数用 LLM 做**语义质量评估**(分析深度/批判性/逻辑结构),
+    并带着具体改进指令重写。这才是 agent 与流水线的区别。
+    """
+    import json as _json
+    from llm.client import messages_create
+
+    for round_no in range(max_rounds):
+        content = result.content or ""
+        if len(content) < 100:
+            break  # 太短不值得评
+        try:
+            eval_raw = messages_create(
+                system=_SELF_EVAL_SYSTEM,
+                user=f"研究主题:{topic}\n\n章节正文:\n{content[:12000]}",
+                max_tokens=1500,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+                timeout=90.0,
+                max_retries=1,
+            )
+            eval_data = _json.loads(
+                _re.sub(r"```(?:json)?|```", "", eval_raw).strip()
+            )
+            total = int(eval_data.get("total", 10))
+            verdict = eval_data.get("verdict", "")
+            issues = eval_data.get("issues", [])
+            instructions = eval_data.get("rewrite_instructions", [])
+            log.info(
+                "章节 %s 自评: total=%d verdict=%s issues=%s",
+                result.key, total, verdict, issues[:2],
+            )
+            if total >= 25 or verdict == "合格":
+                break  # 质量达标,不需要改进
+            # 带着评估反馈重写
+            feedback = "\\n".join(instructions) if instructions else "\\n".join(issues)
+            rewrite_user = (
+                f"{user}\\n\\n"
+                f"--- 改写要求 ---\\n"
+                f"以下是你的初稿,评审发现以下问题:\\n{feedback}\\n"
+                f"请根据以上问题重写本章节,保持引用格式不变。\\n"
+                f"原稿:\\n{content[:8000]}"
+            )
+            improved_raw = _invoke_section_chain(
+                system=system, user=rewrite_user, model=model
+            )
+            new_result = _finalize_section_result(
+                result.__class__(
+                    key=result.key, title=result.title,
+                    content=improved_raw, citations=result.citations,
+                ),
+                improved_raw, allowed=None, alias_map=None, is_comment=False,
+            ) if False else None  # 占位,下方走正常 finalize
+            # 简化:直接替换 content 并重新 finalize
+            new_content = _remove_model_citation_tokens(improved_raw)
+            new_content, _, new_unmatched = _inject_citations_by_author_year(
+                new_content, list(papers)
+            )
+            result.content = new_content
+            result.citations = list(dict.fromkeys(
+                CITE_RE.findall(new_content)
+            ))
+            result.dropped_citations.extend(new_unmatched)
+        except Exception as exc:
+            log.warning("章节 %s 自我评估失败: %s", result.key, exc)
+            break
     return result
 
 

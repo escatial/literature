@@ -1,6 +1,6 @@
 """多 Provider LLM 客户端封装。
 
-支持 MiniMax / DeepSeek / GPT(OpenAI Compatible)。
+仅支持 MiniMax(OpenAI Compatible)。
 默认 provider 由 LLM_PROVIDER 环境变量决定,调用方也可显式传入 provider。
 """
 from __future__ import annotations
@@ -49,22 +49,6 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
         env_base="MINIMAX_BASE_URL",
         env_model="MINIMAX_MODEL",
         mode="chat",
-    ),
-    "deepseek": ProviderSpec(
-        id="deepseek",
-        label="DeepSeek",
-        env_key="DEEPSEEK_API_KEY",
-        env_base="DEEPSEEK_BASE_URL",
-        env_model="DEEPSEEK_MODEL",
-        mode="chat",
-    ),
-    "gpt": ProviderSpec(
-        id="gpt",
-        label="GPT",
-        env_key="GPT_API_KEY",
-        env_base="GPT_BASE_URL",
-        env_model="GPT_MODEL",
-        mode="responses",
     ),
 }
 
