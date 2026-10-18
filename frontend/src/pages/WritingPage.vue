@@ -245,46 +245,6 @@ const qaStatusTagType = (status: string) =>
 
 // ============ 两阶段·阶段1:先划分主题,用户确认后才能写正文 ============
 
-// ---------- v9.11: MiniMax 模型选择 ----------
-interface MiniMaxModel { id: string; owned_by: string; active: boolean }
-const availableModels = ref<MiniMaxModel[]>([]);
-const selectedModel = ref("");
-const currentModel = ref("");
-const modelsLoading = ref(false);
-const selectingModel = ref(false);
-
-const fetchModels = async () => {
-  modelsLoading.value = true;
-  try {
-    const resp = await http.get("/review/models/upstream");
-    availableModels.value = resp.data.models ?? [];
-    currentModel.value = resp.data.active ?? "";
-    if (!selectedModel.value && availableModels.value.length) {
-      selectedModel.value = currentModel.value || availableModels.value[0]?.id || "";
-    }
-  } catch (e) {
-    toast.error(`获取模型列表失败: ${String((e as Error)?.message ?? e)}`);
-  } finally {
-    modelsLoading.value = false;
-  }
-};
-
-const applyModel = async () => {
-  if (!selectedModel.value) return;
-  selectingModel.value = true;
-  try {
-    await http.post("/review/models/select", { model_id: selectedModel.value });
-    currentModel.value = selectedModel.value;
-    toast.success(`模型已切换为 ${selectedModel.value}`);
-    // 同步下拉框的 active 标记
-    availableModels.value.forEach((m: MiniMaxModel) => { m.active = m.id === selectedModel.value; });
-  } catch (e) {
-    toast.error(`切换失败: ${String((e as Error)?.message ?? e)}`);
-  } finally {
-    selectingModel.value = false;
-  }
-};
-
 // ---------- 导出 Word ----------
 const exportWord = () => {
   // 后端生成带原生脚注的 docx(宋体小四/Times New Roman/1.5 倍行距)
@@ -458,39 +418,6 @@ const downloadMd = () => {
           <el-radio-button value="theme">按主题</el-radio-button>
         </el-radio-group>
       </div>
-      <div style="margin-bottom: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px">
-        <span style="color: #606266">MiniMax 模型</span>
-        <el-select
-          v-model="selectedModel"
-          placeholder="从上游获取模型"
-          size="default"
-          :disabled="running || modelsLoading"
-          style="width: 320px"
-          clearable
-        >
-          <el-option
-            v-for="m in availableModels"
-            :key="m.id"
-            :label="m.id + (m.active ? ' (当前)' : '')"
-            :value="m.id"
-          />
-        </el-select>
-        <el-button size="default" :loading="modelsLoading" @click="fetchModels">
-          从上游获取
-        </el-button>
-        <el-button
-          size="default"
-          type="primary"
-          plain
-          :disabled="!selectedModel || selectedModel === currentModel || modelsLoading"
-          :loading="selectingModel"
-          @click="applyModel"
-        >
-          切换模型
-        </el-button>
-        <span v-if="currentModel" style="color: #909399; font-size: 12px">
-          当前: {{ currentModel }}
-        </span>
       </div>
       <div style="margin-bottom: 12px; color: #909399; font-size: 12px">
         {{ form.mode === 'theme'
