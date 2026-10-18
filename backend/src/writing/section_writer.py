@@ -1518,7 +1518,9 @@ def write_section(
 
     # ---- v9.11: agent 自我评估 + 迭代改进(不是流水线,是闭环) ----
     result = _self_evaluate_and_improve(
-        result, topic, papers, system, user, model,
+        result, topic, papers, system, user,
+        section=section, allowed=allowed, alias_map=alias_map,
+        is_comment=is_comment, model=model,
     )
     return result
 
@@ -1540,6 +1542,15 @@ _SELF_EVAL_SYSTEM = (
     "只输出 JSON,不要其他文字。"
 )
 
+_SELF_EVAL_PASS_TOTAL = 30  # 50 分制,≥30 视为达标
+_SELF_EVAL_MAX_ROUNDS = 2
+
+
+def self_eval_enabled() -> bool:
+    """自评闭环总开关(WRITING_SELF_EVAL,默认开;=0 关闭)。"""
+    import os
+    return os.environ.get("WRITING_SELF_EVAL", "1").strip() != "0"
+
 
 def _self_evaluate_and_improve(
     result: SectionResult,
@@ -1547,20 +1558,28 @@ def _self_evaluate_and_improve(
     papers: list,
     system: str,
     user: str,
+    *,
+    section: SectionSpec,
+    allowed: set[str],
+    alias_map: dict[str, str],
+    is_comment: bool,
     model: str | None = None,
-    max_rounds: int = 2,
+    max_rounds: int = _SELF_EVAL_MAX_ROUNDS,
 ) -> SectionResult:
-    """Agent 自我评估 + 迭代改进:LLM 评审自己的输出,不合格就改写。
+    """Agent 自我评估 + 迭代改进:LLM 评审自己的输出,不合格就带着反馈重写。
 
     与 _retry_section_quality 的区别:后者只做结构检查(模板句/密度),
     本函数用 LLM 做**语义质量评估**(分析深度/批判性/逻辑结构),
-    并带着具体改进指令重写。这才是 agent 与流水线的区别。
+    评估→发现问题→带具体指令重写→再评,构成真正的 agent 闭环。
+    重写稿走 _finalize_section_result 完整过滤,防止越界引用混入。
+    WRITING_SELF_EVAL=0 可关闭(单元测试/快速模式)。
     """
-    import json as _json
-    from llm.client import messages_create
+    if not self_eval_enabled():
+        return result
 
+    best = result
     for round_no in range(max_rounds):
-        content = result.content or ""
+        content = best.content or ""
         if len(content) < 100:
             break  # 太短不值得评
         try:
@@ -1573,52 +1592,68 @@ def _self_evaluate_and_improve(
                 timeout=90.0,
                 max_retries=1,
             )
-            eval_data = _json.loads(
-                _re.sub(r"```(?:json)?|```", "", eval_raw).strip()
+        except Exception as exc:
+            log.warning("章节 %s 自评调用失败(第 %d 轮): %s", best.key, round_no + 1, exc)
+            break
+        try:
+            eval_data = json.loads(
+                re.sub(r"```(?:json)?|```", "", eval_raw).strip()
             )
             total = int(eval_data.get("total", 10))
-            verdict = eval_data.get("verdict", "")
-            issues = eval_data.get("issues", [])
-            instructions = eval_data.get("rewrite_instructions", [])
-            log.info(
-                "章节 %s 自评: total=%d verdict=%s issues=%s",
-                result.key, total, verdict, issues[:2],
-            )
-            if total >= 25 or verdict == "合格":
-                break  # 质量达标,不需要改进
-            # 带着评估反馈重写
-            feedback = "\\n".join(instructions) if instructions else "\\n".join(issues)
-            rewrite_user = (
-                f"{user}\\n\\n"
-                f"--- 改写要求 ---\\n"
-                f"以下是你的初稿,评审发现以下问题:\\n{feedback}\\n"
-                f"请根据以上问题重写本章节,保持引用格式不变。\\n"
-                f"原稿:\\n{content[:8000]}"
-            )
+            verdict = str(eval_data.get("verdict", ""))
+            issues = [str(x) for x in (eval_data.get("issues") or [])]
+            instructions = [str(x) for x in (eval_data.get("rewrite_instructions") or [])]
+        except Exception as exc:
+            log.warning("章节 %s 自评输出解析失败: %s", best.key, exc)
+            break
+        log.info(
+            "章节 %s 自评(第 %d 轮): total=%d verdict=%s issues=%s",
+            best.key, round_no + 1, total, verdict, issues[:2],
+        )
+        if total >= _SELF_EVAL_PASS_TOTAL or verdict == "合格":
+            break  # 质量达标,闭环结束
+        feedback = "\n".join(f"- {x}" for x in (instructions or issues))
+        if not feedback:
+            break  # 评审没给出可执行的改进点,重写也无的放矢
+        rewrite_user = (
+            f"{user}\n\n--- 改写要求 ---\n"
+            f"你此前写的初稿经评审发现以下问题:\n{feedback}\n"
+            f"请重写本章节解决上述问题。要求:保持引用标注格式 [lit_x] 不变,"
+            f"不得引入清单之外的文献;论点之间要有比较和递进,不要罗列。\n"
+            f"--- 初稿 ---\n{content[:8000]}"
+        )
+        try:
             improved_raw = _invoke_section_chain(
                 system=system, user=rewrite_user, model=model
             )
-            new_result = _finalize_section_result(
-                result.__class__(
-                    key=result.key, title=result.title,
-                    content=improved_raw, citations=result.citations,
-                ),
-                improved_raw, allowed=None, alias_map=None, is_comment=False,
-            ) if False else None  # 占位,下方走正常 finalize
-            # 简化:直接替换 content 并重新 finalize
-            new_content = _remove_model_citation_tokens(improved_raw)
-            new_content, _, new_unmatched = _inject_citations_by_author_year(
-                new_content, list(papers)
-            )
-            result.content = new_content
-            result.citations = list(dict.fromkeys(
-                CITE_RE.findall(new_content)
-            ))
-            result.dropped_citations.extend(new_unmatched)
         except Exception as exc:
-            log.warning("章节 %s 自我评估失败: %s", result.key, exc)
+            log.warning("章节 %s 改写调用失败(第 %d 轮): %s", best.key, round_no + 1, exc)
             break
-    return result
+        # 不剥 [lit_x]:重写稿保持锚点格式,合法性由 _finalize_section_result
+        # 按 allowed 集过滤(越界引用剥除并记 dropped)
+        improved_result = _finalize_section_result(
+            section, improved_raw, allowed, alias_map, is_comment
+        )
+        if not is_comment and papers:
+            improved_result.content, _, new_unmatched = _inject_citations_by_author_year(
+                improved_result.content, list(papers)
+            )
+            improved_result.dropped_citations.extend(new_unmatched)
+            improved_result.citations = list(dict.fromkeys(
+                CITE_RE.findall(improved_result.content)
+            ))
+        # 接受判据:重写稿不是"非正文",且引用没有塌方(≥初稿一半)
+        if _looks_like_non_article(improved_result.content):
+            log.warning("章节 %s 改写稿疑似非正文,保留初稿", best.key)
+            break
+        if len(improved_result.citations) * 2 < len(best.citations):
+            log.warning(
+                "章节 %s 改写稿引用塌方(%d→%d),保留初稿",
+                best.key, len(best.citations), len(improved_result.citations),
+            )
+            break
+        best = improved_result
+    return best
 
 
 def write_section_stream(

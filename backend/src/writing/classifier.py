@@ -130,6 +130,9 @@ def _group_name_acceptable(
     name = (name or "").strip()
     if not name:
         return False
+    # 叙述性短语没有信息量,只能用作正文过渡,严禁作为章节标题
+    if name in _NARRATIVE_GROUP_NAMES:
+        return False
     if _TITLE_LEAD_RE.match(name):
         return False
     # 斜杠、竖线连接的对象词是关键词清单，不是研究问题导向主题。
@@ -1774,6 +1777,54 @@ def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None)
     return "\n\n".join(lines)
 
 
+def _parse_prose_axes(raw: str, n_papers: int, language: str) -> list[Group]:
+    """从 MiniMax 输出的散文/编号列表中直接提取主题轴(不依赖 JSON)。
+
+    线上实测 MiniMax 在 JSON 模式下仍输出 markdown 编号列表:
+      1. **区域水产品品牌建设** - 相关论文…
+      2. **电商营销渠道** - …
+    这些散文的主题簇归纳质量很好,只是格式不是 JSON。用正则直接提取,
+    不需要 LLM 二次转换 —— 这是比 _salvage_axes_from_prose 更快、更稳定
+    的兜底,也是 agent 循环中"格式失败→换一种解析方式再试"的体现。
+    """
+    axes: list[Group] = []
+    seen: set[str] = set()
+    # 先走编号列表分支(能从 " - 说明" 尾巴里带走研究问题),
+    # 粗体分支只兜不编号的裸标题;同名以编号分支的为准。
+    # 匹配编号列表模式: "1. 主题名" 或 "1. **主题名**"
+    # MULTILINE 的 ^ 是零宽断言,不消费换行 —— 否则上一条的 (?:\n) 会让
+    # finditer 隔行漏匹配(实测 1/3 命中、2 被跳过)。
+    for m in _re.finditer(r"^[ \t]*\d+[.、][ \t]*(.+?)[ \t]*$", raw or "", _re.M):
+        raw_name = m.group(1).strip()
+        # 剥掉 markdown 粗体;破折号后的说明文字作为研究问题保留
+        name = _re.sub(r"\*\*", "", raw_name).strip()
+        rq: str | None = None
+        rq_m = _re.search(r"\s+[-–—:：]\s+(.+)$", name)
+        if rq_m:
+            tail = rq_m.group(1).strip()
+            if len(tail) >= 8:  # 足够长才像研究问题,否则是格式噪音
+                rq = tail
+        name = _re.sub(r"\s+[-–—:：]\s+.*$", "", name).strip()
+        name = _re.sub(r"[（(].*$", "", name).strip()    # 剥掉 " (解释)"
+        name = _clean_group_name(name)
+        if not name or name in seen:
+            continue
+        if not _group_name_acceptable(name, pool_language=language):
+            continue
+        axes.append(Group(name=name, lit_ids=[], research_question=rq))
+        seen.add(name)
+    # 兜底:不编号的裸粗体标题 "**主题**"(MiniMax 也会输出这种形态)
+    for m in _re.finditer(r"\*\*(.{4,20}?)\*\*", raw or ""):
+        name = _clean_group_name(m.group(1).strip())
+        if not name or name in seen:
+            continue
+        if not _group_name_acceptable(name, pool_language=language):
+            continue
+        axes.append(Group(name=name, lit_ids=[], research_question=None))
+        seen.add(name)
+    return axes
+
+
 def _plan_theme_axes(
     papers: list[Paper], topic: str, language: str, *,
     abstract_limit: int, progress=None,
@@ -1851,6 +1902,10 @@ def _plan_theme_axes(
                 })
             continue
         axes = _normalize_axes(_parse_axis_response(raw), len(papers), language)
+        if len(axes) < floor and raw.strip():
+            # agent 循环"策略调整"层:JSON 解析不出轴时,先换解析器
+            # (正则直提散文主题,零 LLM 成本),再降级到 LLM 格式转换。
+            axes = _parse_prose_axes(raw, len(papers), language) or axes
         if len(axes) < floor and raw.strip():
             # 每次失败立即尝试散文抢救(不等三次全败,散文日第一次即可成功)
             axes = _salvage_axes_from_prose(
