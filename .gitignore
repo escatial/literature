@@ -79,3 +79,9 @@ artifacts/
 artifacts_last_history.json
 backend/src/automation/cnki/data/search_diagnostic_*.json
 tmp_*.py
+
+# 真实池验证脚本/缓存(不入库,2026-10-19)
+backend/_kept_pool_cache.json
+backend/_real_pool_naming_test.py
+# 导出的综述/大文档产物按需下载,不入库
+backend/outputs/*.docx
