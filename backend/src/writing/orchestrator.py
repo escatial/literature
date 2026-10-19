@@ -587,6 +587,49 @@ def _grade_map(report: dict) -> dict[str, str]:
     return {row["lit_id"]: row["grade"] for row in report.get("items", [])}
 
 
+def _dedupe_pool(papers: list[Paper]) -> tuple[list[Paper], list[str]]:
+    """同题同年重复条目只保留一条(accuracy ACCURACY_DUPLICATE 的源头治理)。
+
+    _dedup_papers 只按 lit_id 去重;同一条文献从两个源各导一次(同题同年
+    不同 lit_id)会一路进池,终局 QA 判 FAIL。按(题名归一,年份)再挡一层。
+    """
+    seen: set[tuple[str, int]] = set()
+    kept: list[Paper] = []
+    dup_ids: list[str] = []
+    for p in papers:
+        title = (p.title or "").strip().lower()
+        key = (title, int(p.year or 0))
+        if title and key in seen:
+            dup_ids.append(p.lit_id)
+            continue
+        if title:
+            seen.add(key)
+        kept.append(p)
+    return kept, dup_ids
+
+
+def _backfill_user_raw_citation(papers: list[Paper]) -> int:
+    """USER_IMPORTED 缺 raw_citation 时用其自身元数据合成 GB/T 条目。
+
+    accuracy 核查把「中文条目缺原始引文」判 FAIL(无法核验真实性);用户
+    粘贴题录时常漏引文串。合成只用用户已提供的作者/题名/期刊/年份,
+    不编造数据;元数据残缺合成不出的,交给 QA 如实报告。
+    """
+    filled = 0
+    for p in papers:
+        if p.source != Source.USER_IMPORTED or (p.raw_citation or "").strip():
+            continue
+        authors = [a.strip() for a in (p.authors or []) if a and a.strip()]
+        title = (p.title or "").strip()
+        if not authors or not title or not p.year:
+            continue
+        author_part = ", ".join(authors[:3]) + ("等" if len(authors) > 3 else "")
+        journal_part = f"{p.journal.strip()}, " if (p.journal or "").strip() else ""
+        p.raw_citation = f"{author_part}. {title}[J]. {journal_part}{p.year}."
+        filled += 1
+    return filled
+
+
 def _screen_papers(
     topic: str,
     papers: list[Paper],
@@ -1067,6 +1110,139 @@ def _retry_section_quality(
     return result
 
 
+_QA_LLM_FIXABLE_CODES = frozenset({
+    # article_lint 中确定性修复(runner 内)处理不了的语义类问题,
+    # 需要 LLM 带着问题清单定向重写章节
+    "ARTICLE_EMPTY_SECTION",
+    "ARTICLE_META_REASONING",
+    "ARTICLE_FALLBACK_ONLY",
+    "ARTICLE_RAW_NUMBER_ANCHOR",
+    "ARTICLE_UNBOUND_AUTHOR_YEAR",
+    "ARTICLE_PARAGRAPH_CITATION_DENSITY",
+    "ARTICLE_CITATION_DENSITY",
+    "ARTICLE_JOURNAL_LEAK",
+    "ARTICLE_SPLIT_AUTHOR",
+    "ARTICLE_STUCK_AUTHOR_YEAR",
+    "ARTICLE_DENSE_CITATIONS",
+})
+
+_QA_REPAIR_SYSTEM = (
+    "你是学术综述修订专家。修订一段文献综述章节,修复质量体检发现的具体问题。\n"
+    "硬规则:\n"
+    "1. 只输出修订后的完整正文,不要任何解释、标题或列表符号。\n"
+    "2. 保留全部现有 [lit_xxx] 引用锚点(不得删除、不得改写编号);"
+    "可以从本章文献清单补充新锚点,严禁使用清单之外的 lit_id。\n"
+    "3. 每个自然段至少引用 3 篇不同文献:作者年份夹注后紧跟 [lit_xxx] 锚点。\n"
+    "4. 删除一切模板化兜底句(如「补充证据显示」「题录已核验」),"
+    "把题录信息改写为连贯的比较性论述。\n"
+    "5. 不要出现期刊名称、模型内部推理、书名号;引用标注置于句末标点之前。"
+)
+
+
+def _llm_repair_failed_sections(
+    sections: list[SectionResult],
+    papers: list[Paper],
+    qa_summary: dict,
+) -> list[dict]:
+    """QA FAIL 后的 LLM 定向重写:按章节聚集体检问题,逐章带问题清单修复。
+
+    确定性修复(runner 内)只能处理标点/粘连/期刊泄漏类排版问题;段落引用
+    密度不足、模板兜底句、裸数字锚点、内部推理泄漏必须改写正文才能消除。
+    这是终局核查的 agent 闭环:QA 发现 → 定向修复 → 复查,而不是把 84 项
+    问题原样抛给用户人工复核。
+    """
+    issues_by_section: dict[str, list[dict]] = {}
+    for r in qa_summary.get("results", []):
+        if r.get("status") != "fail":
+            continue
+        for issue in r.get("issues", []):
+            if (issue.get("code") in _QA_LLM_FIXABLE_CODES
+                    and issue.get("severity") == "fail"
+                    and issue.get("section_key")):
+                issues_by_section.setdefault(issue["section_key"], []).append(issue)
+    if not issues_by_section:
+        return []
+
+    from llm.client import messages_create
+    from writing.section_writer import (
+        CITE_RE,
+        _article_quality_score,
+        _looks_like_non_article,
+    )
+
+    # runner 交付出来的正文是 [N] 编号形态;LLM 修复要求 [lit_x] 锚点形态
+    restore_internal_citation_anchors(sections)
+    by_id = {p.lit_id: p for p in papers}
+    repairs: list[dict] = []
+    for s in sections:
+        s_issues = issues_by_section.get(s.key)
+        if not s_issues or s.key == "comment":
+            continue
+        old_content = s.content or ""
+        old_cites = list(dict.fromkeys(CITE_RE.findall(old_content)))
+        # 本章文献清单:已引用的排前,再补池内未引用的(控制 prompt 体积)
+        cited_set = set(old_cites)
+        catalog = [by_id[c] for c in old_cites if c in by_id]
+        catalog += [p for p in papers if p.lit_id not in cited_set][:40]
+        cat_lines = [
+            f"{p.lit_id} | {'、'.join((p.authors or [])[:3])}({p.year}) | {(p.title or '')[:60]}"
+            for p in catalog
+        ]
+        issue_lines = []
+        for i in s_issues[:12]:
+            snippet = (i.get("snippet") or "").strip().replace("\n", " ")[:120]
+            line = f"- [{i.get('code')}] {i.get('message', '')}"
+            if snippet:
+                line += f" | 片段:{snippet}"
+            issue_lines.append(line)
+        issue_block = "\n".join(issue_lines)
+        catalog_block = "\n".join(cat_lines)
+        user = (
+            f"章节《{s.title}》正文:\n{old_content[:14000]}\n\n"
+            f"质量体检发现的问题(逐条修复):\n{issue_block}\n\n"
+            f"本章文献清单(lit_id | 作者(年份) | 题名):\n{catalog_block}"
+        )
+        try:
+            repaired_raw = messages_create(
+                system=_QA_REPAIR_SYSTEM, user=user,
+                max_tokens=8000, temperature=0.2,
+                timeout=180.0, max_retries=1,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("章节 %s QA 修复 LLM 调用失败: %s", s.key, exc)
+            continue
+
+        # 越界锚点剥除(编造的 lit_id 不得混入),再做接受判据
+        cleaned = _re.sub(
+            r"\[(lit_[A-Za-z0-9_]+|hash:[A-Za-z0-9_]+)\]",
+            lambda m: m.group(0) if m.group(1) in by_id else "",
+            repaired_raw or "",
+        ).strip()
+        new_cites = list(dict.fromkeys(CITE_RE.findall(cleaned)))
+        if not cleaned or _looks_like_non_article(cleaned):
+            log.warning("章节 %s QA 修复稿疑似非正文,保留原稿", s.key)
+            continue
+        if len(new_cites) < max(2, int(len(old_cites) * 0.8)):
+            log.warning(
+                "章节 %s QA 修复稿引用塌方(%d→%d),保留原稿",
+                s.key, len(old_cites), len(new_cites),
+            )
+            continue
+        if (_article_quality_score(cleaned, len(new_cites))
+                < _article_quality_score(old_content, len(old_cites))):
+            log.warning("章节 %s QA 修复稿质量分下降,保留原稿", s.key)
+            continue
+        s.content = cleaned
+        # 立即按出现顺序同步 citations:后续 restore/renumber 依赖它反解 [N],
+        # 滞后同步会把新锚点误映射回旧文献
+        s.citations = new_cites
+        repairs.append({
+            "section_key": s.key,
+            "changes": [f"LLM 定向修复 {len(s_issues)} 项体检问题"],
+        })
+    return repairs
+
+
 def _run_post_write_qa(
     *,
     papers: list[Paper],
@@ -1109,17 +1285,19 @@ def _run_post_write_qa(
             ruleset = default_rule_set
 
     def _soft_on_fail(summary) -> None:  # noqa: ANN001
-        # 失败不会静默交付：外层会先执行确定性修复并重新核查。
+        # 失败不会静默交付：外层会先执行确定性/LLM 修复并重新核查。
         log.warning("QA 首轮未通过，准备自动修复: %s",
                     ", ".join(r.name for r in summary.results
-                              if r.status == "fail"))
+                              if getattr(r.status, "value", r.status) == "fail"))
 
     payload = None
     auto_repairs = []
-    # runner 内部会修复确定性的作者标点、期刊名泄漏等问题；这里再进行
-    # 一轮闭环，避免修复后仍沿用旧的报告状态。保留软门禁兼容性，
-    # 对无法自动修复的元数据问题返回明确 FAIL，而不是伪造 PASS。
-    for attempt in range(2):
+    # 三级修复闭环(用户策略:QA 失败必须先自动修复,修不掉的才上报):
+    #   每轮 QA 内 runner 先做确定性修复(标点/粘连/期刊泄漏/夹注绑定);
+    #   仍 FAIL 时第一轮补一遍显式确定性修复,第二轮动用 LLM 定向重写;
+    #   轮次用尽仍失败的问题如实进报告,不伪造通过。
+    from qa.article_lint import repair_article_text
+    for attempt in range(3):
         payload = run_post_write_qa(
             runner=QARunner(ruleset),
             papers=papers,
@@ -1136,18 +1314,26 @@ def _run_post_write_qa(
                 break
         if internal_repairs:
             auto_repairs.extend(internal_repairs)
+        # 正文发生变化后，编号和参考文献映射必须重新生成，防止报告读取旧引用。
+        if internal_repairs:
             reference_list, _ = apply_citation_numbering(sections, papers)
-            if attempt == 0:
-                continue
         if summary.get("overall") != "fail":
             break
-        from qa.article_lint import repair_article_text
-        repairs = repair_article_text(sections, papers=papers)
-        auto_repairs.extend(repairs)
-        if not repairs:
-            break
-        # 正文发生变化后，编号和参考文献映射必须重新生成，防止报告读取旧引用。
-        reference_list, _ = apply_citation_numbering(sections, papers)
+        if attempt == 0 and not internal_repairs:
+            # runner 没修出东西:显式再跑一遍确定性修复(幂等),有变化就复查
+            repairs = repair_article_text(sections, papers=papers)
+            if repairs:
+                auto_repairs.extend(repairs)
+                reference_list, _ = apply_citation_numbering(sections, papers)
+                continue
+        if attempt <= 1:
+            # LLM 定向重写仍不达标的章节(段落引用密度/兜底句/裸锚点等)
+            llm_repairs = _llm_repair_failed_sections(sections, papers, summary)
+            if llm_repairs:
+                auto_repairs.extend(llm_repairs)
+                reference_list, _ = apply_citation_numbering(sections, papers)
+                continue
+        break  # 无可修复项或轮次用尽,如实上报剩余问题
     if payload is None:
         return {"skipped": True, "reason": "QA 未执行"}
     if auto_repairs:
@@ -1469,6 +1655,8 @@ def generate_review_stream(
         if confirmed_groups is not None:
             # 两阶段·阶段2:主题已确认,跳过筛选与分类(筛选不可重入,重复跑
             # 既浪费 LLM 调用,也可能二次剔文献打乱用户确认过的分组)。
+            papers, _pool_dups = _dedupe_pool(papers)
+            _backfill_user_raw_citation(papers)
             groups = _sanitize_confirmed_groups(confirmed_groups, papers)
             # 主题确认后的文献池是用户确认过的证据全集，不能再次静默抽样。
             # 候选配额已在阶段一完成；阶段二必须让每篇入选文献都可被章节引用。
@@ -1498,6 +1686,17 @@ def generate_review_stream(
                     screening_progress = next(screening_iterator)
                 except StopIteration as finished:
                     papers, screened_out, relevance_report = finished.value
+                    # 源头治理:同题同年跨源重复与用户题录缺引文串,
+                    # 不留给终局 QA 报 FAIL
+                    papers, dedup_ids = _dedupe_pool(papers)
+                    if dedup_ids:
+                        log.info(
+                            "池内同题同年重复条目剔除 %d 篇: %s",
+                            len(dedup_ids), dedup_ids[:5],
+                        )
+                    backfilled = _backfill_user_raw_citation(papers)
+                    if backfilled:
+                        log.info("为 %d 篇用户导入文献合成缺失的原始引文", backfilled)
                     break
                 yield _sse_event("screening_progress", screening_progress)
             yield _sse_event("screening_done", {
@@ -1699,9 +1898,13 @@ def generate_review_stream(
 
             if qa_payload is not None:
                 overall = qa_payload.get("summary", {}).get("overall", "pass")
+                auto_repair_count = len(
+                    qa_payload.get("summary", {}).get("auto_repairs", []) or []
+                )
                 yield _sse_event("qa_done", {
                     "overall": overall,
                     "pass_rate": qa_payload["summary"]["pass_rate"],
+                    "auto_repair_count": auto_repair_count,
                     "checks": [
                         {
                             "check_id": r["check_id"],
@@ -1718,10 +1921,14 @@ def generate_review_stream(
                     "llm_health": get_provider_health(),
                 })
                 if overall == "fail":
-                    # v9.7 软门禁:FAIL 交付报告与正文,不再以 error 终止流。
-                    # 详情见 qa_done.issues 与 complete.qa_report,前端汇总展示。
+                    # v9.7 软门禁 + 修复闭环:FAIL 已先经过确定性修复与 LLM
+                    # 定向重写(auto_repair_count 为实际修复量),修不掉的
+                    # 剩余问题如实上报,不伪造通过、不静默交付。
                     yield _sse_event("qa_failed", {
-                        "message": "全流程质量核查未通过,报告如下;综述仍已生成,请结合报告人工复核。",
+                        "message": (
+                            f"全流程质量核查未通过:已自动修复 {auto_repair_count} 项问题,"
+                            "剩余问题超出自动修复能力,请结合报告人工复核。"
+                        ),
                     })
 
         yield _sse_event("complete", {
@@ -1772,12 +1979,16 @@ def generate_review(
         raise ValueError(f"unknown classify_mode: {classify_mode}")
 
     if confirmed_groups is not None:
+        papers, _pool_dups = _dedupe_pool(papers)
+        _backfill_user_raw_citation(papers)
         groups = _sanitize_confirmed_groups(confirmed_groups, papers)
         # 与流式阶段二保持一致：用户确认后的分组不再被隐式缩减。
         screened_out: list[str] = []
         relevance_report = relevance_report or build_relevance_report([], {})
     else:
         papers, screened_out, relevance_report = _screen_papers(topic, papers, do_screening)
+        papers, _pool_dups = _dedupe_pool(papers)
+        _backfill_user_raw_citation(papers)
         groups = classify(papers, topic, classify_mode)
 
     # 主题综合层(与流式路径一致:失败降级,不阻塞写作)
@@ -2094,9 +2305,15 @@ def apply_citation_numbering(
                 if p.source in (Source.CNKI, Source.USER_IMPORTED):
                     author_tokens = []
                     for author in p.authors or []:
+                        raw_author = str(author or "").strip().rstrip(".")
                         compact = _re.sub(r"[^\u4e00-\u9fff]", "", str(author or ""))
+                        # 紧凑形与原始形都参与识别:只查紧凑形会把含数字/
+                        # 外文的作者名(作者1、Jean-标注)误判为不可见,
+                        # 重复注入「作者1(2023)作者1（2023）[N]」式粘连
                         if compact:
                             author_tokens.append(compact)
+                        if raw_author and raw_author != compact:
+                            author_tokens.append(raw_author)
                 else:
                     author_tokens = []
                     for author in p.authors or []:
@@ -2121,21 +2338,20 @@ def apply_citation_numbering(
         # 真正的 lit_id 锚点，避免 QA 报告悬空编号。
         cleaned = _re.sub(r"\[\d{1,3}\]", "", s.content)
         s.content = _CITE_ANCHOR_RE.sub(repl, cleaned)
-    # 同步每个章节的 citations:必须从替换前的 lit_id 集合回填,
-    # 因为 s.content 此时已是 [N] 形式,_CITE_ANCHOR_RE 不再能匹配。
+    # 同步每个章节的 citations:必须按本章节锚点的**正文出现顺序**回填。
+    # 此前沿用旧 citations 的顺序过滤 —— 锚点集合发生变化(修复重写后
+    # 重新编号)时,顺序与 number_map 的编号顺序脱节,下一轮 restore 按
+    # citations 顺序反解 [N] 会把 lit_id 张冠李戴,产生跨文献的引用错配。
     section_cited_ids = collect_cited_ids(sections)
     for s in sections:
         present: list[str] = []
         seen_in_s: set[str] = set()
-        for lid in section_cited_ids:
-            if lid in seen_in_s:
+        for m in _SECTION_LIT_IDS.get(id(s), []):
+            lid = m.group(1)
+            if lid in seen_in_s or lid not in by_id:
                 continue
-            if lid not in by_id:
-                continue
-            # 只保留本章节实际写入了 [lit_xxx] 的部分(从替换前的快照推导)
-            if any(m.group(1) == lid for m in _SECTION_LIT_IDS.get(id(s), [])):
-                present.append(lid)
-                seen_in_s.add(lid)
+            present.append(lid)
+            seen_in_s.add(lid)
         s.citations = present
 
     # 参考文献必须与引用顺序一致,不能沿用 papers 原始顺序,否则编号错位

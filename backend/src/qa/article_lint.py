@@ -164,6 +164,16 @@ def repair_article_text(sections: list[SectionResult], papers=None) -> list[dict
             text,
         )
 
+        # 2.5) 同名同年夹注紧邻重复:旧版编号阶段把「作者1(2023)」误判为
+        # 不可见时会再注入一个元数据标签,形成
+        # 「作者1(2023)作者1（2023）[N]」式粘连 —— 合并为一处。
+        text = re.sub(
+            r"(?P<name>[一-鿿][一-鿿0-9A-Za-z]{0,15})\s*[（(]\s*"
+            r"(?P<yr>(?:19|20)\d{2})\s*[）)]\s*(?P=name)\s*[（(]\s*(?P=yr)\s*[）)]",
+            lambda m: f"{m.group('name')}（{m.group('yr')}）",
+            text,
+        )
+
         # 3) 在 ] 之后若紧跟中文/英文,补一个空格,让句子边界可读
         text = re.sub(
             "(\\]\\s*(?:；|;)?)\\s*(?=[一-鿿A-Z])",
