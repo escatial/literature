@@ -2004,6 +2004,122 @@ def _anchor_groups_to_axes(groups: list[Group], axes: list[Group]) -> list[Group
     return anchored
 
 
+def _parse_assign_line_protocol(
+    raw: str, axes: list[Group], n_papers: int,
+) -> list[dict]:
+    """解析「编号. 主题名」行协议(每篇文献一行)。
+
+    只接受与给定主题轴近逐字匹配的行(精确相等或紧凑串包含关系),
+    思考文本里的编号叙述("1. First, ...",论文标题回显)不会误匹配;
+    同一编号重复出现时以最后一次为准(模型的最终判断)。
+    """
+    if not (raw or "").strip() or not axes:
+        return []
+
+    def _compact(s: str) -> str:
+        return _re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", s or "")
+
+    axis_compact = {_compact(a.name): a.name for a in axes if _compact(a.name)}
+    decisions: dict[int, str] = {}
+    for m in _re.finditer(r"(?:^|\n)\s*#?\s*(\d{1,4})\s*[.、:：]\s*([^\n]+)", raw or ""):
+        no = int(m.group(1))
+        if not 1 <= no <= n_papers:
+            continue
+        line_compact = _compact(_re.sub(r"\*+", "", m.group(2).strip()))
+        if not line_compact:
+            continue
+        # 取包含匹配中最长的轴名,含糊并列不猜
+        matched: str | None = None
+        matched_len = 0
+        for c, name in axis_compact.items():
+            if c == line_compact or c in line_compact:
+                if len(c) > matched_len:
+                    matched, matched_len = name, len(c)
+                elif len(c) == matched_len and matched != name:
+                    matched = None  # 两个轴同样长度都匹配 → 含糊,放弃该行
+        if matched:
+            decisions[no] = matched
+    buckets: dict[str, list[int]] = {}
+    for no in sorted(decisions):
+        buckets.setdefault(decisions[no], []).append(no)
+    return [{"name": name, "ids": ids} for name, ids in buckets.items()]
+
+
+def _salvage_assign_from_reasoning(
+    raw: str, axes: list[Group], n_papers: int,
+) -> list[dict]:
+    """从 MiniMax 归组阶段的逐篇分析思考文本中抢救指派(零 LLM 成本)。
+
+    线上实测(2026-10-19,90 篇池):模型无视「只输出 JSON」,改为逐篇推理
+    (「#1 标题 - 分析…Clearly 品牌建设」),输出预算被思考过程吃光,
+    JSON 一个字没写就截断,六次尝试解析全部为 0。但每篇的归属判断就在
+    文本里 —— 按 #N 切条目,优先抓结论标记(Clearly/归入/属于…),
+    再用 4-gram 重叠兜底;匹配不上/并列的条目不猜,交给下游孤儿回收。
+    """
+    if not (raw or "").strip() or not axes:
+        return []
+    text = raw.replace("\r", "")
+    marks = list(_re.finditer(r"#(\d{1,4})\s*[-|:：、.．]?\s*", text))
+    if not marks:
+        return []
+    entries: dict[int, str] = {}
+    for i, m in enumerate(marks):
+        no = int(m.group(1))
+        if not 1 <= no <= n_papers:
+            continue
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        seg = text[m.end():end]
+        # 模型偶尔回头复查同一篇;首次出现的判断为准
+        if no not in entries and seg.strip():
+            entries[no] = seg
+    if not entries:
+        return []
+
+    def _compact(s: str) -> str:
+        return _re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]", "", s or "")
+
+    def _grams(s: str, n: int = 4) -> list[str]:
+        return [s[i:i + n] for i in range(0, max(0, len(s) - n + 1))]
+
+    axis_compact = {a.name: _compact(a.name) for a in axes if _compact(a.name)}
+    axis_grams = {name: _grams(c) for name, c in axis_compact.items()}
+    # 结论标记:模型的分析以明确判词收尾,比标题词面重叠精确得多
+    conclusion_re = _re.compile(
+        r"(?:[Cc]learly|归入|属于|应归|划入|分到|goes\s+to|→|=>)\s*"
+        r"[\"「『'《]?([0-9A-Za-z\u4e00-\u9fff]{2,24})",
+    )
+
+    def _match_axis(candidate: str) -> str | None:
+        cand = _compact(candidate)
+        if not cand:
+            return None
+        hits = [name for name, c in axis_compact.items()
+                if c == cand or c in cand or cand in c]
+        return hits[0] if len(hits) == 1 else None
+
+    buckets: dict[str, list[int]] = {}
+    for no, seg in entries.items():
+        decided: str | None = None
+        c_m = conclusion_re.search(seg)
+        if c_m:
+            decided = _match_axis(c_m.group(1))
+        if decided is None:
+            seg_compact = _compact(seg)
+            best_name, best_hits, second_hits = None, 0, 0
+            for name, grams in axis_grams.items():
+                hits = sum(1 for g in grams if g in seg_compact)
+                if hits > best_hits:
+                    second_hits, best_hits, best_name = best_hits, hits, name
+                elif hits > second_hits:
+                    second_hits = hits
+            # 并列或零命中不猜:宁可留给孤儿回收按标题相似度兜底
+            if best_name and best_hits >= 1 and best_hits > second_hits:
+                decided = best_name
+        if decided:
+            buckets.setdefault(decided, []).append(no)
+    return [{"name": name, "ids": ids} for name, ids in buckets.items()]
+
+
 def _assign_papers_to_axes(
     papers: list[Paper], axes: list[Group], topic: str, *,
     abstract_limit: int, progress=None,
@@ -2021,6 +2137,7 @@ def _assign_papers_to_axes(
         theme_axes=_axis_catalog(axes),
         axis_count=len(axes),
         papers_catalog=_catalog_lines(papers, abstract_limit),
+        papers_count=len(papers),
     )
     token_budget = _output_token_budget(papers)
     axis_names_block = "\n".join(f"- {a.name}" for a in axes)
@@ -2032,18 +2149,24 @@ def _assign_papers_to_axes(
         _hb_stop = _thr_assign.Event()
         # MiniMax 对 system 里长目录末尾的轴清单遵循度差,把允许的主题名
         # 放到 user 消息开头(注意力权重更高的位置)并强令逐字使用。
+        # 行协议(2026-10-19):JSON 在归组阶段屡被逐篇思考挤爆(90 篇池
+        # 六连败),每篇一行的输出体积缩一个数量级且天然抗截断 ——
+        # 与 screening 的数字回显协议同一设计思路。
         attempt_user = (
             f"研究主题:{topic}\n"
             f"唯一允许输出的主题名(逐字使用,共 {len(axes)} 个):\n{axis_names_block}\n\n"
-            f"任务:把给定文献清单的 {len(papers)} 篇文献逐篇归入上述主题轴,"
-            "每篇恰属一组;ids 只写行首编号数字;严禁修改主题名、严禁自拟主题;"
-            "不要输出任何分析过程。只输出 JSON:"
-            '{"groups": [{"name": "<主题名>", "ids": [1, 2, 3]}]}'
+            f"任务:把文献清单的 {len(papers)} 篇文献逐篇归入上述主题轴,每篇恰属一组。\n"
+            "输出协议(机器逐行解析,格式错误整个任务作废):每篇文献一行,严格为\n"
+            "编号. 主题名\n"
+            "示例:\n3. 水产品电商营销策略\n7. 区域水产品营销策略\n"
+            f"编号用文献清单的行首数字;主题名逐字取自上面清单;"
+            f"除这 {len(papers)} 行外不得输出任何其他文字,"
+            "严禁逐篇分析、严禁解释、严禁输出 JSON。"
         )
         if attempt >= 2:
             attempt_user += (
-                f"\n\n返工要求:上一次输出没有逐字使用给定主题名。"
-                f"name 只能取自:\n{axis_names_block}"
+                f"\n\n返工要求:上一次输出不合规。每行必须是「编号. 主题名」,"
+                f"主题名逐字取自:\n{axis_names_block}"
             )
         raw = ""
         try:
@@ -2058,7 +2181,6 @@ def _assign_papers_to_axes(
                 raw = messages_create(
                     system=system, user=attempt_user, max_tokens=token_budget,
                     temperature=temperature,
-                    response_format={"type": "json_object"},
                     timeout=120.0, max_retries=1,
                 )
             finally:
@@ -2083,6 +2205,17 @@ def _assign_papers_to_axes(
         if len(items) >= len(papers):
             items = []
         if not items:
+            # 行协议解析(主协议;模型仍回 JSON 时上一行已解析成功)
+            items = _parse_assign_line_protocol(raw, axes, len(papers))
+        if not items:
+            # 思考文本零成本抢救:模型逐篇分析的归属判断就在 #N 条目里
+            items = _salvage_assign_from_reasoning(raw, axes, len(papers))
+            if items:
+                logger.info(
+                    "归组思考文本抢救:%d 组(零 LLM 成本,attempt=%d)",
+                    len(items), attempt,
+                )
+        if not items:
             items = _repair_invalid_group_response(
                 raw, topic=topic, papers=papers, progress=progress,
             )
@@ -2103,6 +2236,10 @@ def _assign_papers_to_axes(
         if covered > best_covered:
             best, best_covered = anchored, covered
         if best_covered == len(papers):
+            break
+        # 覆盖 ≥90% 即收货:未覆盖的零星文献由孤儿回收按标题相似度归组,
+        # 再烧两次 LLM 也只会重复同一种失败形态(线上 15 分钟教训)
+        if best_covered >= -(-len(papers) * 9 // 10):
             break
     if not best:
         # 轴绑定三次全败(模型无视给定轴自拟主题是 MiniMax 的常见行为)。

@@ -265,8 +265,9 @@ class TestClassifyByThemeLargePool:
         covered = [lid for g in groups for lid in g.lit_ids]
         assert sorted(covered) == sorted(p.lit_id for p in papers)  # 一篇不丢
         assert calls, "LLM 应至少被调用一次"
-        # 编号协议落到了 prompt 上:输出格式说明用 ids,不是 lit_ids
-        assert any('"ids": [1, 2, 3]' in call["user"] for call in calls)
+        # 编号协议落到了 prompt 上:行协议要求只回显行首数字,严禁抄 lit_id
+        assert any("行首数字" in call["user"] for call in calls)
+        assert not any("lit_ids" in call["user"] for call in calls)
 
     def test_truncated_output_degrades_to_salvage_not_fallback(self, monkeypatch):
         """归组输出被截断:抢救完整分组 + 按标题相似度归并,绝不丢文献。"""
