@@ -14,7 +14,6 @@ const sseSources = new Map<string, EventSource>();
  * - 不再使用远程浏览器画布,验证码由超级鹰后台自动接管
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { QuestionFilled } from '@element-plus/icons-vue';
 import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 import { toast } from '@/utils/toast';
@@ -857,38 +856,52 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 第一栏:主题输入 -->
-  <el-card shadow="never">
-    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
+  <!-- 壹 · 选题与启动 -->
+  <el-card shadow="never" class="sheet">
+    <template #header>
+      <div class="section-head">
+        <div class="head-main">
+          <span class="section-no">壹</span>
+          <span class="section-title">选题与启动</span>
+        </div>
+        <span class="section-note">一次提交,三库并发:知网 · OpenAlex · PubMed</span>
+      </div>
+    </template>
+
+    <div class="topic-row">
+      <span class="topic-label">研究主题</span>
       <el-input
         v-model="topicInput"
-        placeholder="研究主题"
-        style="flex: 1; min-width: 320px"
+        placeholder="写下你要综述的问题…"
+        size="large"
+        class="topic-input"
         clearable
         :disabled="isRunning"
+        @keyup.enter="startUnifiedRetrieval"
       />
-      <el-tag v-if="ustore.planning" type="primary" effect="plain">
-        Agent 正在自动生成三库检索式…
-      </el-tag>
-      <el-tag v-else-if="isRunning" type="success" effect="plain">
-        Agent 正在自动检索
-      </el-tag>
       <el-button
         type="primary"
+        size="large"
+        class="launch-btn"
         :loading="ustore.planning"
         :disabled="isRunning || !topicInput.trim()"
         @click="startUnifiedRetrieval"
       >
         {{ '立即启动' }}
       </el-button>
-      <el-button type="danger" plain :loading="stopping" :disabled="!isRunning" @click="stopAll">
+      <el-button size="large" plain :loading="stopping" :disabled="!isRunning" @click="stopAll">
         停止
       </el-button>
     </div>
 
+    <div v-if="ustore.planning || isRunning" class="run-banner">
+      <span class="run-dot" :class="{ wait: ustore.planning }"></span>
+      <span class="run-text">{{ ustore.planning ? 'Agent 正在自动生成三库检索式…' : 'Agent 正在自动检索,可切到其他页继续工作' }}</span>
+    </div>
+
     <!-- v7.1 LLM provider 状态条:展示当前默认/备用,避免用户在 LLM 不通时疑惑 -->
     <div class="llm-providers-bar">
-      <span class="llm-providers-label">LLM:</span>
+      <span class="llm-label">誊抄</span>
       <el-tag
         v-for="p in llmProviders.providers"
         :key="p.id"
@@ -910,15 +923,16 @@ onBeforeUnmount(() => {
       </el-tooltip>
       <el-button
         size="small"
-        plain
+        text
+        bg
         :loading="testingLLM"
         @click="testLLMConnection"
       >
         测试 LLM
       </el-button>
-      <!-- v9.11: MiniMax 模型选择(从上游获取 + 用户自选) -->
-      <el-divider direction="vertical" style="height: 20px" />
-      <span style="color: #606266; font-size: 13px">模型:</span>
+
+      <span class="llm-divider" aria-hidden="true"></span>
+      <span class="llm-label">模型</span>
       <el-select
         v-model="selectedModel"
         placeholder="选择模型"
@@ -935,7 +949,7 @@ onBeforeUnmount(() => {
           :value="m.id"
         />
       </el-select>
-      <el-button size="small" :loading="modelsLoading" @click="fetchUpstreamModels">
+      <el-button size="small" text bg :loading="modelsLoading" @click="fetchUpstreamModels">
         从上游获取
       </el-button>
       <el-button
@@ -948,31 +962,34 @@ onBeforeUnmount(() => {
       >
         切换模型
       </el-button>
-      <el-tag v-if="currentModel" size="small" type="info" effect="plain">当前: {{ currentModel }}</el-tag>
+      <span v-if="currentModel" class="llm-current">当前 {{ currentModel }}</span>
     </div>
   </el-card>
 
-  <!-- 第二栏:检索式展示区(3 个等宽子栏) -->
-  <el-card shadow="never" style="margin-top: 16px">
+  <!-- 贰 · 检索式 -->
+  <el-card shadow="never" class="sheet" style="margin-top: 18px">
     <template #header>
-      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px">
-        <span>检索式展示区</span>
-        <span style="font-size: 12px; color: #909399">
-          实际按拆分式逐条遍历检索,结果合并去重;零结果时继续自动放宽
-        </span>
+      <div class="section-head">
+        <div class="head-main">
+          <span class="section-no">贰</span>
+          <span class="section-title">检索式</span>
+        </div>
+        <span class="section-note">实际按拆分式逐条遍历检索,结果合并去重;零结果时自动放宽</span>
       </div>
     </template>
     <div class="query-grid">
-      <div v-for="item in planPreview" :key="item.key" class="query-cell">
-        <div class="query-cell-head">
-          <el-tag :type="item.tag" effect="light" size="small">{{ item.name }}</el-tag>
+      <div v-for="item in planPreview" :key="item.key" class="query-card" :class="item.key === 'cnki' ? 'is-cn' : 'is-en'">
+        <div class="query-card-head">
+          <span class="query-db">{{ item.name }}</span>
+          <span class="query-alt" v-if="item.key === 'cnki'">中文库</span>
+          <span class="query-alt" v-else>英文库</span>
         </div>
         <div v-if="item.queries.length > 1" class="query-strategy">
-          当前展示第 1 条实际执行式,共 {{ item.queries.length }} 条候选式
+          展示第 1 条实际执行式 · 共 {{ item.queries.length }} 条候选
         </div>
-        <pre class="query-code">{{ item.query || '—' }}</pre>
+        <pre class="query-code">{{ item.query || '—— 待生成 ——' }}</pre>
         <!-- 英文长检索式按语义单元拆分的子检索式(依次执行、合并去重) -->
-        <el-collapse v-if="item.queries.length > 1" style="margin-top: 8px">
+        <el-collapse v-if="item.queries.length > 1" class="query-sub">
           <el-collapse-item
             :title="`查看 ${item.queries.length} 条实际执行式`"
             name="sub-queries"
@@ -988,80 +1005,101 @@ onBeforeUnmount(() => {
     </div>
   </el-card>
 
-  <!-- 第三~五栏:三库进度(统一结构,样式完全一致,始终渲染) -->
-  <template v-for="bar in progressBars" :key="bar.key">
-    <el-card shadow="never" style="margin-top: 16px">
-      <template #header>
-        <div class="progress-header">
-          <div class="progress-title">
-            <el-tag :type="bar.tag" effect="light" size="small">{{ bar.name }}</el-tag>
-            <span class="progress-count">{{ bar.saved }} 篇</span>
-            <el-tooltip
-              v-if="bar.key !== 'cnki'"
-              content="该数字为该源单源累加入池数;三库累加 ≠ 「检索总数量」是预期的跨源去重效应(同 lit_id 跨多源 / 跨子检索式只算一次)"
-              placement="top"
-            >
-              <el-icon class="progress-help"><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </div>
-          <el-tag :type="bar.status === 'exception' ? 'danger' : bar.status === 'success' ? 'success' : 'warning'" size="small">
-            {{ bar.status === 'exception' ? '失败' : bar.status === 'success' ? '已完成' : bar.waiting ? '等待中' : bar.running ? '进行中' : '待开始' }}
-          </el-tag>
+  <!-- 叁 · 三库进度(统一结构,始终渲染) -->
+  <el-card shadow="never" class="sheet" style="margin-top: 18px">
+    <template #header>
+      <div class="section-head">
+        <div class="head-main">
+          <span class="section-no">叁</span>
+          <span class="section-title">三库进度</span>
         </div>
-      </template>
-      <el-progress
-        :percentage="bar.waiting ? 100 : bar.percent"
-        :status="bar.status"
-        :stroke-width="14"
-        :indeterminate="bar.waiting"
-        :duration="2"
-        style="margin: 4px 0 12px"
-      />
-      <div class="last-log">
-        <span class="last-log-label">最新日志</span>
-        <span class="last-log-text">
-          {{ bar.waiting
-            ? `${bar.waitReason || '等待'}中，约 ${bar.waitRemaining}s 后自动继续…`
-            : (bar.lastLog || '等待开始…') }}
-        </span>
       </div>
-    </el-card>
-  </template>
+    </template>
+    <div class="prog-list">
+      <div v-for="bar in progressBars" :key="bar.key" class="prog-row" :class="bar.key === 'cnki' ? 'is-cn' : 'is-en'">
+        <div class="prog-head">
+          <span class="prog-name">{{ bar.name }}</span>
+          <span class="prog-count"><b class="figure-num">{{ bar.saved }}</b> / {{ bar.target }} 篇</span>
+          <el-tooltip
+            v-if="bar.key !== 'cnki'"
+            content="该数字为该源单源累加入池数;三库累加 ≠ 「检索总数量」是预期的跨源去重效应(同 lit_id 跨多源 / 跨子检索式只算一次)"
+            placement="top"
+          >
+            <span class="prog-help">ⓘ</span>
+          </el-tooltip>
+          <span class="prog-state" :class="`st-${bar.status === 'exception' ? 'bad' : bar.status === 'success' ? 'ok' : bar.waiting ? 'wait' : bar.running ? 'run' : 'idle'}`">
+            {{ bar.status === 'exception' ? '失败' : bar.status === 'success' ? '已完成' : bar.waiting ? '等待中' : bar.running ? '进行中' : '待开始' }}
+          </span>
+        </div>
+        <el-progress
+          :percentage="bar.waiting ? 100 : bar.percent"
+          :status="bar.status"
+          :stroke-width="8"
+          :indeterminate="bar.waiting"
+          :duration="2"
+        />
+        <div class="prog-log">
+          <span class="prog-log-label">最新日志</span>
+          <span class="prog-log-text">
+            {{ bar.waiting
+              ? `${bar.waitReason || '等待'}中，约 ${bar.waitRemaining}s 后自动继续…`
+              : (bar.lastLog || '等待开始…') }}
+          </span>
+        </div>
+      </div>
+    </div>
+  </el-card>
 
-  <el-card v-if="hasNoResults" shadow="never" style="margin-top: 16px">
-    <template #header><span>本次检索结果汇总</span></template>
+  <!-- 肆 · 结果与记录 -->
+  <el-card v-if="hasNoResults" shadow="never" class="sheet" style="margin-top: 18px">
+    <template #header>
+      <div class="section-head">
+        <div class="head-main">
+          <span class="section-no">肆</span>
+          <span class="section-title">本次收稿</span>
+        </div>
+      </div>
+    </template>
     <el-empty description="未检索到有效文献,可调整主题或放宽检索式" :image-size="70" />
   </el-card>
-  <el-card v-else-if="tasksFinished" shadow="never" style="margin-top: 16px">
+  <el-card v-else-if="tasksFinished" shadow="never" class="sheet" style="margin-top: 18px">
     <template #header>
-      <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
-        <el-tag :type="hasTaskFailure ? 'danger' : hasFailureEntries ? 'warning' : 'success'">
-          {{ hasTaskFailure ? '任务失败' : hasFailureEntries ? '部分异常' : '已完成' }}
-        </el-tag>
-        <span style="font-weight: 500">本次检索结果汇总</span>
+      <div class="section-head">
+        <div class="head-main">
+          <span class="section-no">肆</span>
+          <span class="section-title">本次收稿</span>
+          <span
+            class="state-chip"
+            :class="hasTaskFailure ? 'st-bad' : hasFailureEntries ? 'st-warn' : 'st-ok'"
+          >
+            {{ hasTaskFailure ? '任务失败' : hasFailureEntries ? '部分异常' : '已完成' }}
+          </span>
+        </div>
       </div>
     </template>
     <!-- v7.2:用户只关心最后入库多少——只展示「入库文献」一个数字,
          与文献池页面严格同口径(任务完成后取池 API 实际 total)。
          检索总数/拦截数等中间口径不再展示,差异全部沉淀在质量闸门内部。 -->
-    <el-row :gutter="16">
-      <el-col :span="24">
-        <div class="metric">
-          <div class="metric-label">入库文献</div>
-          <div class="metric-value metric-success">{{ importedSuccess }}</div>
-          <div class="metric-sub">篇</div>
-        </div>
-      </el-col>
-    </el-row>
-    <el-alert v-if="hasTaskFailure" type="error" :closable="false" show-icon style="margin-top: 12px" :title="taskErrorMessage || '任务失败'" />
-    <el-alert v-else-if="hasTaskWarning" type="warning" :closable="false" show-icon style="margin-top: 12px" :title="`部分源异常,已自动忽略:${taskWarningMessage}`" />
+    <div class="harvest">
+      <div class="harvest-num figure-num">{{ importedSuccess }}</div>
+      <div class="harvest-meta">
+        <div class="harvest-label">入库文献</div>
+        <div class="harvest-sub">与文献池同口径 · 任务完成后按池内实际条数取值</div>
+      </div>
+    </div>
+    <el-alert v-if="hasTaskFailure" type="error" :closable="false" show-icon style="margin-top: 14px" :title="taskErrorMessage || '任务失败'" />
+    <el-alert v-else-if="hasTaskWarning" type="warning" :closable="false" show-icon style="margin-top: 14px" :title="`部分源异常,已自动忽略:${taskWarningMessage}`" />
   </el-card>
 
-  <el-card shadow="never" style="margin-top: 16px">
+  <el-card shadow="never" class="sheet" style="margin-top: 18px">
     <template #header>
-      <div style="display: flex; justify-content: space-between; align-items: center">
-        <span>最近检索记录（{{ history.length }} 条）</span>
-        <el-button size="small" link @click="refreshHistory">刷新</el-button>
+      <div class="section-head">
+        <div class="head-main">
+          <span class="section-no">附</span>
+          <span class="section-title">检索记录</span>
+          <span class="section-note-inline">{{ history.length }} 条</span>
+        </div>
+        <el-button size="small" text bg @click="refreshHistory">刷新</el-button>
       </div>
     </template>
     <el-alert
@@ -1080,8 +1118,8 @@ onBeforeUnmount(() => {
       <el-table-column label="检索时间" width="180">
         <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
       </el-table-column>
-      <el-table-column label="检索关键词" min-width="240" prop="topic" />
-      <el-table-column label="文献总数" width="100" prop="total_count" />
+      <el-table-column label="检索主题" min-width="240" prop="topic" />
+      <el-table-column label="文献数" width="100" prop="total_count" />
       <el-table-column label="操作" width="140">
         <template #default="{ row }">
           <el-button size="small" type="primary" link @click="viewHistory(row)">查看</el-button>
@@ -1101,47 +1139,103 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.metric {
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  padding: 16px;
-  text-align: center;
-  background: #fafafa;
+.sheet {
+  /* 卡片间距由模板 margin 控制 */
 }
-.metric-label { color: #909399; font-size: 13px; margin-bottom: 8px; }
-.metric-value { font-size: 28px; font-weight: 600; color: #303133; line-height: 1.2; }
-.metric-success { color: #67c23a; }
-.metric-danger { color: #f56c6c; }
-.metric-muted { color: #c0c4cc; }
-.metric-sub { color: #909399; font-size: 12px; margin-top: 4px; }
 
-/* v7.1 LLM provider 状态条 */
+/* ── 壹 · 选题行 ── */
+.topic-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.topic-label {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.14em;
+  flex: none;
+}
+.topic-input {
+  flex: 1;
+  min-width: 300px;
+}
+.launch-btn {
+  letter-spacing: 0.3em;
+  padding-left: calc(0.3em * 2);
+}
+
+/* 运行横幅:纸上的墨线状态条 */
+.run-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--cinnabar);
+  background: var(--sheet-dim);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+.run-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cinnabar);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.run-dot.wait {
+  background: var(--ink-ghost);
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.run-text {
+  letter-spacing: 0.02em;
+}
+
+/* ── LLM 状态条 ── */
 .llm-providers-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed #ebeef5;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--rule-soft);
 }
-.llm-providers-label {
-  font-size: 12px;
-  color: #909399;
+.llm-label {
+  font-family: var(--font-annotate);
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  letter-spacing: 0.2em;
+}
+.llm-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--rule-strong);
+  margin: 0 2px;
 }
 .llm-providers-hint {
   font-size: 13px;
-  color: #909399;
+  color: var(--ink-ghost);
   cursor: help;
 }
-</style>
+.llm-current {
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+}
 
-<style scoped>
-/* 检索式展示区:3 个等宽子栏 */
+/* ── 贰 · 检索式卡片目录 ── */
 .query-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  gap: 14px;
 }
 
 @media (max-width: 1100px) {
@@ -1150,100 +1244,212 @@ onBeforeUnmount(() => {
   }
 }
 
-.query-cell {
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  background: #fafafa;
+/* 目录卡片:顶部短粗条(中文赭金 / 英文黛青),像档案目录卡 */
+.query-card {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: #fffef8;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  box-shadow: var(--shadow-sheet);
 }
-
-.query-cell-head {
+.query-card-head {
   display: flex;
-  align-items: center;
-  padding: 8px 12px;
-  border-bottom: 1px solid #ebeef5;
-  background: #fff;
-  border-radius: 6px 6px 0 0;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  border-top: 3px solid var(--en);
+  background: var(--en-bg);
 }
-
+.query-card.is-cn .query-card-head {
+  border-top-color: var(--zh);
+  background: var(--zh-bg);
+}
+.query-db {
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+.query-alt {
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.12em;
+}
+.query-strategy {
+  padding: 6px 14px 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  font-family: var(--font-annotate);
+}
 .query-code {
   flex: 1;
-  margin: 0;
-  padding: 10px 12px;
+  margin: 8px 0 0;
+  padding: 10px 14px 12px;
   font-size: 12px;
-  line-height: 1.6;
-  color: #303133;
+  line-height: 1.65;
+  color: var(--ink);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 260px;
   overflow-y: auto;
-  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 
 /* 子检索式列表:更小字号,缩进展示,区别于主检索式 */
+.query-sub {
+  flex: none;
+  border-top: 1px dashed var(--rule-soft);
+}
+.query-sub :deep(.el-collapse-item__header) {
+  padding: 0 14px;
+  font-size: 12px;
+}
+.query-sub :deep(.el-collapse-item__content) {
+  padding-bottom: 10px;
+}
 .query-code-sub {
   flex: none;
   font-size: 11px;
-  padding: 6px 12px;
+  padding: 5px 14px;
   max-height: none;
-  border-top: 1px dashed #ebeef5;
 }
 
-/* 进度栏统一结构 */
-.progress-header {
+/* ── 叁 · 三库进度 ── */
+.prog-list {
+  display: grid;
+  gap: 4px;
+}
+.prog-row {
+  padding: 10px 2px 12px;
+}
+.prog-row + .prog-row {
+  border-top: 1px dashed var(--rule-soft);
+}
+.prog-head {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
 }
-
-.progress-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.progress-count {
-  font-size: 12px;
-  color: #909399;
-}
-
-.progress-help {
+.prog-name {
+  font-family: var(--font-display);
   font-size: 14px;
-  color: #c0c4cc;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+.prog-row.is-cn .prog-name::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--zh);
+  margin-right: 7px;
+  border-radius: 1px;
+}
+.prog-row.is-en .prog-name::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--en);
+  margin-right: 7px;
+  border-radius: 1px;
+}
+.prog-count {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.prog-count .figure-num {
+  font-size: 16px;
+  color: var(--ink);
+}
+.prog-help {
+  font-size: 12px;
+  color: var(--ink-ghost);
   cursor: help;
 }
-
-.progress-help:hover {
-  color: #409eff;
+.prog-help:hover {
+  color: var(--cinnabar);
 }
+.prog-state {
+  margin-left: auto;
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  padding: 2px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.st-ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.st-warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+.st-bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+.st-run { color: var(--cinnabar); background: var(--cinnabar-tint); border-color: var(--cinnabar); }
+.st-wait { color: var(--ink-soft); background: var(--paper-deep); border-color: var(--rule-strong); }
+.st-idle { color: var(--ink-ghost); background: transparent; border-color: var(--rule); }
 
-.last-log {
+.prog-log {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
-  background: #fafafa;
+  margin-top: 8px;
 }
-
-.last-log-label {
+.prog-log-label {
   flex-shrink: 0;
-  font-size: 12px;
-  color: #909399;
-  background: #fff;
-  border: 1px solid #e4e7ed;
-  border-radius: 4px;
-  padding: 1px 6px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  letter-spacing: 0.08em;
+  background: var(--sheet-dim);
 }
-
-.last-log-text {
+.prog-log-text {
   font-size: 12px;
-  color: #303133;
+  color: var(--ink-soft);
   line-height: 1.6;
   word-break: break-all;
   min-height: 20px;
+}
+
+/* ── 肆 · 收稿 ── */
+.state-chip {
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  padding: 2px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+
+.harvest {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 6px;
+}
+.harvest-num {
+  font-size: 52px;
+  line-height: 1;
+  color: var(--cinnabar);
+}
+.harvest-label {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.1em;
+}
+.harvest-sub {
+  margin-top: 4px;
+  font-family: var(--font-annotate);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.section-note-inline {
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 </style>

@@ -326,69 +326,59 @@ const goWriting = async () => {
 </script>
 
 <template>
-  <div>
-    <el-card>
-      <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
-          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
-            <span>文献池</span>
-            <!-- v7.0 任务隔离:显示当前 task 标识,避免多个 task 互相混淆 -->
+  <div class="pool-page">
+    <!-- 馆藏总览:任务标识 + 页间导航 -->
+    <el-card shadow="never" class="sheet">
+      <div class="pool-head">
+        <div class="pool-head-main">
+          <span class="section-no">贰</span>
+          <div class="pool-title-wrap">
+            <span class="section-title">馆藏文献池</span>
             <el-tooltip
               placement="top"
               :content="`当前任务 ID:${session.currentTaskId}\n每个 task 拥有独立的文献池,互不可见、互不干扰。`"
             >
-              <el-tag size="small" type="info" effect="plain">
-                task: …{{ session.shortTaskId() }}
-              </el-tag>
+              <span class="task-chip">task · {{ session.shortTaskId() }}</span>
             </el-tooltip>
-            <el-button
-              size="small"
-              :loading="startingNewTask"
-              @click="startNewTask"
-            >
-              开始新任务
-            </el-button>
           </div>
-          <div style="color: #909399; font-size: 13px">
-            共 {{ store.pageMeta.total }} 条 · 当前第 {{ store.pageMeta.page }} /
-            {{ store.pageMeta.total_pages }} 页
-          </div>
+          <span class="pool-count">共 <b class="figure-num">{{ store.pageMeta.total }}</b> 条 · 第 {{ store.pageMeta.page }} / {{ store.pageMeta.total_pages }} 页</span>
         </div>
-      </template>
-
-      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px">
-        <el-button size="small" @click="router.push('/unified')">
-          🚀 打开统一检索
-        </el-button>
-        <!-- 去写作:动态显示当前筛选后的文献总数,点击批量导入写作页 -->
-        <el-button
-          size="small"
-          type="primary"
-          :loading="importing"
-          :disabled="!stats || stats.total === 0"
-          @click="goWriting"
-        >
-          ✍️ 去写作({{ stats?.total ?? 0 }} 篇)
-        </el-button>
-        <el-button
-          size="small"
-          type="success"
-          plain
-          :loading="corpusLoading"
-          :disabled="!stats || stats.total === 0"
-          @click="openCorpus"
-        >
-          📄 拼接文献大文档
-        </el-button>
+        <div class="pool-actions">
+          <el-button size="small" :loading="startingNewTask" @click="startNewTask">
+            开始新任务
+          </el-button>
+          <el-button size="small" text bg @click="router.push('/unified')">
+            去统一检索
+          </el-button>
+          <el-button
+            size="small"
+            type="primary"
+            :loading="importing"
+            :disabled="!stats || stats.total === 0"
+            @click="goWriting"
+          >
+            去写作({{ stats?.total ?? 0 }} 篇)
+          </el-button>
+          <el-button
+            size="small"
+            plain
+            :loading="corpusLoading"
+            :disabled="!stats || stats.total === 0"
+            @click="openCorpus"
+          >
+            拼接文献大文档
+          </el-button>
+        </div>
       </div>
     </el-card>
 
-    <!-- 写作导入筛选与统计:中英文独立数量/年份筛选 + 实时统计 + 年份分布图 -->
-    <el-card style="margin-top: 16px">
+    <!-- 采编筛选:中英文独立数量/年份筛选 + 实时统计 + 年份分布图 -->
+    <el-card shadow="never" class="sheet" style="margin-top: 18px">
       <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-            <span>写作导入筛选与统计</span>
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-no">采</span>
+            <span class="section-title">写作导入筛选与统计</span>
             <el-tooltip
               placement="top"
               content="设置筛选条件后,点击顶部「去写作」按钮,将筛选出的文献批量导入写作页。默认(全部不限)= 选中池内所有文献。"
@@ -407,7 +397,7 @@ const goWriting = async () => {
           <el-button
             v-if="hasImportFilter"
             size="small"
-            link
+            text
             type="primary"
             @click="resetImportFilter"
           >
@@ -420,7 +410,7 @@ const goWriting = async () => {
         <!-- 筛选区:中文 / 英文 两组独立条件 -->
         <div class="export-filter">
           <!-- 中文组 -->
-          <div class="filter-group">
+          <div class="filter-group is-cn">
             <span class="filter-label">中文文献</span>
             <span class="filter-item">
               导入数量
@@ -453,7 +443,7 @@ const goWriting = async () => {
                 <el-option label="不限" :value="0" />
                 <el-option v-for="y in cnYearOptions" :key="`cns-${y}`" :label="String(y)" :value="y" />
               </el-select>
-              <span style="margin: 0 2px; color: #909399">至</span>
+              <span class="filter-join">至</span>
               <el-select v-model="cnYearEnd" size="small" style="width: 92px">
                 <el-option label="不限" :value="0" />
                 <el-option v-for="y in cnYearOptions" :key="`cne-${y}`" :label="String(y)" :value="y" />
@@ -462,7 +452,7 @@ const goWriting = async () => {
           </div>
 
           <!-- 英文组(不区分核心/非核心) -->
-          <div class="filter-group">
+          <div class="filter-group is-en">
             <span class="filter-label">英文文献</span>
             <span class="filter-item">
               导入数量
@@ -481,7 +471,7 @@ const goWriting = async () => {
                 <el-option label="不限" :value="0" />
                 <el-option v-for="y in enYearOptions" :key="`ens-${y}`" :label="String(y)" :value="y" />
               </el-select>
-              <span style="margin: 0 2px; color: #909399">至</span>
+              <span class="filter-join">至</span>
               <el-select v-model="enYearEnd" size="small" style="width: 92px">
                 <el-option label="不限" :value="0" />
                 <el-option v-for="y in enYearOptions" :key="`ene-${y}`" :label="String(y)" :value="y" />
@@ -490,23 +480,23 @@ const goWriting = async () => {
           </div>
         </div>
 
-        <!-- 统计模块:筛选后总数 + 中英文分类(中文细分核心/非核心) -->
-        <div v-if="stats" class="stats-row">
-          <div class="stat-card">
-            <div class="stat-value">{{ stats.total }}</div>
-            <div class="stat-label">筛选后总计(篇)</div>
+        <!-- 统计:筛选后总数 + 中英文分类(中文细分核心/非核心) -->
+        <div v-if="stats" class="ledger">
+          <div class="ledger-cell">
+            <div class="ledger-num figure-num">{{ stats.total }}</div>
+            <div class="ledger-label">筛选后总计(篇)</div>
           </div>
-          <div class="stat-card">
-            <div class="stat-value" style="color: #e6a23c">{{ stats.cn_total }}</div>
-            <div class="stat-label">中文(核心 {{ stats.cn_core }} · 非核心 {{ stats.cn_non_core }})</div>
+          <div class="ledger-cell is-zh">
+            <div class="ledger-num figure-num">{{ stats.cn_total }}</div>
+            <div class="ledger-label">中文 · 核心 {{ stats.cn_core }} / 非核心 {{ stats.cn_non_core }}</div>
           </div>
-          <div class="stat-card">
-            <div class="stat-value" style="color: #409eff">{{ stats.en_total }}</div>
-            <div class="stat-label">英文(篇)</div>
+          <div class="ledger-cell is-en">
+            <div class="ledger-num figure-num">{{ stats.en_total }}</div>
+            <div class="ledger-label">英文(篇)</div>
           </div>
         </div>
 
-        <!-- 年份分布图:纯 CSS 堆叠柱状图(中文橙 / 英文蓝) -->
+        <!-- 年份分布:纯 CSS 堆叠柱状图(中文赭金 / 英文黛青) -->
         <div v-if="stats && stats.year_distribution.length" class="chart-wrap">
           <div class="chart-title">年份分布(筛选后)</div>
           <div class="chart">
@@ -523,23 +513,32 @@ const goWriting = async () => {
               <div class="chart-x">{{ i % 2 === 0 ? d.year : '' }}</div>
             </div>
           </div>
-          <div style="margin-top: 6px; font-size: 12px; color: #909399">
-            <span class="legend-dot" style="background: #e6a23c"></span>中文
-            <span class="legend-dot" style="background: #409eff; margin-left: 12px"></span>英文
+          <div class="chart-legend">
+            <span class="legend-dot zh"></span>中文
+            <span class="legend-dot en"></span>英文
           </div>
         </div>
       </div>
     </el-card>
 
-    <el-card style="margin-top: 16px">
-      <el-tabs v-model="activeTab">
+    <!-- 书架:全部/中文/英文 浏览与管理 -->
+    <el-card shadow="never" class="sheet" style="margin-top: 18px">
+      <template #header>
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-no">架</span>
+            <span class="section-title">书架</span>
+          </div>
+        </div>
+      </template>
+      <el-tabs v-model="activeTab" class="shelf-tabs">
         <el-tab-pane label="全部" name="all" />
         <el-tab-pane label="中文" name="cn" />
         <el-tab-pane label="英文" name="en" />
 
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap">
-          <div style="color: #909399; font-size: 12px">
-            每页显示
+        <div class="shelf-toolbar">
+          <div class="shelf-pageinfo">
+            每页
             <el-select
               v-model="pageSize"
               size="small"
@@ -552,7 +551,7 @@ const goWriting = async () => {
                 :value="s"
               />
             </el-select>
-            <span style="margin-left: 6px">共 {{ store.pageMeta.total }} 条</span>
+            共 {{ store.pageMeta.total }} 条
           </div>
           <el-popconfirm
             :title="`确定清空${activeTab === 'cn' ? '中文' : activeTab === 'en' ? '英文' : '所有'}文献?`"
@@ -570,7 +569,7 @@ const goWriting = async () => {
           v-loading="store.loading"
           stripe
         >
-          <el-table-column width="50">
+          <el-table-column width="46">
             <template #default="{ row }">
               <el-checkbox
                 :model-value="(row as Paper).selected"
@@ -578,25 +577,18 @@ const goWriting = async () => {
               />
             </template>
           </el-table-column>
-          <el-table-column label="来源" width="80">
+          <el-table-column label="来源" width="76">
             <template #default="{ row }">
-              <el-tag
-                :type="isCnSource((row as Paper).source) ? 'warning' : 'primary'"
-                size="small"
-              >
+              <span class="lang-chip" :class="isCnSource((row as Paper).source) ? 'zh' : 'en'">
                 {{ isCnSource((row as Paper).source) ? '中文' : '英文' }}
-              </el-tag>
+              </span>
             </template>
           </el-table-column>
           <el-table-column label="标题 / 引文" min-width="380">
             <template #default="{ row }">
-              <div style="font-weight: 500">{{ (row as Paper).title }}</div>
-              <div style="color: #909399; font-size: 12px; word-break: break-all">
-                {{ renderCitation(row as Paper) }}
-              </div>
-              <div style="color: #c0c4cc; font-size: 11px; font-family: monospace">
-                {{ (row as Paper).lit_id }}
-              </div>
+              <div class="paper-title">{{ (row as Paper).title }}</div>
+              <div class="paper-cite">{{ renderCitation(row as Paper) }}</div>
+              <div class="paper-id">{{ (row as Paper).lit_id }}</div>
             </template>
           </el-table-column>
           <el-table-column prop="journal" label="刊名" min-width="160" show-overflow-tooltip />
@@ -621,7 +613,7 @@ const goWriting = async () => {
 
         <el-pagination
           v-if="store.pageMeta.total > 0"
-          style="margin-top: 16px; justify-content: flex-end"
+          class="shelf-pager"
           background
           layout="prev, pager, next, jumper, total"
           :total="store.pageMeta.total"
@@ -640,7 +632,7 @@ const goWriting = async () => {
       width="72%"
       top="4vh"
     >
-      <div style="color: #909399; font-size: 12px; margin-bottom: 8px">
+      <div class="corpus-note">
         每条 = 「作者（年份）认为：观点(摘要)」。这份大文档就是主题划分阶段进入 LLM 的真实输入;Word 版每条观点带脚注链接到文献著录。
       </div>
       <el-input type="textarea" :rows="20" :model-value="corpusText" readonly />
@@ -653,71 +645,145 @@ const goWriting = async () => {
 </template>
 
 <style scoped>
+/* ── 馆藏总览 ── */
+.pool-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.pool-head-main {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pool-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.task-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: help;
+  background: var(--sheet-dim);
+}
+.pool-count {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+}
+.pool-count .figure-num {
+  color: var(--ink);
+  font-size: 15px;
+}
+.pool-actions {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+/* ── 采编筛选 ── */
+.filter-tip {
+  color: var(--ink-ghost);
+  cursor: help;
+  font-size: 12px;
+}
+.export-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 14px;
+  border-bottom: 1px dashed var(--rule-soft);
+}
 .filter-group {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  padding-left: 10px;
+  border-left: 3px solid var(--en);
+}
+.filter-group.is-cn {
+  border-left-color: var(--zh);
 }
 .filter-label {
+  font-family: var(--font-display);
   font-size: 13px;
-  color: #606266;
-  font-weight: 500;
-}
-.filter-tip {
-  color: #909399;
-  margin-left: 2px;
-  cursor: help;
-}
-
-/* ── 写作导入筛选与统计 ── */
-.export-filter {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 0 12px;
-  border-bottom: 1px dashed #ebeef5;
+  color: var(--ink);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  min-width: 62px;
 }
 .filter-item {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #606266;
+  color: var(--ink-soft);
 }
-.stats-row {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin: 16px 0 8px;
+.filter-join {
+  margin: 0 2px;
+  color: var(--ink-ghost);
 }
-.stat-card {
-  flex: 1;
-  min-width: 180px;
-  padding: 12px 16px;
-  border: 1px solid #ebeef5;
-  border-radius: 8px;
-  text-align: center;
-  background: #fafafa;
+
+/* 账目式统计:三栏大数,左缘墨线 */
+.ledger {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 16px 0 4px;
 }
-.stat-value {
-  font-size: 26px;
-  font-weight: 600;
-  line-height: 1.3;
+@media (max-width: 860px) {
+  .ledger {
+    grid-template-columns: 1fr;
+  }
 }
-.stat-label {
-  margin-top: 4px;
+.ledger-cell {
+  padding: 10px 16px 12px;
+  border-left: 3px solid var(--rule-strong);
+  background: var(--sheet-dim);
+}
+.ledger-cell.is-zh {
+  border-left-color: var(--zh);
+}
+.ledger-cell.is-en {
+  border-left-color: var(--en);
+}
+.ledger-num {
+  font-size: 32px;
+  line-height: 1.2;
+  color: var(--ink);
+}
+.ledger-cell.is-zh .ledger-num {
+  color: var(--zh);
+}
+.ledger-cell.is-en .ledger-num {
+  color: var(--en);
+}
+.ledger-label {
+  margin-top: 2px;
   font-size: 12px;
-  color: #909399;
+  color: var(--ink-faint);
+  letter-spacing: 0.02em;
 }
+
+/* 年份分布 */
 .chart-wrap {
   margin-top: 16px;
 }
 .chart-title {
+  font-family: var(--font-display);
   font-size: 13px;
-  color: #606266;
-  font-weight: 500;
-  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-weight: 600;
+  margin-bottom: 10px;
+  letter-spacing: 0.08em;
 }
 .chart {
   display: flex;
@@ -726,6 +792,7 @@ const goWriting = async () => {
   height: 150px;
   overflow-x: auto;
   padding-bottom: 4px;
+  border-bottom: 1px solid var(--rule-strong);
 }
 .chart-col {
   display: flex;
@@ -740,31 +807,122 @@ const goWriting = async () => {
   justify-content: flex-end;
   width: 14px;
   height: 120px;
-  border-radius: 3px 3px 0 0;
   overflow: hidden;
-  background: #f5f7fa;
 }
 .seg {
   width: 100%;
 }
 .seg.cn {
-  background: #e6a23c;
+  background: var(--zh);
 }
 .seg.en {
-  background: #409eff;
+  background: var(--en);
+}
+.chart-col:hover .seg.cn {
+  background: #b8871f;
+}
+.chart-col:hover .seg.en {
+  background: #3d737e;
 }
 .chart-x {
-  margin-top: 4px;
+  margin-top: 5px;
+  font-family: var(--font-display);
   font-size: 11px;
-  color: #909399;
+  color: var(--ink-faint);
   white-space: nowrap;
+  font-variant-numeric: oldstyle-nums;
+}
+.chart-legend {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ink-faint);
 }
 .legend-dot {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border-radius: 2px;
-  margin-right: 4px;
+  border-radius: 1px;
+  margin: 0 5px 0 0;
   vertical-align: middle;
+}
+.legend-dot.zh {
+  background: var(--zh);
+}
+.legend-dot.en {
+  background: var(--en);
+  margin-left: 14px;
+}
+
+/* ── 书架 ── */
+.shelf-tabs :deep(.el-tabs__item) {
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}
+.shelf-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 10px;
+  flex-wrap: wrap;
+}
+.shelf-pageinfo {
+  color: var(--ink-faint);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+}
+.shelf-pager {
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
+/* 语种签:小方块色签 */
+.lang-chip {
+  display: inline-block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+}
+.lang-chip.zh {
+  color: var(--zh);
+  background: var(--zh-bg);
+  border-color: var(--zh-line);
+}
+.lang-chip.en {
+  color: var(--en);
+  background: var(--en-bg);
+  border-color: var(--en-line);
+}
+
+/* 条目:衬线标题 + 著录小字 + 编号 */
+.paper-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.5;
+}
+.paper-cite {
+  margin-top: 2px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  word-break: break-all;
+}
+.paper-id {
+  margin-top: 1px;
+  color: var(--ink-ghost);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+/* 大文档弹窗 */
+.corpus-note {
+  font-family: var(--font-annotate);
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  margin-bottom: 10px;
+  line-height: 1.7;
 }
 </style>

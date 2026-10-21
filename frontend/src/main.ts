@@ -4,6 +4,12 @@ import { createPinia } from 'pinia';
 import ElementPlus from 'element-plus';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import 'element-plus/dist/index.css';
+// 「编辑部手稿」主题:设计令牌 + 全局覆盖,须在 Element 样式之后引入
+import '@fontsource/noto-serif-sc/400.css';
+import '@fontsource/noto-serif-sc/600.css';
+import '@fontsource/noto-serif-sc/700.css';
+import '@/styles/tokens.css';
+import '@/styles/base.css';
 
 import App from './App.vue';
 import router from './router';

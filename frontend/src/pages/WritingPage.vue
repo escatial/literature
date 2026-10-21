@@ -362,23 +362,23 @@ const downloadMd = () => {
 </script>
 
 <template>
-  <div>
+  <div class="writing-page">
     <!-- 后台运行提示:切 tab 写作不停,在顶部持续可见 -->
-    <el-alert
-      v-if="running"
-      type="success"
-      :closable="false"
-      show-icon
-      style="margin-bottom: 12px"
-      :title="`后台继续生成中 · 主题《${topic ?? ''}》`"
-      :description="phaseLabel + (stream.currentSection?.title ? ' · 当前章节:' + stream.currentSection.title : '') + (stream.currentSection?.content ? ' · 已输出 ' + stream.currentSection.content.length + ' 字' : '')"
-    />
+    <div v-if="running" class="run-banner">
+      <span class="run-dot"></span>
+      <div class="run-banner-main">
+        <div class="run-banner-title">后台继续生成中 · {{ topic ?? '' }}</div>
+        <div class="run-banner-sub">
+          {{ phaseLabel }}<template v-if="stream.currentSection?.title"> · 当前章节:{{ stream.currentSection.title }}</template><template v-if="stream.currentSection?.content"> · 已输出 {{ stream.currentSection.content.length }} 字</template>
+        </div>
+      </div>
+    </div>
     <el-alert
       v-else-if="hasProgress && !awaitingConfirm && stream.phase !== 'complete' && stream.phase !== 'error'"
       type="warning"
       :closable="false"
       show-icon
-      style="margin-bottom: 12px"
+      style="margin-bottom: 14px"
       title="检测到未完成的写作进度"
       description="上次生成意外中断。可点下方 清理进度 按钮清空。"
     >
@@ -387,95 +387,103 @@ const downloadMd = () => {
       </template>
     </el-alert>
 
-    <el-card>
-      <template #header>综述写作</template>
-      <div style="margin-bottom: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px">
-        <span style="color: #606266">研究主题</span>
-        <el-input
-          v-model="topicInput"
-          placeholder="研究主题"
-          size="large"
-          clearable
-          :disabled="running"
-          style="width: 420px; max-width: 100%"
-        />
-        <span style="color: #606266">文献池</span>
-        <el-tag type="success" size="large">{{ selectedCount }} 篇</el-tag>
-        <el-tag size="large" type="warning" effect="plain">
-          中文 {{ chineseSelectedCount }}
-        </el-tag>
-        <el-tag size="large" type="info" effect="plain">
-          英文 {{ englishSelectedCount }}
-        </el-tag>
-        <span style="color: #909399; font-size: 12px">
-          综述引用 {{ REFERENCE_LIMIT_MIN }}-{{ REFERENCE_LIMIT_MAX }} 篇，中文占比不低于 {{ Math.round(CHINESE_RATIO_MIN * 100) }}%；中文不足时会自动补充。
-        </span>
-      </div>
-      <div style="margin-bottom: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px">
-        <span style="color: #606266">章节分类方式</span>
-        <el-radio-group v-model="form.mode" :disabled="running">
-          <el-radio-button value="locale">按国内外</el-radio-button>
-          <el-radio-button value="theme">按主题</el-radio-button>
-        </el-radio-group>
-      </div>
-      <div style="margin-bottom: 12px; color: #909399; font-size: 12px">
-        {{ form.mode === 'theme'
-          ? '依据全部文献摘要聚类归纳实际研究主题,每个主题写一节'
-          : '按中文/外文两节分述,国内一节(知网)+ 国外一节(OpenAlex/PubMed)' }}
-        <el-tag v-if="!awaitingConfirm" type="warning" effect="plain" size="small" style="margin-left: 8px">
-          流程:① 划分主题 → ② 您确认主题 → ③ 开始写作
-        </el-tag>
-      </div>
-      <el-button
-        type="primary"
-        size="large"
-        :loading="running"
-        :disabled="primaryActionDisabled"
-        @click="start"
-      >
-        {{ actionLabel }}
-      </el-button>
-      <el-button v-if="running" type="danger" size="large" plain @click="stop">
-        停止任务
-      </el-button>
-      <el-button
-        v-if="stream.phase === 'error' && !running"
-        type="warning"
-        size="large"
-        plain
-        @click="rePlan"
-      >
-        重新划分主题
-      </el-button>
-      <el-button
-        v-if="stream.phase === 'complete'"
-        type="success"
-        size="large"
-        plain
-        @click="exportWord"
-      >
-        导出 Word（含脚注）
-      </el-button>
+    <!-- 叁 · 综述写作:控制台 -->
+    <el-card shadow="never" class="sheet">
+      <template #header>
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-no">叁</span>
+            <span class="section-title">综述写作</span>
+          </div>
+          <span v-if="!awaitingConfirm" class="section-note">流程:① 划分主题 → ② 您确认主题 → ③ 开始写作</span>
+        </div>
+      </template>
 
-      <div v-if="running || stream.phase !== 'idle'" style="margin-top: 16px">
-        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-          <el-tag :type="stream.phase === 'error' ? 'danger' : 'primary'">{{ phaseLabel }}</el-tag>
-          <el-tag v-if="stream.currentSection?.title && stream.phase === 'writing'" type="warning" effect="plain">
-            当前章节: {{ stream.currentSection.title }}
-          </el-tag>
-          <el-tag v-if="stream.elapsedSeconds > 0" type="info" effect="plain">
-          已运行 {{ formatDuration(Math.max(displayElapsedSeconds, stream.elapsedSeconds)) }}
-      </el-tag>
-      <el-tag
-        v-if="running && stream.waitingSeconds >= 2"
-        type="warning"
-        effect="plain"
-      >
-        当前阶段无新结果 {{ stream.waitingSeconds }} 秒
-      </el-tag>
-      <el-tag v-if="stream.phase === 'screening' && stream.screeningProgress" type="success" effect="plain">
-        已处理 {{ stream.screeningProgress.processed }}/{{ stream.screeningProgress.total }} 篇
-      </el-tag>
+      <div class="bench">
+        <div class="bench-row">
+          <span class="bench-label">研究主题</span>
+          <el-input
+            v-model="topicInput"
+            placeholder="写下综述的题目…"
+            size="large"
+            class="bench-topic"
+            clearable
+            :disabled="running"
+          />
+        </div>
+        <div class="bench-row">
+          <span class="bench-label">文献池</span>
+          <span class="pool-pill"><b class="figure-num">{{ selectedCount }}</b> 篇待写</span>
+          <span class="pool-pill zh">中文 <b class="figure-num">{{ chineseSelectedCount }}</b></span>
+          <span class="pool-pill en">英文 <b class="figure-num">{{ englishSelectedCount }}</b></span>
+          <span class="bench-hint">综述引用 {{ REFERENCE_LIMIT_MIN }}-{{ REFERENCE_LIMIT_MAX }} 篇,中文占比不低于 {{ Math.round(CHINESE_RATIO_MIN * 100) }}%;中文不足时自动补充。</span>
+        </div>
+        <div class="bench-row">
+          <span class="bench-label">章节划分</span>
+          <el-radio-group v-model="form.mode" :disabled="running">
+            <el-radio-button value="locale">按国内外</el-radio-button>
+            <el-radio-button value="theme">按主题</el-radio-button>
+          </el-radio-group>
+          <span class="bench-hint">
+            {{ form.mode === 'theme'
+              ? '依据全部文献摘要聚类归纳实际研究主题,每个主题写一节'
+              : '按中文/外文两节分述,国内一节(知网)+ 国外一节(OpenAlex/PubMed)' }}
+          </span>
+        </div>
+      </div>
+
+      <div class="launch-row">
+        <el-button
+          type="primary"
+          size="large"
+          class="launch-btn"
+          :loading="running"
+          :disabled="primaryActionDisabled"
+          @click="start"
+        >
+          {{ actionLabel }}
+        </el-button>
+        <el-button v-if="running" type="danger" size="large" plain @click="stop">
+          停止任务
+        </el-button>
+        <el-button
+          v-if="stream.phase === 'error' && !running"
+          type="warning"
+          size="large"
+          plain
+          @click="rePlan"
+        >
+          重新划分主题
+        </el-button>
+        <el-button
+          v-if="stream.phase === 'complete'"
+          type="success"
+          size="large"
+          plain
+          @click="exportWord"
+        >
+          导出 Word(含脚注)
+        </el-button>
+      </div>
+
+      <div v-if="running || stream.phase !== 'idle'" class="monitor">
+        <div class="monitor-line">
+          <span class="phase-chip" :class="stream.phase === 'error' ? 'st-bad' : 'st-run'">{{ phaseLabel }}</span>
+          <span v-if="stream.currentSection?.title && stream.phase === 'writing'" class="phase-chip st-wait">
+            {{ stream.currentSection.title }}
+          </span>
+          <span v-if="stream.elapsedSeconds > 0" class="phase-chip st-idle">
+            已运行 {{ formatDuration(Math.max(displayElapsedSeconds, stream.elapsedSeconds)) }}
+          </span>
+          <span
+            v-if="running && stream.waitingSeconds >= 2"
+            class="phase-chip st-warn"
+          >
+            当前阶段无新结果 {{ stream.waitingSeconds }} 秒
+          </span>
+          <span v-if="stream.phase === 'screening' && stream.screeningProgress" class="phase-chip st-ok">
+            已处理 {{ stream.screeningProgress.processed }}/{{ stream.screeningProgress.total }} 篇
+          </span>
         </div>
         <el-progress
           v-if="stream.phase === 'screening' && stream.screeningProgress"
@@ -485,7 +493,7 @@ const downloadMd = () => {
           :format="() => stream.screeningProgress!.batch === 0
             ? `准备筛选，共 ${stream.screeningProgress!.total} 篇`
             : `${stream.screeningProgress!.processed}/${stream.screeningProgress!.total} 篇 · 第 ${stream.screeningProgress!.batch}/${stream.screeningProgress!.totalBatches} 批`"
-          style="margin-top: 8px"
+          style="margin-top: 10px"
         />
         <el-alert
           v-if="running && stream.phase === 'screening'"
@@ -506,18 +514,12 @@ const downloadMd = () => {
           :indeterminate="stream.phase === 'writing'"
           :duration="2"
           :format="() => `${Math.min(stream.progress!.index + 1, stream.progress!.total)}/${stream.progress!.total} 章`"
-          style="margin-top: 8px"
+          style="margin-top: 10px"
         />
-        <div
-          v-if="stream.detail"
-          style="margin-top: 10px; padding: 10px 12px; border-radius: 6px; background: #f5f7fa; color: #606266; line-height: 1.7"
-        >
+        <div v-if="stream.detail" class="monitor-detail">
           {{ stream.detail }}
         </div>
-        <div
-          v-if="stream.harness"
-          style="margin-top: 8px; color: #909399; font-size: 12px; line-height: 1.7"
-        >
+        <div v-if="stream.harness" class="monitor-harness">
           Agent 状态：{{ stream.harness.stage || '初始化' }} ·
           {{ stream.harness.status || 'running' }} ·
           第 {{ stream.harness.attempt || 0 }} 轮
@@ -534,54 +536,49 @@ const downloadMd = () => {
             ? `${stream.error}。请点击“重新划分主题”重试；已完成的文献池不会被删除。`
             : '本次模型返回的主题结果不完整，系统没有生成伪主题。请点击“重新划分主题”重试；已完成的文献池不会被删除。'"
         />
-        <el-collapse v-if="stream.activityLog.length" style="margin-top: 10px">
+        <el-collapse v-if="stream.activityLog.length" class="activity">
           <el-collapse-item name="activity" title="实时工作记录">
-            <div ref="activityLogEl" style="max-height: 180px; overflow: auto; font-size: 12px; line-height: 1.8; color: #606266">
-              <div v-for="item in stream.activityLog.slice().reverse()" :key="item.id">
-                <span style="color: #909399; margin-right: 8px">{{ item.at }}</span>{{ item.message }}
+            <div ref="activityLogEl" class="activity-log">
+              <div v-for="item in stream.activityLog.slice().reverse()" :key="item.id" class="activity-line">
+                <span class="activity-at">{{ item.at }}</span>{{ item.message }}
               </div>
             </div>
           </el-collapse-item>
         </el-collapse>
         <div
           v-if="stream.phase === 'writing' && livePreview"
-          style="margin-top: 10px"
+          class="live"
         >
-          <div style="margin-bottom: 6px; color: #606266; font-size: 13px">
-            正文流式输出{{ stream.currentSection?.title ? ` · ${stream.currentSection.title}` : '' }}
+          <div class="live-title">
+            正文流式输出<template v-if="stream.currentSection?.title"> · {{ stream.currentSection.title }}</template>
           </div>
-          <el-input
-            :model-value="livePreview"
-            type="textarea"
-            readonly
-            resize="none"
-            :rows="10"
-            style="width: 100%"
-            input-style="max-height: 320px; min-height: 180px; overflow-y: auto; line-height: 1.8; color: #303133"
-          />
+          <div class="live-paper">{{ livePreview }}</div>
         </div>
       </div>
     </el-card>
 
     <!-- 两阶段·确认点:主题划分完成,必须由用户确认后才进入正文写作 -->
     <template v-if="awaitingConfirm">
-      <el-card v-if="blueprint" style="margin-top: 16px">
+      <el-card v-if="blueprint" shadow="never" class="sheet" style="margin-top: 18px">
         <template #header>
-          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap">
-            <span>综述设计卡与证据矩阵</span>
-            <span style="font-size:12px; color:#909399">
+          <div class="section-head">
+            <div class="head-main">
+              <span class="section-no">案</span>
+              <span class="section-title">综述设计卡与证据矩阵</span>
+            </div>
+            <span class="section-note">
               {{ blueprint.organization.mode }} · 纳入 {{ blueprint.scope.included_count }} 篇 · 筛除 {{ blueprint.scope.screened_out_count }} 篇
             </span>
           </div>
         </template>
-        <div style="display:grid; gap:8px; color:#606266; line-height:1.7; font-size:13px">
-          <div><strong>综述问题：</strong>{{ blueprint.research_question }}</div>
-          <div><strong>范围：</strong>{{ blueprint.scope.time_range[0] ?? '未定'}}, {{ blueprint.scope.time_range[1] ?? '未定'}}, 数据源 {{ blueprint.scope.sources.join('、') || '未标注' }}</div>
-          <div><strong>纳入标准：</strong>{{ blueprint.inclusion_criteria.join('；') }}</div>
-          <div><strong>排除标准：</strong>{{ blueprint.exclusion_criteria.join('；') }}</div>
-          <div><strong>组织原则：</strong>{{ blueprint.organization.principle }}</div>
+        <div class="blueprint-facts">
+          <div><b>综述问题</b>{{ blueprint.research_question }}</div>
+          <div><b>范围</b>{{ blueprint.scope.time_range[0] ?? '未定' }} — {{ blueprint.scope.time_range[1] ?? '未定' }},数据源 {{ blueprint.scope.sources.join('、') || '未标注' }}</div>
+          <div><b>纳入标准</b>{{ blueprint.inclusion_criteria.join('；') }}</div>
+          <div><b>排除标准</b>{{ blueprint.exclusion_criteria.join('；') }}</div>
+          <div><b>组织原则</b>{{ blueprint.organization.principle }}</div>
         </div>
-        <el-table :data="blueprintRows" size="small" border stripe max-height="420" style="margin-top: 12px">
+        <el-table :data="blueprintRows" size="small" border stripe max-height="420" style="margin-top: 14px">
           <el-table-column prop="title" label="文献" min-width="260" show-overflow-tooltip />
           <el-table-column prop="year" label="年份" width="72" />
           <el-table-column prop="group" label="主题" width="140" show-overflow-tooltip />
@@ -590,7 +587,7 @@ const downloadMd = () => {
           <el-table-column prop="core_findings" label="摘要证据" min-width="280" show-overflow-tooltip />
           <el-table-column prop="limitation" label="局限与缺口" width="140" show-overflow-tooltip />
         </el-table>
-        <div style="margin-top:8px; color:#909399; font-size:12px">
+        <div class="matrix-note">
           矩阵中的“待编码”表示元数据不足，需在精读阶段补全；系统不会用常识替代原文证据。
         </div>
       </el-card>
@@ -598,7 +595,7 @@ const downloadMd = () => {
         :type="stream.plan?.classify_fallback ? 'error' : 'warning'"
         :closable="false"
         show-icon
-        style="margin-top: 16px"
+        style="margin-top: 18px"
         :title="stream.plan?.classify_fallback
           ? '自动主题划分失败,当前仅 1 个兜底主题 — 强烈建议重新划分'
           : '主题划分完成,请确认后才会开始写作'"
@@ -606,33 +603,32 @@ const downloadMd = () => {
           ? '模型输出未能可靠完成主题划分，系统已自动整理候选主题。请检查下方主题及文献归属；不满意可重新划分。确认前不会生成正文。'
           : '确认前不会生成任何正文。可修改主题名称、删除不需要的主题;确认后将按这些主题分节写作。'"
       />
-      <el-card style="margin-top: 12px">
+      <el-card shadow="never" class="sheet" style="margin-top: 14px">
         <template #header>
-          <div style="display: flex; justify-content: space-between; align-items: center">
-            <span>② 主题划分确认</span>
-            <span style="font-size: 12px; color: #909399">
-              共 {{ editableGroups.length }} 个主题 ·
-              覆盖 {{ editableGroups.reduce((n, g) => n + g.lit_ids.length, 0) }} 篇文献
+          <div class="section-head">
+            <div class="head-main">
+              <span class="section-no">②</span>
+              <span class="section-title">主题划分确认</span>
+            </div>
+            <span class="section-note">
+              共 {{ editableGroups.length }} 个主题 · 覆盖 {{ editableGroups.reduce((n, g) => n + g.lit_ids.length, 0) }} 篇文献
             </span>
           </div>
         </template>
         <div
           v-for="(g, idx) in editableGroups"
           :key="idx"
-          style="display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px dashed #ebeef5; flex-wrap: wrap"
+          class="group-row"
         >
-          <span style="color: #909399; font-size: 12px; min-width: 56px">主题 {{ idx + 1 }}</span>
+          <span class="group-no">主题 {{ idx + 1 }}</span>
           <el-input
             v-model="g.name"
             placeholder="主题名称"
             :disabled="running"
-            style="width: 320px; max-width: 100%"
+            class="group-name"
           />
-          <el-tag type="primary" effect="plain">{{ g.lit_ids.length }} 篇</el-tag>
-          <span
-            :title="groupPreview(g.lit_ids)"
-            style="flex: 1; min-width: 200px; color: #909399; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
-          >
+          <span class="group-count"><b class="figure-num">{{ g.lit_ids.length }}</b> 篇</span>
+          <span :title="groupPreview(g.lit_ids)" class="group-preview">
             {{ groupPreview(g.lit_ids) }}
           </span>
           <el-button
@@ -644,26 +640,21 @@ const downloadMd = () => {
           >
             删除主题
           </el-button>
-          <div
-            v-if="blueprintGroup(g.name)"
-            style="width:100%; padding:6px 0 2px 68px; color:#909399; font-size:12px; line-height:1.7"
-          >
+          <div v-if="blueprintGroup(g.name)" class="group-meta">
             <span v-if="blueprintGroup(g.name)?.boundary">边界：{{ blueprintGroup(g.name)?.boundary }}</span>
-            <span v-if="blueprintGroup(g.name)?.relation_hint" style="margin-left:12px">比较：{{ blueprintGroup(g.name)?.relation_hint }}</span>
+            <span v-if="blueprintGroup(g.name)?.relation_hint">比较：{{ blueprintGroup(g.name)?.relation_hint }}</span>
           </div>
         </div>
-        <el-collapse style="margin-top: 8px">
+        <el-collapse class="group-detail">
           <el-collapse-item
             v-for="(g, idx) in editableGroups"
             :key="`detail-${idx}`"
             :name="`detail-${idx}`"
             :title="`${g.name || `主题 ${idx + 1}`} · ${g.lit_ids.length} 篇文献`"
           >
-            <div style="display: grid; gap: 5px; color: #606266; font-size: 12px">
-              <div v-for="title in groupTitles(g.lit_ids)" :key="title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis">
-                {{ title }}
-              </div>
-              <span v-if="g.lit_ids.length > 6" style="color: #909399">其余 {{ g.lit_ids.length - 6 }} 篇已折叠</span>
+            <div class="group-titles">
+              <div v-for="title in groupTitles(g.lit_ids)" :key="title">{{ title }}</div>
+              <span v-if="g.lit_ids.length > 6" class="group-more">其余 {{ g.lit_ids.length - 6 }} 篇已折叠</span>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -672,7 +663,7 @@ const downloadMd = () => {
           description="已无主题:全部删除将无法写作,请重新划分"
           :image-size="60"
         />
-        <div style="margin-top: 14px; display: flex; gap: 12px">
+        <div class="confirm-row">
           <el-button type="primary" size="large" :loading="running" @click="confirmPlan">
             确认主题,开始写作
           </el-button>
@@ -683,9 +674,9 @@ const downloadMd = () => {
       </el-card>
     </template>
 
-    <el-collapse v-if="stream.screenedOutIds.length" style="margin-top: 16px">
+    <el-collapse v-if="stream.screenedOutIds.length" style="margin-top: 18px">
       <el-collapse-item :title="`筛选剔除 · ${stream.screenedOutIds.length} 篇(点击展开明细)`" name="screened">
-        <span style="color: #909399; font-size: 12px; line-height: 1.8; word-break: break-all">
+        <span class="screened-list">
           {{ stream.screenedOutIds.join(', ') }}
         </span>
       </el-collapse-item>
@@ -694,17 +685,19 @@ const downloadMd = () => {
       v-if="stream.droppedCitations.length"
       type="error"
       :closable="false"
-      style="margin-top: 8px"
+      style="margin-top: 10px"
       title="检测到幻觉引用已剥离"
     >
       {{ stream.droppedCitations.join(', ') }}
     </el-alert>
 
-    <el-card v-if="stream.relevanceReport" style="margin-top: 16px">
+    <el-card v-if="stream.relevanceReport" shadow="never" class="sheet" style="margin-top: 18px">
       <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <span>文献相关性分级清单</span>
-          <span style="font-size: 12px; color: #909399">
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-title">文献相关性分级清单</span>
+          </div>
+          <span class="section-note">
             共 {{ stream.relevanceReport.total }} 篇 ·
             高相关 {{ stream.relevanceReport.summary.high }} ·
             中相关 {{ stream.relevanceReport.summary.medium }} ·
@@ -712,7 +705,7 @@ const downloadMd = () => {
           </span>
         </div>
       </template>
-      <div style="margin-bottom: 10px; color: #909399; font-size: 12px; line-height: 1.7">
+      <div class="relevance-criteria">
         高相关标准（须同时满足）：核心关键词重合度 ≥
         {{ stream.relevanceReport.criteria.keyword_overlap_high }}%、研究领域完全贴合（≥
         {{ stream.relevanceReport.criteria.field_match_full }}）、研究方法可直接参考（≥
@@ -721,7 +714,7 @@ const downloadMd = () => {
       <el-table :data="stream.relevanceReport.items" size="small" max-height="420" border>
         <el-table-column type="expand">
           <template #default="{ row }">
-            <div style="padding: 8px 16px; color: #606266; line-height: 1.9; font-size: 13px">
+            <div class="expand-facts">
               <div>核心匹配点：{{ row.match_points.join('；') }}</div>
               <div v-if="row.reason">筛选说明：{{ row.reason }}</div>
             </div>
@@ -754,7 +747,7 @@ const downloadMd = () => {
         v-if="stream.relevanceReport.excluded_low_relevance.length"
         type="info"
         :closable="false"
-        style="margin-top: 10px"
+        style="margin-top: 12px"
         title="已排除出引用配额的低相关文献"
       >
         {{ stream.relevanceReport.excluded_low_relevance.length }} 篇：{{
@@ -763,18 +756,30 @@ const downloadMd = () => {
       </el-alert>
     </el-card>
 
-    <el-card v-if="stream.groups.length && !awaitingConfirm" style="margin-top: 16px">
-      <template #header>文献分组</template>
-      <div v-for="g in stream.groups" :key="g.name" style="margin-bottom: 6px">
-        <el-tag>{{ g.name }}</el-tag>
-        <span style="margin-left: 8px; color: #909399; font-size: 12px">{{ g.lit_ids.length }} 篇</span>
+    <el-card v-if="stream.groups.length && !awaitingConfirm" shadow="never" class="sheet" style="margin-top: 18px">
+      <template #header>
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-title">文献分组</span>
+          </div>
+        </div>
+      </template>
+      <div class="group-strip">
+        <div v-for="g in stream.groups" :key="g.name" class="group-strip-item">
+          <span class="group-strip-name">{{ g.name }}</span>
+          <span class="group-strip-count">{{ g.lit_ids.length }} 篇</span>
+        </div>
       </div>
     </el-card>
 
-    <el-card v-if="stream.sections.length" style="margin-top: 16px">
+    <!-- 成稿:手稿纸 -->
+    <el-card v-if="stream.sections.length" shadow="never" class="sheet" style="margin-top: 18px">
       <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <span style="font-size: 18px; font-weight: 600">{{ topicInput.trim() || '文献综述' }} 文献综述</span>
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-no">成</span>
+            <span class="section-title manuscript-heading">{{ topicInput.trim() || '文献综述' }} 文献综述</span>
+          </div>
           <el-button
             type="primary"
             plain
@@ -786,29 +791,31 @@ const downloadMd = () => {
         </div>
       </template>
 
-      <template v-for="(s, i) in stream.sections" :key="s.key">
-        <h3 style="margin: 16px 0 8px">
-          {{ s.title }}
-          <el-tag v-if="s.citations.length" size="small" type="info" style="margin-left: 8px">
-            {{ s.citations.length }} 引用
-          </el-tag>
-        </h3>
-        <div style="white-space: pre-wrap; line-height: 1.8; color: #303133">{{ s.content }}</div>
-        <el-divider v-if="i < stream.sections.length - 1" />
-      </template>
+      <div class="manuscript">
+        <template v-for="(s, i) in stream.sections" :key="s.key">
+          <h3 class="manuscript-h3">
+            <span class="manuscript-no">{{ i + 1 }}</span>{{ s.title }}
+            <span v-if="s.citations.length" class="cite-chip">{{ s.citations.length }} 引用</span>
+          </h3>
+          <p class="manuscript-body">{{ s.content }}</p>
+        </template>
 
-      <el-divider />
-      <h3 style="margin: 0 0 8px">参考文献</h3>
-      <pre style="white-space: pre-wrap; font-family: inherit; line-height: 1.8; color: #303133">{{ stream.referenceList || '(等待生成...)' }}</pre>
+        <hr class="manuscript-rule" />
+        <h3 class="manuscript-h3"><span class="manuscript-no">附</span>参考文献</h3>
+        <div class="manuscript-refs">{{ stream.referenceList || '(等待生成...)' }}</div>
+      </div>
     </el-card>
 
     <!-- v9.7 软门禁:核查未通过不再报废综述,报告在此醒目展示供人工复核 -->
-    <el-card v-if="stream.qaResult && stream.phase === 'complete'" style="margin-top: 16px">
+    <el-card v-if="stream.qaResult && stream.phase === 'complete'" shadow="never" class="sheet" style="margin-top: 18px">
       <template #header>
-        <div style="display: flex; justify-content: space-between; align-items: center">
-          <span>全流程质量核查报告</span>
-          <span style="font-size: 12px; color: #909399">
-            通过率 {{ Math.round((stream.qaResult.pass_rate ?? 0) * 100) }}%
+        <div class="section-head">
+          <div class="head-main">
+            <span class="section-no">检</span>
+            <span class="section-title">全流程质量核查报告</span>
+          </div>
+          <span class="section-note">
+            通过率 <b class="figure-num">{{ Math.round((stream.qaResult.pass_rate ?? 0) * 100) }}%</b>
           </span>
         </div>
       </template>
@@ -822,17 +829,17 @@ const downloadMd = () => {
             ? '核查未通过 — 综述仍已生成,请结合下列问题人工复核'
             : '核查存在警告,建议复核'"
       />
-      <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px">
-        <el-tag
+      <div class="qa-chips">
+        <span
           v-for="c in stream.qaResult.checks"
           :key="c.check_id"
-          :type="qaStatusTagType(c.status)"
-          effect="plain"
+          class="qa-chip"
+          :class="`qa-${c.status}`"
         >
           {{ c.name }}:{{ c.status === 'pass' ? '通过' : c.status === 'fail' ? `${c.fail_count} 项不通过` : c.status === 'warn' ? `${c.warn_count} 项警告` : '跳过' }}
-        </el-tag>
+        </span>
       </div>
-      <el-collapse v-if="qaFailedIssues.length || qaWarnIssues.length" style="margin-top: 10px">
+      <el-collapse v-if="qaFailedIssues.length || qaWarnIssues.length" class="qa-issues">
         <el-collapse-item
           v-if="qaFailedIssues.length"
           :title="`不通过的问题(${qaFailedIssues.length},点击展开)`"
@@ -840,11 +847,11 @@ const downloadMd = () => {
           <div
             v-for="(issue, i) in qaFailedIssues.slice(0, 30)"
             :key="i"
-            style="font-size: 13px; color: #f56c6c; line-height: 1.8"
+            class="issue-line issue-fail"
           >
             [{{ issue.code }}] {{ issue.message }}{{ issue.path ? `(${issue.path})` : '' }}
           </div>
-          <div v-if="qaFailedIssues.length > 30" style="font-size: 12px; color: #909399">
+          <div v-if="qaFailedIssues.length > 30" class="issue-rest">
             其余 {{ qaFailedIssues.length - 30 }} 条从略,完整报告见归档记录。
           </div>
         </el-collapse-item>
@@ -855,11 +862,11 @@ const downloadMd = () => {
           <div
             v-for="(issue, i) in qaWarnIssues.slice(0, 30)"
             :key="i"
-            style="font-size: 13px; color: #e6a23c; line-height: 1.8"
+            class="issue-line issue-warn"
           >
             [{{ issue.code }}] {{ issue.message }}{{ issue.path ? `(${issue.path})` : '' }}
           </div>
-          <div v-if="qaWarnIssues.length > 30" style="font-size: 12px; color: #909399">
+          <div v-if="qaWarnIssues.length > 30" class="issue-rest">
             其余 {{ qaWarnIssues.length - 30 }} 条从略。
           </div>
         </el-collapse-item>
@@ -869,3 +876,448 @@ const downloadMd = () => {
     <el-empty v-else-if="!running" description="尚未生成综述" style="margin-top: 32px" />
   </div>
 </template>
+
+<style scoped>
+.writing-page {
+  display: block;
+}
+
+/* ── 后台运行横幅 ── */
+.run-banner {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 14px;
+  padding: 11px 16px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--cinnabar);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sheet);
+}
+.run-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cinnabar);
+  animation: run-pulse 1.4s ease-in-out infinite;
+  flex: none;
+}
+@keyframes run-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.run-banner-main {
+  min-width: 0;
+}
+.run-banner-title {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.04em;
+}
+.run-banner-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* ── 写作台 ── */
+.bench {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px dashed var(--rule-soft);
+}
+.bench-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.bench-label {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.12em;
+  min-width: 66px;
+  flex: none;
+}
+.bench-topic {
+  flex: 1;
+  min-width: 320px;
+  max-width: 560px;
+}
+.pool-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  padding: 3px 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--sheet-dim);
+}
+.pool-pill .figure-num {
+  font-size: 16px;
+  color: var(--ink);
+}
+.pool-pill.zh {
+  border-color: var(--zh-line);
+  background: var(--zh-bg);
+}
+.pool-pill.zh .figure-num {
+  color: var(--zh);
+}
+.pool-pill.en {
+  border-color: var(--en-line);
+  background: var(--en-bg);
+}
+.pool-pill.en .figure-num {
+  color: var(--en);
+}
+.bench-hint {
+  font-family: var(--font-annotate);
+  font-size: 12px;
+  color: var(--ink-faint);
+  line-height: 1.6;
+}
+
+.launch-row {
+  margin-top: 16px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.launch-btn {
+  letter-spacing: 0.18em;
+}
+
+/* ── 运行监视 ── */
+.monitor {
+  margin-top: 16px;
+}
+.monitor-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.phase-chip {
+  display: inline-block;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  padding: 3px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+.st-ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.st-warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+.st-bad { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+.st-run { color: var(--cinnabar); background: var(--cinnabar-tint); border-color: var(--cinnabar); }
+.st-wait { color: var(--ink-soft); background: var(--paper-deep); border-color: var(--rule-strong); }
+.st-idle { color: var(--ink-soft); background: transparent; border-color: var(--rule); }
+
+.monitor-detail {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--rule-strong);
+  background: var(--sheet-dim);
+  color: var(--ink-soft);
+  line-height: 1.75;
+  font-size: 12.5px;
+}
+.monitor-harness {
+  margin-top: 8px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.7;
+  font-family: var(--font-mono);
+}
+
+.activity {
+  margin-top: 10px;
+}
+.activity-log {
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--ink-soft);
+}
+.activity-at {
+  color: var(--ink-ghost);
+  margin-right: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* 流式输出:铺一张小稿纸 */
+.live {
+  margin-top: 12px;
+}
+.live-title {
+  margin-bottom: 7px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-family: var(--font-display);
+  letter-spacing: 0.05em;
+}
+.live-paper {
+  max-height: 320px;
+  min-height: 160px;
+  overflow-y: auto;
+  line-height: 1.9;
+  color: var(--ink);
+  font-size: 13.5px;
+  padding: 14px 18px;
+  background: #fffef9;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  text-align: justify;
+}
+
+/* ── 设计卡 ── */
+.blueprint-facts {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  line-height: 1.75;
+  font-size: 13px;
+}
+.blueprint-facts b {
+  font-family: var(--font-display);
+  color: var(--ink);
+  margin-right: 10px;
+  letter-spacing: 0.08em;
+}
+.blueprint-facts b::after {
+  content: '　';
+}
+.matrix-note {
+  margin-top: 10px;
+  font-family: var(--font-annotate);
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+/* ── 主题确认 ── */
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--rule-soft);
+  flex-wrap: wrap;
+}
+.group-no {
+  color: var(--ink-ghost);
+  font-size: 12px;
+  min-width: 56px;
+  flex: none;
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+}
+.group-name {
+  width: 320px;
+  max-width: 100%;
+}
+.group-count {
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  flex: none;
+}
+.group-count .figure-num {
+  font-size: 15px;
+  color: var(--cinnabar);
+}
+.group-preview {
+  flex: 1;
+  min-width: 200px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-meta {
+  width: 100%;
+  padding: 4px 0 2px 68px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.7;
+  font-family: var(--font-annotate);
+}
+.group-detail {
+  margin-top: 10px;
+}
+.group-titles {
+  display: grid;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.group-titles > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.group-more {
+  color: var(--ink-ghost);
+}
+.confirm-row {
+  margin-top: 16px;
+  display: flex;
+  gap: 10px;
+}
+
+.screened-list {
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.8;
+  word-break: break-all;
+}
+
+/* ── 相关性清单 ── */
+.relevance-criteria {
+  margin-bottom: 12px;
+  font-family: var(--font-annotate);
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  line-height: 1.75;
+}
+.expand-facts {
+  padding: 8px 16px;
+  color: var(--ink-soft);
+  line-height: 1.9;
+  font-size: 13px;
+}
+
+/* ── 分组条 ── */
+.group-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.group-strip-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 2px;
+  border-bottom: 1px dashed var(--rule-soft);
+}
+.group-strip-item:last-child {
+  border-bottom: none;
+}
+.group-strip-name {
+  font-size: 13.5px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.group-strip-count {
+  font-size: 12px;
+  color: var(--ink-faint);
+  flex: none;
+}
+
+/* ── 手稿 ── */
+.manuscript-heading {
+  font-size: 19px;
+}
+.manuscript {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 8px 4px 4px;
+}
+.manuscript-h3 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  letter-spacing: 0.05em;
+  margin: 26px 0 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.manuscript-h3:first-child {
+  margin-top: 6px;
+}
+.manuscript-no {
+  color: var(--cinnabar);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  flex: none;
+}
+.cite-chip {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--info);
+  background: var(--info-bg);
+  border: 1px solid var(--info);
+  border-radius: var(--radius-sm);
+  padding: 1px 7px;
+  letter-spacing: 0.04em;
+}
+.manuscript-body {
+  margin: 0;
+  font-size: 14px;
+  line-height: 2;
+  color: var(--ink);
+  text-align: justify;
+  text-indent: 2em;
+  white-space: pre-wrap;
+}
+.manuscript-rule {
+  border: none;
+  border-top: 1px solid var(--rule-strong);
+  margin: 30px 0 0;
+}
+.manuscript-refs {
+  margin-top: 12px;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--ink-soft);
+  white-space: pre-wrap;
+}
+
+/* ── QA 报告 ── */
+.qa-chips {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.qa-chip {
+  display: inline-block;
+  font-size: 12px;
+  padding: 3px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  letter-spacing: 0.02em;
+}
+.qa-pass { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.qa-fail { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+.qa-warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+.qa-skip { color: var(--ink-soft); background: transparent; border-color: var(--rule); }
+
+.qa-issues {
+  margin-top: 12px;
+}
+.issue-line {
+  font-size: 13px;
+  line-height: 1.85;
+}
+.issue-fail { color: var(--bad); }
+.issue-warn { color: var(--warn); }
+.issue-rest {
+  font-size: 12px;
+  color: var(--ink-ghost);
+}
+</style>

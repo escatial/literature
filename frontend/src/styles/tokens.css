@@ -1,0 +1,64 @@
+/* ============================================================
+   设计令牌 ·「编辑部手稿」主题
+   一本正在编纂的学术期刊:暖纸底、油墨字、朱砂印、衬线题。
+   全站唯一的颜色/字体/形状来源,页面样式只允许引用这里的变量。
+   ============================================================ */
+
+:root {
+  /* ── 纸与墨 ── */
+  --paper: #f3efe4;            /* 页面底色:暖米纸 */
+  --paper-deep: #ece6d6;       /* 下沉一档的纸色:分区底、表头 */
+  --sheet: #fdfbf5;            /* 纸面:卡片/面板 */
+  --sheet-dim: #f7f3e9;        /* 纸面内的浅区块 */
+  --ink: #2b2418;              /* 油墨:正文 */
+  --ink-soft: #5c523e;         /* 次级文字 */
+  --ink-faint: #8d826a;        /* 批注/辅助 */
+  --ink-ghost: #b3a88f;        /* 最弱:占位、编号底 */
+
+  /* ── 界线 ── */
+  --rule: #ddd3bd;             /* 常规 hairline */
+  --rule-strong: #b9ac8f;      /* 重一点的界线 */
+  --rule-soft: #e8e1cf;        /* 虚线/表格内线 */
+
+  /* ── 朱砂(主色:印泥红) ── */
+  --cinnabar: #a23524;         /* 主色 */
+  --cinnabar-deep: #7f2818;    /* hover/按下 */
+  --cinnabar-tint: #f3e0d8;    /* 浅底 */
+  --cinnabar-wash: #e8c9bd;    /* 边框浅 */
+
+  /* ── 双语色制:中文=赭金,英文=黛青 ── */
+  --zh: #96690f;               /* 中文文献 */
+  --zh-bg: #f4ead1;
+  --zh-line: #ddc58f;
+  --en: #2e5a63;               /* 英文文献 */
+  --en-bg: #e2ecec;
+  --en-line: #b5cdce;
+
+  /* ── 语义色(向暖纸靠拢的 Element 语义) ── */
+  --ok: #4a7040;
+  --ok-bg: #e7ecdd;
+  --warn: #9a6b16;
+  --warn-bg: #f6ecd4;
+  --bad: #a03226;
+  --bad-bg: #f5e0da;
+  --info: #3f5a72;
+  --info-bg: #e2e9ee;
+
+  /* ── 字体 ── */
+  /* 标题/数字:Georgia 老式衬线负责西文与数字,思源宋体/宋体负责中文 */
+  --font-display: Georgia, 'Times New Roman', 'Noto Serif SC', 'Source Han Serif SC', 'SimSun', serif;
+  /* 正文:系统黑体,保持界面可读性 */
+  --font-body: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+  /* 批注:楷体,只用于提示性小字 */
+  --font-annotate: KaiTi, STKaiti, 'Kaiti SC', 'Noto Serif SC', serif;
+  --font-mono: 'Cascadia Code', Consolas, 'JetBrains Mono', 'Courier New', monospace;
+
+  /* ── 形状 ── */
+  --radius: 3px;               /* 锐利小圆角:印刷品的利落 */
+  --radius-sm: 2px;
+  --shadow-sheet: 0 1px 2px rgba(60, 48, 24, 0.06), 0 4px 14px rgba(60, 48, 24, 0.05);
+  --shadow-pop: 0 6px 24px rgba(60, 48, 24, 0.14);
+
+  /* ── 纸张噪点(叠在 body 上,极淡) ── */
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.3 0 0 0 0 0.2 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}

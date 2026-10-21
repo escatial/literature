@@ -203,42 +203,45 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
   <div class="crawler-page">
     <!-- 工具条 -->
     <div class="toolbar">
+      <span class="section-no">附</span>
+      <span class="section-title">爬虫监控</span>
       <el-switch v-model="autoRefresh" active-text="自动刷新(5s)" />
       <el-button :loading="loading" @click="loadAll">手动刷新</el-button>
       <el-button type="danger" plain @click="stopEverything">停止全部任务</el-button>
     </div>
 
-    <!-- 任务概览 -->
-    <div class="stat-row">
-      <el-card v-if="stats" class="stat-card">
-        <div class="stat-num">{{ stats.total }}</div>
+    <!-- 任务概览:账目式六栏 -->
+    <div v-if="stats" class="stat-row">
+      <div class="stat-cell">
+        <div class="stat-num figure-num">{{ stats.total }}</div>
         <div class="stat-label">总任务</div>
-      </el-card>
-      <el-card v-if="stats" class="stat-card">
-        <div class="stat-num running">{{ stats.running }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num figure-num running">{{ stats.running }}</div>
         <div class="stat-label">运行中</div>
-      </el-card>
-      <el-card v-if="stats" class="stat-card">
-        <div class="stat-num ok">{{ stats.done }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num figure-num ok">{{ stats.done }}</div>
         <div class="stat-label">完成</div>
-      </el-card>
-      <el-card v-if="stats" class="stat-card">
-        <div class="stat-num bad">{{ stats.failed }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num figure-num bad">{{ stats.failed }}</div>
         <div class="stat-label">失败</div>
-      </el-card>
-      <el-card v-if="stats" class="stat-card">
-        <div class="stat-num">{{ stats.stopped }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num figure-num">{{ stats.stopped }}</div>
         <div class="stat-label">已停止</div>
-      </el-card>
-      <el-card v-if="stats" class="stat-card">
-        <div class="stat-num">{{ stats.saved_total }}</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-num figure-num">{{ stats.saved_total }}</div>
         <div class="stat-label">累计入库</div>
-      </el-card>
+      </div>
     </div>
 
     <!-- 资源面:动态池 / 断路器 / 代理池 / 告警 -->
     <div class="grid-2">
-      <el-card header="动态并发池">
+      <el-card shadow="never">
+        <template #header><span class="card-head">动态并发池</span></template>
         <template v-if="pool?.initialized">
           <div class="kv"><span>当前并发 / 上下限</span><b>{{ pool.workers }} / {{ pool.min_workers }}~{{ pool.max_workers }}</b></div>
           <div class="kv"><span>平均延迟</span><b>{{ pool.avg_latency }}s</b></div>
@@ -249,7 +252,8 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
         <span v-else class="muted">池未初始化(暂无爬取任务)</span>
       </el-card>
 
-      <el-card header="断路器">
+      <el-card shadow="never">
+        <template #header><span class="card-head">断路器</span></template>
         <el-table v-if="breakers.length" :data="breakers" size="small">
           <el-table-column prop="name" label="名称" min-width="120" />
           <el-table-column label="状态" width="90">
@@ -270,7 +274,8 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
         <span v-else class="muted">暂无断路器注册</span>
       </el-card>
 
-      <el-card :header="`代理池(模式: ${proxy?.mode ?? '—'})`">
+      <el-card shadow="never">
+        <template #header><span class="card-head">代理池(模式: {{ proxy?.mode ?? '—' }})</span></template>
         <el-table v-if="proxy?.proxies?.length" :data="proxy.proxies" size="small">
           <el-table-column prop="url" label="代理(打码)" min-width="150" show-overflow-tooltip />
           <el-table-column prop="score" label="健康分" width="80" />
@@ -287,7 +292,8 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
         <span v-else class="muted">当前模式无代理实例(off 模式或池为空)</span>
       </el-card>
 
-      <el-card header="最近告警">
+      <el-card shadow="never">
+        <template #header><span class="card-head">最近告警</span></template>
         <template v-if="alerts.length">
           <div v-for="(a, i) in alerts" :key="i" class="alert-item">
             <el-tag :type="a.level === 'critical' ? 'danger' : 'warning'" size="small">{{ a.level }}</el-tag>
@@ -301,7 +307,8 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
     </div>
 
     <!-- 任务列表 -->
-    <el-card header="爬取任务">
+    <el-card shadow="never">
+      <template #header><span class="card-head">爬取任务</span></template>
       <div class="table-toolbar">
         <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 140px">
           <el-option label="运行中" value="running" />
@@ -349,7 +356,7 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
         <h4>全链路计数</h4>
         <div class="counter-grid">
           <div v-for="(v, k) in detail.counters" :key="k" class="counter-cell">
-            <div class="counter-num">{{ v }}</div>
+            <div class="counter-num figure-num">{{ v }}</div>
             <div class="counter-name">{{ k }}</div>
           </div>
         </div>
@@ -398,71 +405,109 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
 .crawler-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 .toolbar {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 16px;
 }
+.toolbar .el-switch {
+  align-self: center;
+}
+
+/* 概览:墨线账目栏 */
 .stat-row {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 12px;
 }
-.stat-card {
-  text-align: center;
+@media (max-width: 960px) {
+  .stat-row {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+.stat-cell {
+  padding: 10px 14px 12px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule-strong);
+  border-radius: var(--radius);
 }
 .stat-num {
-  font-size: 26px;
-  font-weight: 600;
-  color: #303133;
+  font-size: 30px;
+  line-height: 1.2;
+  color: var(--ink);
 }
-.stat-num.running { color: #409eff; }
-.stat-num.ok { color: #67c23a; }
-.stat-num.bad { color: #f56c6c; }
+.stat-num.running { color: var(--cinnabar); }
+.stat-num.ok { color: var(--ok); }
+.stat-num.bad { color: var(--bad); }
 .stat-label {
   font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
+  color: var(--ink-faint);
+  margin-top: 3px;
+  letter-spacing: 0.06em;
 }
+
 .grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 18px;
 }
+@media (max-width: 960px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+.card-head {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+}
+
 .kv {
   display: flex;
   justify-content: space-between;
-  font-size: 13px;
-  padding: 4px 0;
-  color: #606266;
+  gap: 12px;
+  font-size: 12.5px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--rule-soft);
+}
+.kv span {
+  color: var(--ink-faint);
+}
+.kv b {
+  font-family: var(--font-display);
+  color: var(--ink);
 }
 .muted {
-  color: #909399;
+  font-family: var(--font-annotate);
+  color: var(--ink-faint);
   font-size: 13px;
 }
 .table-toolbar {
   margin-bottom: 12px;
 }
 .alert-item {
-  padding: 6px 0;
-  border-bottom: 1px dashed #ebeef5;
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--rule-soft);
   font-size: 13px;
+}
+.alert-item:last-child {
+  border-bottom: none;
 }
 .alert-title {
   margin-left: 8px;
-  color: #303133;
+  color: var(--ink);
 }
 .alert-meta {
   float: right;
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 12px;
 }
 .alert-detail {
-  color: #909399;
+  color: var(--ink-faint);
   font-size: 12px;
-  margin-top: 2px;
+  margin-top: 3px;
   word-break: break-all;
 }
 .detail-head {
@@ -471,11 +516,12 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
   gap: 12px;
 }
 .detail-error {
-  margin-top: 8px;
-  padding: 8px;
-  background: #fef0f0;
-  color: #f56c6c;
-  border-radius: 4px;
+  margin-top: 10px;
+  padding: 9px 12px;
+  background: var(--bad-bg);
+  color: var(--bad);
+  border-left: 3px solid var(--bad);
+  border-radius: var(--radius-sm);
   font-size: 13px;
   word-break: break-all;
 }
@@ -485,18 +531,20 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
   gap: 8px;
 }
 .counter-cell {
-  background: #f5f7fa;
-  border-radius: 6px;
+  background: var(--sheet-dim);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-sm);
   padding: 8px;
   text-align: center;
 }
 .counter-num {
   font-size: 18px;
-  font-weight: 600;
+  color: var(--ink);
 }
 .counter-name {
   font-size: 11px;
-  color: #909399;
+  color: var(--ink-faint);
+  margin-top: 2px;
 }
 .flags {
   margin-top: 8px;
@@ -505,22 +553,31 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
   margin-right: 6px;
 }
 .detail-actions {
-  margin-top: 8px;
+  margin-top: 10px;
 }
+/* 印房日志:墨底纸字 */
 .logs {
-  background: #1e1e1e;
-  color: #d4d4d4;
-  padding: 12px;
-  border-radius: 6px;
+  background: #2b2418;
+  color: #e8dfc9;
+  padding: 14px;
+  border-radius: var(--radius);
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.7;
   max-height: 320px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  font-family: var(--font-mono);
 }
 h4 {
-  margin: 16px 0 8px;
-  color: #303133;
+  margin: 18px 0 8px;
+  font-family: var(--font-display);
+  color: var(--ink);
+  letter-spacing: 0.08em;
+  font-size: 14px;
+}
+h4::before {
+  content: '· ';
+  color: var(--cinnabar);
 }
 </style>
