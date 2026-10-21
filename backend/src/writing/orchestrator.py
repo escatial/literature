@@ -31,12 +31,12 @@ from retrieval.types import Paper, Source
 from screening.llm_filter import screen_batch, screen_batch_stream
 from writing import classifier as _classifier_mod
 from writing.classifier import Group, classify, _title_similarity, _pool_dominant_language
+from writing.pool_selection import select_writing_pool
 from writing.relevance import (
     RelevanceScore,
     build_concept_groups,
     build_relevance_report,
     grade_papers,
-    sort_by_relevance,
 )
 from writing.section_writer import (
     SectionResult,
@@ -71,12 +71,12 @@ def _int_env(name: str, default: int) -> int:
 
 _REFERENCE_LIMIT_MIN = _int_env("WRITING_REF_MIN", 70)        # 综述最低引用数
 _REFERENCE_LIMIT_MAX = _int_env("WRITING_REF_MAX", 90)        # 综述最高引用数，与 QA 上限一致
-_REFERENCE_LIMIT_DEFAULT = _int_env("WRITING_REF_TARGET", 80) # 综述默认目标数
-_CHINESE_RATIO_MIN = 2 / 3                                   # 中文文献占比下限(硬约束 ≥ 2/3)
-# 英文上限:1/3 略多约 3% 内,即 ≤ 36.7%。超过即违反"中文占主导"原则
-_ENGLISH_RATIO_MAX = 1 / 3 + 1 / 30                           # ≈ 36.7%
+# 写作池目标总量(2026-10-21 用户定版:90 就 90,81-90 篇的池子不再裁剪)
+_REFERENCE_LIMIT_DEFAULT = _int_env("WRITING_REF_TARGET", 90)
+# v11 语言引导线(非硬约束):英文进池线 = 目标 × 40%(30%-40% 引导带上沿),
+# 中文占比 60% 为其补集;只对超软上限的池子生效,见 writing/pool_selection.py。
+# 池子规模上限仍由 _REFERENCE_LIMIT_MAX + 软上限(+10%)控制。
 _CHINESE_REFERENCE_TARGET = _int_env("WRITING_CHINESE_TARGET", 60)
-_ENGLISH_REFERENCE_TARGET = max(0, _REFERENCE_LIMIT_DEFAULT - _CHINESE_REFERENCE_TARGET)
 
 
 def _format_chinese_index(idx: int) -> str:
@@ -177,6 +177,7 @@ def build_review_blueprint(
     screened_out_ids: list[str] | None = None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    quota_cut_count: int | None = None,
 ) -> dict:
     """Build a review design card and evidence matrix from verified metadata."""
     screened = set(screened_out_ids or [])
@@ -286,6 +287,8 @@ def build_review_blueprint(
             "sources": sorted({getattr(p.source, "value", str(p.source)) for p in papers}),
             "included_count": len(papers),
             "screened_out_count": len(screened),
+            # v11:配额精选裁剪数(相关性合格但超出写作池目标总量的文献)
+            "quota_cut_count": max(0, int(quota_cut_count or 0)),
         },
         "inclusion_criteria": ["与研究主题存在实质关联", "具备可核查的题名、作者或摘要信息", "能够支撑主题比较或研究现状判断"],
         "exclusion_criteria": ["主题无实质关联", "摘要与元数据不足以判断研究内容", "重复记录或无法核验的条目"],
@@ -357,55 +360,19 @@ def _allow_chinese_supplement(papers: list[Paper]) -> bool:
     return len(papers) >= 10
 
 
-def _rank_by_relevance(
-    papers: list[Paper],
-    scores: dict[str, RelevanceScore] | None,
-) -> list[Paper]:
-    """把候选按相关性等级降序排布，低相关排到末位仅作兜底。
-
-    对应「优先使用高相关性文献」原则：进入配额的顺序即高→中→低。
-    """
-    if not scores:
-        return papers
-    return sort_by_relevance(papers, scores)
-
-
 def _select_reference_quota(
     papers: list[Paper],
     scores: dict[str, RelevanceScore] | None = None,
 ) -> list[Paper]:
-    """按综述引用区间选择文献：总量 70-90 篇，中文不少于 2/3，英文可略超 1/3。
+    """按写作池配额精选文献:总量目标 90(WRITING_REF_TARGET),中文 ≥ 2/3。
 
-    业务规则：
-    - 综述引用总数在 [70, 90] 之间，受候选数限制。
-    - 中文文献占比必须 ≥ 2/3。
-    - 英文文献占比允许略多于 1/3（即不严格限制），但优先让中文占满。
-    - 传入 scores 时，中英文各自内部按相关性等级+得分降序取用，
-      低相关文献只有在高/中相关不足以凑满配额时才会被取到。
+    v11:核心期刊分层(中文核心优先,非核心补足)+ 相关性分级排序 + 英文
+    被引数平手裁决,逻辑统一收敛到 pool_selection.select_writing_pool;
+    本函数保留为兼容入口,裁剪明细由 _apply_relevance_quota 经
+    relevance_report["quota_cut"] 透出。
     """
-    chinese_sources = {Source.CNKI, Source.USER_IMPORTED}
-    ranked = _rank_by_relevance(papers, scores)
-    chinese = [paper for paper in ranked if paper.source in chinese_sources]
-    english = [paper for paper in ranked if paper.source not in chinese_sources]
-    total_available = len(chinese) + len(english)
-    # 目标总量：在 [70, 90] 之间，受候选数限制
-    target_total = min(_REFERENCE_LIMIT_MAX, max(_REFERENCE_LIMIT_MIN, total_available))
-    # 在该总量下，中文占比刚好 ≥ 2/3 所需的最少中文数
-    min_chinese = math.ceil(target_total * _CHINESE_RATIO_MIN)
-    # 若候选中文不足，则降总量到候选数能支撑的最小总量
-    while target_total > _REFERENCE_LIMIT_MIN and len(chinese) < min_chinese:
-        target_total -= 1
-        min_chinese = math.ceil(target_total * _CHINESE_RATIO_MIN)
-    # 中文只占「满足 2/3 硬约束」所需的份额,剩余名额留给英文;
-    # 英文候选不足时再由中文回填,避免中文候选充裕就把英文全部挤掉。
-    chinese_used = min(len(chinese), max(min_chinese, target_total - len(english)))
-    english_used = min(len(english), target_total - chinese_used)
-    backfill = target_total - chinese_used - english_used
-    if backfill > 0:
-        chinese_used = min(len(chinese), chinese_used + backfill)
-    selected = chinese[:chinese_used]
-    selected.extend(english[:english_used])
-    return selected[: min(_REFERENCE_LIMIT_MAX, len(selected))]
+    selected, _cuts = select_writing_pool(papers, scores)
+    return selected
 
 
 def _select_theme_writing_pool(
@@ -489,14 +456,14 @@ def _select_theme_writing_pool(
 def _validate_reference_quota(papers: list[Paper]) -> None:
     chinese_sources = {Source.CNKI, Source.USER_IMPORTED}
     chinese_count = sum(paper.source in chinese_sources for paper in papers)
-    if len(papers) >= _REFERENCE_LIMIT_MIN and chinese_count * 3 < 2 * len(papers):
-        # 设计变更:e2e/批量场景下若 CNKI 因 cookie/IP 限流返回 0 篇,
-        # 不应让整篇综述生成失败。降级为 warning,继续生成(并在 review.md
-        # / qa.json 里报告该问题)。
+    # v11:60% 是英文 30%-40% 引导带的补集(引导线,非硬约束)。低于线只
+    # 报 warning 不阻断——e2e/批量场景下 CNKI 因 cookie/IP 限流返回 0 篇时
+    # 不应让整篇综述生成失败,继续生成并在 review.md/qa.json 里报告。
+    if len(papers) >= _REFERENCE_LIMIT_MIN and chinese_count < len(papers) * 0.6:
         log.warning(
-            "可用文献未达到 2/3 中文占比的硬约束:综述需要至少 %d 篇文献且"
-            "中文占比不低于 2/3,当前 %d 篇中仅有 %d 篇中文文献。继续生成综述。",
-            _REFERENCE_LIMIT_MIN, len(papers), chinese_count,
+            "可用文献中文占比低于 60%% 引导线(英文引导上限 40%%):"
+            "当前 %d 篇中仅有 %d 篇中文文献。继续生成综述。",
+            len(papers), chinese_count,
         )
 
 
@@ -555,28 +522,37 @@ def _apply_relevance_quota(
     kept_papers: list[Paper],
     decisions: list[dict],
 ) -> tuple[list[Paper], list[str], dict]:
-    """四维度打分 → 三级分级 → 按等级优先排布 → 取配额 → 出分级清单。
+    """四维度打分 → 三级分级 → 配额精选 → 出分级清单。
 
     v8.3:先由 LLM 把主题拆成中英概念组,关键词重合度走语义级匹配,
     修复「英文文献字面恒 0 分」「权利/权力寻租一字之差全灭」。
+    v11:配额精选升级为核心期刊分层 × 相关性分级 × 语言配额
+    (pool_selection.select_writing_pool),被裁明细挂 report["quota_cut"],
+    与 excluded_low_relevance 同构,供前端确认面板展示。
     返回 (入选文献, 被排除的 lit_id, 《文献相关性分级清单》)。
     """
     concept_groups = build_concept_groups(topic)
     scores = grade_papers(topic, kept_papers, decisions, concept_groups)
-    quota_papers = _select_reference_quota(kept_papers, scores)
+    quota_papers, cuts = select_writing_pool(kept_papers, scores)
     _validate_reference_quota(quota_papers)
     quota_ids = {paper.lit_id for paper in quota_papers}
     report = build_relevance_report(quota_papers, scores)
+    report["quota_cut"] = [cut.to_row() for cut in cuts]
     report["excluded_low_relevance"] = [
         row for row in build_relevance_report(
             [p for p in kept_papers if p.lit_id not in quota_ids], scores,
         )["items"]
         if row["grade"] == "low"
     ]
+    core_cuts = sum(1 for cut in cuts if cut.core_tier == "core")
     log.info(
-        "相关性分级完成：高相关 %d 篇，中相关 %d 篇，低相关 %d 篇（入选 %d 篇）",
+        "相关性分级完成：高相关 %d 篇，中相关 %d 篇，低相关 %d 篇"
+        "（写作池 %d 篇，配额裁剪 %d 篇：核心 %d / 非核心 %d / 英文 %d）",
         report["summary"]["high"], report["summary"]["medium"],
-        report["summary"]["low"], len(quota_papers),
+        report["summary"]["low"], len(quota_papers), len(cuts),
+        core_cuts,
+        sum(1 for cut in cuts if cut.core_tier == "non_core"),
+        sum(1 for cut in cuts if cut.core_tier == "foreign"),
     )
     excluded = [p.lit_id for p in candidates if p.lit_id not in quota_ids]
     return quota_papers, excluded, report
@@ -1532,6 +1508,10 @@ def plan_review_stream(
         yield _sse_event("screening_done", {
             "kept": len(papers),
             "screened_out": screened_out,
+            # v11 配额精选摘要:kept 已是核心期刊分层 × 相关性分级 × 语言
+            # 引导线后的写作池(目标 90,软上限 99 内不裁),明细见
+            # relevance_report.quota_cut。
+            "quota_cut": len(relevance_report.get("quota_cut") or []),
         })
         yield _sse_event("relevance_report", relevance_report)
         yield _sse_event("classify_started", {
@@ -1553,11 +1533,13 @@ def plan_review_stream(
                 raise ValueError(f"主题方案未通过结构检查：{detail}")
         else:
             groups = classify(papers, topic, classify_mode, progress=progress)
-        # 主题聚类阶段必须保留全部“筛选后纳入”的文献：这一阶段的产出是
-        # 面向全量证据的知识地图和可编辑主题归属，不能提前抽样成 70~90 篇
-        # 写作池。提前抽样会造成主题覆盖、相关性报告和证据矩阵互相矛盾，
-        # 也会让用户确认的主题不再代表实际纳入文献。引用配额只应在正文
-        # 生成/引文选择阶段处理。
+        # v11 设计变更(2026-10-21):配额精选已提前到筛选之后、主题划分之前
+        # (见 _apply_relevance_quota)——主题轴规划、归组与正文写作共用同一
+        # 个 ≤90 篇的写作池。此前"归组保留全量、配额留给写作"的旧策略会让
+        # 数百篇文献摊薄定轴语料(每篇摘要被截到几百字符)并撑爆归组与写作
+        # 上下文,文献质量随筛选残留参差。精选在归组前完成后,全链路(主题
+        # 覆盖、相关性清单、证据矩阵、确认面板)都基于同一份入选集合,被裁
+        # 文献以 quota_cut 明细留档,不再有集合不一致问题。
         # 主题模式且文献量足够时,嵌入 AI 质检 agent:LLM 自主查组感知 → 反思 → 提交终版
         agent_meta: dict | None = None
         # 大文献池的初版分类已经按 50 篇分块完成；再把数百篇全文送入质检
@@ -1604,6 +1586,7 @@ def plan_review_stream(
                 topic, papers, classify_mode, groups, screened_out,
                 research_questions=research_questions,
                 review_goal=review_goal,
+                quota_cut_count=len(relevance_report.get("quota_cut") or []),
             ),
         })
     except RuntimeError as e:
@@ -1702,6 +1685,8 @@ def generate_review_stream(
             yield _sse_event("screening_done", {
                 "kept": len(papers),
                 "screened_out": screened_out,
+                # v11:kept 已是配额精选后的写作池,裁剪明细见 quota_cut 键
+                "quota_cut": len(relevance_report.get("quota_cut") or []),
             })
             # 《文献相关性分级清单》：等级 + 四维得分 + 核心匹配点
             yield _sse_event("relevance_report", relevance_report)

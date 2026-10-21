@@ -35,12 +35,27 @@ export interface RelevanceRow {
     };
 }
 
+/** 写作池配额裁剪明细的一行(v11:相关性合格但超出写作池配额) */
+export interface QuotaCutRow {
+    lit_id: string;
+    title: string;
+    journal: string;
+    year: number;
+    language: 'zh' | 'en';
+    core_tier: 'core' | 'non_core' | 'foreign';
+    grade: string;
+    total: number;
+    reason: string;
+}
+
 /** 《文献相关性分级清单》完整结构 */
 export interface RelevanceReport {
     summary: { high: number; medium: number; low: number };
     total: number;
     items: RelevanceRow[];
     excluded_low_relevance: RelevanceRow[];
+    /** v11:配额精选裁剪明细(核心期刊分层 × 相关性分级 × 语言配额) */
+    quota_cut?: QuotaCutRow[];
     criteria: {
         keyword_overlap_high: number;
         field_match_full: number;
@@ -69,6 +84,8 @@ export interface ReviewBlueprint {
     sources: string[];
     included_count: number;
     screened_out_count: number;
+    /** v11:配额精选裁剪数(超出写作池目标总量) */
+    quota_cut_count?: number;
   };
   inclusion_criteria: string[];
   exclusion_criteria: string[];

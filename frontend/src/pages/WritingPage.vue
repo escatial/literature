@@ -127,6 +127,14 @@ const gradeTagType = (grade: string) => {
     return 'warning';
 };
 
+// 配额裁剪层的可读标签(v11:核心期刊分层 × 相关性分级精选)
+const quotaCutRows = computed(() => stream.value.relevanceReport?.quota_cut ?? []);
+const coreTierLabel = (tier: string) => {
+    if (tier === 'core') return '核心期刊';
+    if (tier === 'non_core') return '非核心';
+    return '英文';
+};
+
 const formatDuration = (seconds: number) => {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
@@ -567,7 +575,7 @@ const downloadMd = () => {
               <span class="section-title">综述设计卡与证据矩阵</span>
             </div>
             <span class="section-note">
-              {{ blueprint.organization.mode }} · 纳入 {{ blueprint.scope.included_count }} 篇 · 筛除 {{ blueprint.scope.screened_out_count }} 篇
+              {{ blueprint.organization.mode }} · 纳入 {{ blueprint.scope.included_count }} 篇 · 筛除 {{ blueprint.scope.screened_out_count }} 篇<template v-if="blueprint.scope.quota_cut_count"> · 配额裁剪 {{ blueprint.scope.quota_cut_count }} 篇</template>
             </span>
           </div>
         </template>
@@ -754,6 +762,31 @@ const downloadMd = () => {
           stream.relevanceReport.excluded_low_relevance.map((r) => r.lit_id).join(', ')
         }}
       </el-alert>
+      <el-collapse v-if="quotaCutRows.length" style="margin-top: 12px">
+        <el-collapse-item
+          :title="`写作池配额裁剪 · ${quotaCutRows.length} 篇(相关性合格但超出写作池总量,点击展开明细)`"
+          name="quota_cut"
+        >
+          <el-table :data="quotaCutRows" size="small" max-height="320" border>
+            <el-table-column prop="title" label="标题" min-width="240" show-overflow-tooltip />
+            <el-table-column prop="journal" label="期刊" min-width="140" show-overflow-tooltip />
+            <el-table-column prop="year" label="年份" width="72" />
+            <el-table-column label="层级" width="96">
+              <template #default="{ row }">
+                <el-tag size="small" effect="plain" :type="row.core_tier === 'core' ? 'success' : 'info'">
+                  {{ coreTierLabel(row.core_tier) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="grade" label="相关等级" width="90" />
+            <el-table-column prop="reason" label="裁剪原因" min-width="220" show-overflow-tooltip />
+          </el-table>
+          <div class="relevance-criteria" style="margin-top: 8px">
+            裁剪规则:中文核心期刊优先,同层按相关性等级与总分排序;非核心文献在核心不足配额时按同一顺序补足;
+            英文按相关性排序、同分时被引数高者优先,占比约为写作池的 30%-40%。被裁文献不影响检索池,可随时重新划分。
+          </div>
+        </el-collapse-item>
+      </el-collapse>
     </el-card>
 
     <el-card v-if="stream.groups.length && !awaitingConfirm" shadow="never" class="sheet" style="margin-top: 18px">
