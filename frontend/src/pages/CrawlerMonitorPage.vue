@@ -34,8 +34,9 @@ import {
   stopCrawlerTask,
   updateCrawlerTaskParams,
 } from '@/api/crawlerAdmin';
-import { authApi, type AuthUser, type UpstreamModel } from '@/api/auth';
+import { authApi, type AuthUser, type LLMProfile } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
+import { useLlmProfilesStore } from '@/stores/llmProfiles';
 import type {
   AlertItem,
   BreakerSnapshot,
@@ -55,77 +56,26 @@ const _initialTab = route.query.tab === 'llm' ? 'llm'
   : route.query.tab === 'users' ? 'users' : 'crawler';
 const activeTab = ref<'crawler' | 'users' | 'llm'>(_initialTab);
 
-// ─── LLM 设置(按用户) ───────────────────────────────────────
+// ─── LLM 设置(按用户):已存供应商配置列表 + 新增/编辑表单 ──────────
+// 列表/表单状态在 llmProfiles store;激活 = 后端写入 users 激活字段。
 
-const llmForm = ref({
-  llm_kind: 'openai' as string,
-  llm_base_url: '',
-  llm_api_key: '',
-  llm_model: '',
-});
-const llmSaving = ref(false);
-const llmProbing = ref(false);
-const modelOptions = ref<UpstreamModel[]>([]);
+const llm = useLlmProfilesStore();
 
-const llmKindLabel = computed(() =>
-  llmForm.value.llm_kind === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容');
-const llmBaseUrlPlaceholder = computed(() =>
-  llmForm.value.llm_kind === 'anthropic'
-    ? '例如 https://api.anthropic.com 或 https://api.minimax.cn/anthropic'
-    : '例如 https://api.minimaxi.com/v1 或 https://openrouter.ai/api/v1');
-const llmKindHint = computed(() =>
-  llmForm.value.llm_kind === 'anthropic'
-    ? 'Anthropic Messages 协议:适用于 Claude 官方 API 及其兼容网关(含 MiniMax 的 anthropic 端点)。'
-    : 'OpenAI Chat Completions 协议:适用于 MiniMax、DeepSeek、通义、OpenRouter、Gemini OpenAI 端点等绝大多数平台。');
+/** 激活行高亮 class(与「使用中」标签呼应)。*/
+const activeRowClass = (p: { row: LLMProfile }): string =>
+  p.row.is_active ? 'llm-active-row' : '';
 
-const fillLlmForm = () => {
-  const u = auth.user;
-  if (!u) return;
-  llmForm.value.llm_kind = u.llm_kind === 'anthropic' ? 'anthropic' : 'openai';
-  llmForm.value.llm_base_url = u.llm_base_url || '';
-  llmForm.value.llm_model = u.llm_model || '';
-  llmForm.value.llm_api_key = '';
-};
-
-const saveLlm = async () => {
-  llmSaving.value = true;
+/** 删除配置(二次确认)。*/
+const doRemoveProfile = async (p: LLMProfile) => {
   try {
-    const { data } = await authApi.saveLlmConfig({
-      llm_kind: llmForm.value.llm_kind,
-      llm_base_url: llmForm.value.llm_base_url.trim(),
-      llm_api_key: llmForm.value.llm_api_key.trim(),
-      llm_model: llmForm.value.llm_model.trim(),
-    });
-    auth.user = data.user;
-    llmForm.value.llm_api_key = '';
-    toast.success(data.message);
-  } catch (e: any) {
-    toast.error(String(e?.response?.data?.detail ?? e?.message ?? '保存失败'));
-  } finally {
-    llmSaving.value = false;
-  }
-};
-
-const probeModels = async () => {
-  if (!llmForm.value.llm_base_url.trim()) {
-    toast.warning('请先填写 Base URL');
+    await ElMessageBox.confirm(
+      `删除配置「${p.name}」?该操作不可恢复(不影响当前已生效的配置)。`,
+      '删除配置', { type: 'warning' },
+    );
+  } catch {
     return;
   }
-  llmProbing.value = true;
-  try {
-    const { data } = await authApi.probeModels({
-      llm_kind: llmForm.value.llm_kind,
-      llm_base_url: llmForm.value.llm_base_url.trim(),
-      llm_api_key: llmForm.value.llm_api_key.trim(),
-    });
-    modelOptions.value = data.models ?? [];
-    toast.success(`获取到 ${modelOptions.value.length} 个模型`);
-  } catch (e: any) {
-    modelOptions.value = [];
-    toast.error(String(e?.response?.data?.detail ?? e?.message ?? '获取模型列表失败'));
-  } finally {
-    llmProbing.value = false;
-  }
+  await llm.remove(p);
 };
 
 // ─── 用户管理(管理员) ───────────────────────────────────────
@@ -230,9 +180,9 @@ watch(autoRefresh, (v) => (v ? startPolling() : stopPolling()));
 watch(statusFilter, loadAll);
 
 onMounted(async () => {
-  // 进入页面时确保会话用户信息就绪(LLM 表单回显依赖 auth.user)
+  // 进入页面时确保会话用户信息就绪(配置列表与激活态依赖 auth.user)
   if (!auth.user) await auth.restore();
-  fillLlmForm();
+  await llm.refresh();
   await loadAll();
   startPolling();
 });
@@ -550,57 +500,127 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
         </el-card>
       </el-tab-pane>
 
-      <!-- ═══ Tab 3:LLM 设置(按用户) ═══ -->
+      <!-- ═══ Tab 3:LLM 设置(按用户):已存配置列表 + 新增/编辑表单 ═══ -->
       <el-tab-pane label="LLM 设置" name="llm">
+        <div class="llm-current-bar">
+          <span v-if="auth.user?.llm_base_url" class="llm-current">
+            当前使用:{{ auth.user.llm_kind === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
+            · {{ auth.user.llm_base_url }} · {{ auth.user.llm_model || '(未选模型)' }}
+          </span>
+          <span v-else class="llm-current">当前使用:未配置,写作任务走系统默认 MiniMax(OpenAI 兼容端点)</span>
+        </div>
+
+        <!-- 上半部:已存配置列表(切换 = 「使用」,写入 users 激活字段) -->
         <el-card shadow="never" class="llm-card">
+          <template #header>
+            <div class="llm-list-head">
+              <span class="card-head">已存配置</span>
+              <div class="llm-list-actions">
+                <el-button v-if="llm.editingId !== null" size="small" @click="llm.startCreate()">新建配置</el-button>
+                <el-button size="small" :loading="llm.loading" @click="llm.refresh()">刷新</el-button>
+              </div>
+            </div>
+          </template>
+          <el-table
+            v-if="llm.profiles.length"
+            :data="llm.profiles" size="small" v-loading="llm.loading"
+            :row-class-name="activeRowClass"
+          >
+            <el-table-column label="配置名" min-width="150">
+              <template #default="{ row }">
+                <span class="llm-name">{{ (row as LLMProfile).name }}</span>
+                <el-tag v-if="(row as LLMProfile).is_active" type="success" size="small" class="llm-active-tag">使用中</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="类型" width="130">
+              <template #default="{ row }">
+                {{ (row as LLMProfile).kind === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="Base URL" min-width="210" show-overflow-tooltip>
+              <template #default="{ row }">{{ (row as LLMProfile).base_url }}</template>
+            </el-table-column>
+            <el-table-column label="API Key" width="110">
+              <template #default="{ row }">
+                <span class="llm-key">{{ (row as LLMProfile).api_key_masked || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="模型" min-width="160" show-overflow-tooltip>
+              <template #default="{ row }">{{ (row as LLMProfile).model || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="170" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  v-if="!(row as LLMProfile).is_active"
+                  link type="primary" size="small" @click="llm.activate(row as LLMProfile)"
+                >使用</el-button>
+                <el-button link type="primary" size="small" @click="llm.startEdit(row as LLMProfile)">编辑</el-button>
+                <el-button link type="danger" size="small" @click="doRemoveProfile(row as LLMProfile)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-else class="muted llm-empty">
+            还没有保存的配置:在下方填写供应商信息后「保存到列表」,以后一键切换,无需重复填写。
+          </div>
+        </el-card>
+
+        <!-- 下半部:新增/编辑表单(保存到列表 / 保存并使用) -->
+        <el-card shadow="never" class="llm-card">
+          <template #header>
+            <span class="card-head">
+              {{ llm.editingId === null ? '新增配置' : `编辑配置:${llm.form.name || '(未命名)'}` }}
+            </span>
+          </template>
           <div class="tab-hint llm-hint">
-            配置你自己的大模型接口(OpenAI 兼容);保存后,你启动的写作任务将使用这份配置。
-            留空则使用系统默认(MiniMax)。API Key 只保存在本机数据库,界面仅显示掩码。
+            配置你自己的大模型接口,保存为列表项后可随时切换;「保存并使用」立即生效。
+            API Key 只保存在本机数据库,界面仅显示掩码,编辑时留空表示不修改。
           </div>
           <el-form label-position="top" class="llm-form">
+            <el-form-item label="配置名">
+              <el-input
+                v-model="llm.form.name" maxlength="100" clearable
+                placeholder="如:MiniMax 国内 / 官方 Anthropic(同一用户内不可重名)"
+              />
+            </el-form-item>
             <el-form-item label="接口类型">
-              <el-radio-group v-model="llmForm.llm_kind">
+              <el-radio-group v-model="llm.form.kind">
                 <el-radio-button value="openai">OpenAI 兼容</el-radio-button>
                 <el-radio-button value="anthropic">Anthropic 兼容</el-radio-button>
               </el-radio-group>
-              <div class="tab-hint llm-kind-hint">{{ llmKindHint }}</div>
+              <div class="tab-hint llm-kind-hint">{{ llm.kindHint }}</div>
             </el-form-item>
             <el-form-item label="Base URL">
-              <el-input v-model="llmForm.llm_base_url" :placeholder="llmBaseUrlPlaceholder" clearable />
+              <el-input v-model="llm.form.base_url" :placeholder="llm.baseUrlPlaceholder" clearable />
             </el-form-item>
             <el-form-item label="API Key">
               <el-input
-                v-model="llmForm.llm_api_key"
+                v-model="llm.form.api_key"
                 type="password" show-password clearable
-                :placeholder="auth.user?.llm_api_key_masked
-                  ? `已保存 ${auth.user.llm_api_key_masked},留空表示不修改`
-                  : '请输入 API Key'"
+                :placeholder="llm.apiKeyPlaceholder"
               />
             </el-form-item>
             <el-form-item label="模型">
               <div class="model-row">
                 <el-select
-                  v-model="llmForm.llm_model"
+                  v-model="llm.form.model"
                   filterable allow-create default-first-option
                   placeholder="从上游获取后选择,或直接输入模型名"
                   class="model-select"
                 >
                   <el-option
-                    v-for="m in modelOptions"
+                    v-for="m in llm.modelOptions"
                     :key="m.id"
                     :label="m.id"
                     :value="m.id"
                   />
                 </el-select>
-                <el-button :loading="llmProbing" @click="probeModels">从上游获取模型</el-button>
+                <el-button :loading="llm.probing" @click="llm.probeModels">从上游获取模型</el-button>
               </div>
             </el-form-item>
             <div class="llm-actions">
-              <el-button type="primary" :loading="llmSaving" @click="saveLlm">保存配置</el-button>
-              <span v-if="auth.user?.llm_base_url" class="llm-current">
-                当前:{{ llmKindLabel }} · {{ auth.user.llm_base_url }} · {{ auth.user.llm_model || '(未选模型)' }}
-              </span>
-              <span v-else class="llm-current">当前:未配置,使用系统默认 MiniMax(OpenAI 兼容端点)</span>
+              <el-button type="primary" :loading="llm.saving" @click="llm.save(true)">保存并使用</el-button>
+              <el-button :loading="llm.saving" @click="llm.save(false)">保存到列表</el-button>
+              <el-button v-if="llm.editingId !== null" @click="llm.startCreate()">取消编辑</el-button>
             </div>
           </el-form>
         </el-card>
@@ -694,8 +714,45 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
 }
 
 /* ── LLM 设置 ── */
+.llm-current-bar {
+  padding: 8px 12px;
+  background: var(--sheet-dim);
+  border: 1px solid var(--rule-soft);
+  border-left: 3px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+}
+.llm-current {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  word-break: break-all;
+}
 .llm-card {
-  max-width: 720px;
+  max-width: 860px;
+  margin-top: 14px;
+}
+.llm-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.llm-list-actions {
+  display: flex;
+  gap: 8px;
+}
+.llm-name {
+  font-weight: 600;
+  margin-right: 8px;
+}
+.llm-active-tag {
+  margin-left: 2px;
+}
+.llm-key {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.llm-empty {
+  padding: 6px 0;
 }
 .llm-hint {
   margin-bottom: 16px;
@@ -721,10 +778,9 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
   gap: 14px;
   margin-top: 4px;
 }
-.llm-current {
-  font-size: 12px;
-  color: var(--ink-faint);
-  word-break: break-all;
+/* 激活行高亮(与「使用中」标签呼应) */
+:deep(.llm-active-row) {
+  background: var(--sheet-dim);
 }
 
 /* 概览:墨线账目栏 */

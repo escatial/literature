@@ -3,7 +3,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, CheckConstraint, DateTime, Float, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .session import Base
@@ -264,6 +274,33 @@ class UserModel(Base):
     # API 返回一律脱敏(mask_key),绝不回传完整 key。
     llm_api_key: Mapped[str] = mapped_column(Text, default="")
     llm_model: Mapped[str] = mapped_column(String(200), default="")
+
+
+class LLMProfileModel(Base):
+    """用户保存的命名 LLM 供应商配置(多供应商列表,一键切换)。
+
+    - 语义:profile 是「收藏的供应商」;激活(activate)把字段整体写入
+      users 表的 llm_* 激活字段 —— 运行时链路(apply_user_llm)零改动;
+    - name 对同一用户唯一(切换语义清晰;应用层预查 409,约束兜底);
+    - api_key 明文本地存(约定同 users.llm_api_key),API 一律脱敏回显。
+    - is_active 不落库:列表返回时与 users.llm_* 逐字段比对得出。
+    """
+
+    __tablename__ = "llm_profiles"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="uq_llm_profiles_user_name"),
+    )
+
+    profile_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    # 接口协议:openai(OpenAI 兼容) / anthropic(Anthropic Messages 兼容)
+    kind: Mapped[str] = mapped_column(String(16), default="openai")
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    api_key: Mapped[str] = mapped_column(Text, default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
 class AuthTokenModel(Base):

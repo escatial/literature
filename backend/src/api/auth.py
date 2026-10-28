@@ -10,9 +10,10 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from audit.writer import audit
-from db.models import UserModel
+from db.models import LLMProfileModel, UserModel
 from db import session as db_session
 from llm.client import fetch_models_for
 from security import auth as sauth
@@ -44,6 +45,20 @@ class ModelsProbeIn(BaseModel):
     llm_kind: str = "openai"
     llm_base_url: str = ""
     llm_api_key: str = ""  # 空 = 使用已保存的 key
+
+
+class LLMProfileIn(BaseModel):
+    """LLM 供应商配置(列表项)的新增/编辑入参。
+
+    api_key 语义:创建时必填;编辑时留空 = 保持原 key 不变
+    (列表回显脱敏,前端拿不到明文,与 llm-config 既有约定一致)。
+    """
+
+    name: str = ""
+    kind: str = "openai"
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
 
 
 def _require_user(request: Request) -> UserModel:
@@ -211,6 +226,226 @@ def probe_models(req: ModelsProbeIn, request: Request) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(400, f"获取模型列表失败:{exc}")
     return {"models": models}
+
+
+# ───────────────────────── LLM 供应商配置列表(多供应商,一键切换) ─────────────────────────
+
+_PROFILE_NAME_MAX = 100
+
+
+def _validated_profile_fields(req: LLMProfileIn) -> tuple[str, str, str]:
+    """校验配置的 name/kind/base_url,返回清洗后的三元组。
+
+    - name:strip 后非空且 ≤ 100 字(同一用户内唯一,DB 唯一约束兜底);
+    - kind:normalize_llm_kind 白名单(openai/anthropic);
+    - base_url:必填(SSRF 校验沿用 validate_external_url —— activate 会把
+      该地址交给服务端请求)。
+    失败一律 HTTPException(400),文案前端直显。
+    """
+    name = (req.name or "").strip()
+    if not name or len(name) > _PROFILE_NAME_MAX:
+        raise HTTPException(
+            400, f"配置名必填且不超过 {_PROFILE_NAME_MAX} 字")
+    try:
+        kind = sauth.normalize_llm_kind(req.kind)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    base_url = (req.base_url or "").strip()
+    if not base_url:
+        raise HTTPException(400, "Base URL 必填:这是供应商接口的地址")
+    try:
+        base_url = sauth.validate_external_url(base_url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return name, kind, base_url
+
+
+def _profile_is_active(row: LLMProfileModel, user: UserModel) -> bool:
+    """激活态 = profile 字段与 users 表 llm_* 激活字段逐字段一致。
+
+    不落库的派生态:切换后用户直接改激活字段(或编辑 profile)会自然
+    失配,列表如实反映「当前到底在用哪份配置」。
+    """
+    return (
+        (user.llm_kind or "").strip().lower() == (row.kind or "").strip().lower()
+        and (user.llm_base_url or "") == (row.base_url or "")
+        and (user.llm_api_key or "") == (row.api_key or "")
+        and (user.llm_model or "") == (row.model or "")
+    )
+
+
+def _profile_public(row: LLMProfileModel, user: UserModel) -> dict:
+    """脱敏序列化:api_key 一律 mask_key,绝不回显明文。"""
+    return {
+        "profile_id": row.profile_id,
+        "name": row.name,
+        "kind": (row.kind or "openai").strip().lower(),
+        "base_url": row.base_url or "",
+        "api_key_masked": sauth.mask_key(row.api_key or ""),
+        "model": row.model or "",
+        "is_active": _profile_is_active(row, user),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _own_profile(db, profile_id: int, user: UserModel) -> LLMProfileModel:
+    """取当前用户自己的 profile;他人/不存在一律 404(不泄露存在性)。"""
+    row = (
+        db.query(LLMProfileModel)
+        .filter_by(profile_id=profile_id, user_id=user.user_id)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(404, "配置不存在")
+    return row
+
+
+@router.get("/llm-profiles")
+def list_llm_profiles(request: Request) -> dict:
+    user = _require_user(request)
+    with db_session.SessionLocal() as db:
+        rows = (
+            db.query(LLMProfileModel)
+            .filter_by(user_id=user.user_id)
+            .order_by(LLMProfileModel.profile_id.asc())
+            .all()
+        )
+        return {"profiles": [_profile_public(r, user) for r in rows]}
+
+
+@router.post("/llm-profiles")
+def create_llm_profile(req: LLMProfileIn, request: Request) -> dict:
+    user = _require_user(request)
+    api_key = (req.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(400, "API Key 必填")
+    name, kind, base_url = _validated_profile_fields(req)
+    with db_session.SessionLocal() as db:
+        dup = (
+            db.query(LLMProfileModel)
+            .filter_by(user_id=user.user_id, name=name)
+            .one_or_none()
+        )
+        if dup is not None:
+            raise HTTPException(409, f"配置名「{name}」已存在,请换一个名字")
+        row = LLMProfileModel(
+            user_id=user.user_id, name=name, kind=kind,
+            base_url=base_url, api_key=api_key, model=(req.model or "").strip(),
+        )
+        db.add(row)
+        try:
+            db.commit()
+        except IntegrityError:  # 并发撞唯一约束(uq_llm_profiles_user_name)兜底
+            db.rollback()
+            raise HTTPException(409, f"配置名「{name}」已存在,请换一个名字")
+        db.refresh(row)
+        # B5 审计:detail 只记 kind/base_url/model,绝不落 api_key 明文
+        audit(
+            action="auth.llm_profile.create", user_id=user.user_id,
+            resource_type="llm_profile", resource_id=str(row.profile_id),
+            detail={"name": name, "kind": kind, "base_url": base_url,
+                    "model": (req.model or "").strip()},
+            **_client_meta(request),
+        )
+        return {"profile": _profile_public(row, user),
+                "message": f"配置「{name}」已保存到列表。"}
+
+
+@router.put("/llm-profiles/{profile_id}")
+def update_llm_profile(profile_id: int, req: LLMProfileIn, request: Request) -> dict:
+    user = _require_user(request)
+    name, kind, base_url = _validated_profile_fields(req)
+    api_key = (req.api_key or "").strip()  # 空 = 保持原 key 不变
+    with db_session.SessionLocal() as db:
+        row = _own_profile(db, profile_id, user)
+        if name != row.name:
+            dup = (
+                db.query(LLMProfileModel)
+                .filter_by(user_id=user.user_id, name=name)
+                .one_or_none()
+            )
+            if dup is not None:
+                raise HTTPException(409, f"配置名「{name}」已存在,请换一个名字")
+        row.name = name
+        row.kind = kind
+        row.base_url = base_url
+        if api_key:
+            row.api_key = api_key
+        row.model = (req.model or "").strip()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, f"配置名「{name}」已存在,请换一个名字")
+        db.refresh(row)
+        audit(
+            action="auth.llm_profile.update", user_id=user.user_id,
+            resource_type="llm_profile", resource_id=str(profile_id),
+            detail={"name": name, "kind": kind, "base_url": base_url,
+                    "model": (req.model or "").strip(),
+                    "api_key_changed": bool(api_key)},
+            **_client_meta(request),
+        )
+        return {"profile": _profile_public(row, user),
+                "message": f"配置「{name}」已更新。"}
+
+
+@router.delete("/llm-profiles/{profile_id}")
+def delete_llm_profile(profile_id: int, request: Request) -> dict:
+    user = _require_user(request)
+    with db_session.SessionLocal() as db:
+        row = _own_profile(db, profile_id, user)
+        name = row.name
+        db.query(LLMProfileModel).filter_by(profile_id=profile_id).delete()
+        db.commit()
+    # 审计在行删除后落(名称先固定),与 admin_delete 同构
+    audit(
+        action="auth.llm_profile.delete", user_id=user.user_id,
+        resource_type="llm_profile", resource_id=str(profile_id),
+        detail={"name": name},
+        **_client_meta(request),
+    )
+    return {"ok": True}
+
+
+@router.post("/llm-profiles/{profile_id}/activate")
+def activate_llm_profile(profile_id: int, request: Request) -> dict:
+    """切换 = 把 profile 字段整体写入 users 表 llm_* 激活字段。
+
+    复用既有保存校验链路(normalize_llm_kind + validate_external_url),
+    防御库内历史脏数据;运行时链路(apply_user_llm)零改动 —— 写作任务
+    启动时自然读到新激活字段。
+    """
+    user = _require_user(request)
+    with db_session.SessionLocal() as db:
+        row = _own_profile(db, profile_id, user)
+        try:
+            kind = sauth.normalize_llm_kind(row.kind)
+            base_url = sauth.validate_external_url(row.base_url or "")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        urow = db.query(UserModel).filter_by(user_id=user.user_id).one_or_none()
+        if urow is None:
+            raise HTTPException(404, "用户不存在")
+        urow.llm_kind = kind
+        urow.llm_base_url = base_url
+        urow.llm_api_key = row.api_key or ""
+        urow.llm_model = row.model or ""
+        db.commit()
+        db.refresh(urow)
+        db.refresh(row)
+        # B5 审计:detail 只记 name/kind/base_url/model,绝不落 api_key 明文
+        audit(
+            action="auth.llm_profile.activate", user_id=user.user_id,
+            resource_type="llm_profile", resource_id=str(profile_id),
+            detail={"name": row.name, "kind": kind, "base_url": base_url,
+                    "model": row.model or ""},
+            **_client_meta(request),
+        )
+        return {"profile": _profile_public(row, urow),
+                "user": sauth.user_public(urow),
+                "message": f"已切换到「{row.name}」,下次启动写作任务时生效。"}
 
 
 # ───────────────────────── 管理员:用户审核 ─────────────────────────

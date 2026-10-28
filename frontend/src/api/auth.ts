@@ -24,6 +24,29 @@ export interface UpstreamModel {
   active?: boolean;
 }
 
+/** 已保存的 LLM 供应商配置(列表项;api_key 永远只回显掩码)。*/
+export interface LLMProfile {
+  profile_id: number;
+  name: string;
+  kind: 'openai' | 'anthropic' | string;
+  base_url: string;
+  api_key_masked: string;
+  model: string;
+  /** 与 users 表 llm_* 激活字段逐字段比对得出的激活态(后端派生,不落库) */
+  is_active: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface LLMProfilePayload {
+  name: string;
+  kind: string;
+  base_url: string;
+  /** 创建必填;编辑留空 = 保持原 key 不变 */
+  api_key: string;
+  model: string;
+}
+
 export const authApi = {
   bootstrap: () => http.get<{ has_users: boolean }>('/auth/bootstrap'),
   register: (d: { username: string; password: string; email?: string }) =>
@@ -36,6 +59,16 @@ export const authApi = {
     http.put<{ user: AuthUser; message: string }>('/auth/llm-config', d),
   probeModels: (d: { llm_kind: string; llm_base_url: string; llm_api_key: string }) =>
     http.post<{ models: UpstreamModel[] }>('/auth/llm-config/models', d),
+  listLlmProfiles: () => http.get<{ profiles: LLMProfile[] }>('/auth/llm-profiles'),
+  createLlmProfile: (d: LLMProfilePayload) =>
+    http.post<{ profile: LLMProfile; message: string }>('/auth/llm-profiles', d),
+  updateLlmProfile: (profileId: number, d: LLMProfilePayload) =>
+    http.put<{ profile: LLMProfile; message: string }>(`/auth/llm-profiles/${profileId}`, d),
+  deleteLlmProfile: (profileId: number) => http.delete<{ ok: boolean }>(`/auth/llm-profiles/${profileId}`),
+  activateLlmProfile: (profileId: number) =>
+    http.post<{ profile: LLMProfile; user: AuthUser; message: string }>(
+      `/auth/llm-profiles/${profileId}/activate`,
+    ),
   adminUsers: () => http.get<{ users: AuthUser[] }>('/auth/admin/users'),
   approve: (userId: string) => http.post(`/auth/admin/users/${userId}/approve`),
   reject: (userId: string) => http.post(`/auth/admin/users/${userId}/reject`),
