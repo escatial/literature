@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from retrieval.task_service import create_task_v2, delete_task, get_task, list_tasks
@@ -61,6 +61,7 @@ def create_retrieval_task(
     # v7.1:前端 axios 拦截器统一注入的文献池隔离 ID,
     # 透传到写入链路,否则文献池按 X-Task-Id 过滤会显示 0 条。
     x_task_id: str | None = Header(None, alias="X-Task-Id"),
+    request: Request = None,
 ):
     if not req.run_id:
         raise HTTPException(status_code=422, detail="三库统一检索必须携带 run_id，不能单独运行英文库")
@@ -72,10 +73,13 @@ def create_retrieval_task(
     # v4.1:统一改走 v2 路径(SearchIntent + RetrievalController),
     # 让前端能拿到按 db 拆分的翻页事件(对称中文知网日志面板)。
     # 旧 create_task 路径不调 Controller,无 events,前端面板会一直空。
+    _user = getattr(request.state, "user", None) if request is not None else None
     task = create_task_v2(
         topic=req.topic, sources=req.sources, use_snowball=req.use_snowball,
         year_start=req.year_start, year_end=req.year_end, run_id=req.run_id,
         limit=req.limit, pool_task_id=(x_task_id or "").strip() or None,
+        # B6:任务归属创建者(stop/查询授权的权威依据)
+        owner_user_id=getattr(_user, "user_id", None),
     )
     return RetrievalTaskCreated(task_id=task.task_id, status=task.status)
 

@@ -14,6 +14,12 @@ from dataclasses import dataclass, field
 from prompts.service import parse_llm_json, render
 from src.llm.client import messages_create
 from src.retrieval.types import Paper, Source
+from src.writing.llm_trace import record as _trace_llm
+from src.writing.readthrough import (
+    build_axis_catalog_with_notes as _build_axis_catalog_with_notes,
+    plan_readthrough_notes as _plan_readthrough_notes,
+    readthrough_enabled as _readthrough_enabled,
+)
 from src.writing.settings import LOCALE_GROUP_DOMESTIC, LOCALE_GROUP_FOREIGN
 
 logger = logging.getLogger(__name__)
@@ -263,12 +269,17 @@ def _looks_like_title_prefix(name: str, papers: list[Paper], lit_ids: list[str])
 
 
 def _group_name_conflicts(name: str, used_names: set[str]) -> bool:
-    """Reject exact or containment-equivalent theme names."""
-    compact = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", name or "")
+    """Reject exact or containment-equivalent theme names.
+
+    去符号比对前统一 lower:大小写不改变主题同一性,否则英文主题池里
+    「Digital and omnichannel marketing transformation」与
+    「Digital and Omnichannel Marketing」会因大小写不同而互相放行。
+    """
+    compact = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", name or "").lower()
     if not compact:
         return True
     for used in used_names:
-        other = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", used or "")
+        other = _re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", used or "").lower()
         if compact == other or compact in other or other in compact:
             return True
     return False
@@ -864,31 +875,40 @@ def _build_groups(
 
 
 def _pool_dominant_language(papers) -> str:
-    """Sniff whether a paper pool is Chinese-dominant.
+    """判定文献池的主题命名语言(zh/en)。
 
-    Uses the Chinese-character density inside titles (and falls
-    back to source if titles are empty). We deliberately do NOT
-    also weight abstracts because chunk prompts may have
-    truncated them.
+    按「含 CJK 字符的题名篇数 / 有题名总篇数 ≥ 0.5」判 zh(2026-10-26
+    事故修复):旧的字符占比口径被长英文题名稀释 —— 54 中文 + 36 英文的
+    混合池里中文篇数占 60%,字符占比却只有 0.37,被误判成 en 池,导致
+    主题轴被要求英文命名。篇数口径下 54/90=0.6 ≥ 0.5 正确判 zh。
+    题名全缺失时回退来源库判定(CNKI/用户导入视为中文)。
+
+    env 覆盖 WRITING_POOL_LANGUAGE=auto|zh|en(默认 auto 自动判定);
+    显式 zh/en 用于测试与人工纠偏。
     """
+    import os as _os
+
+    override = (_os.environ.get("WRITING_POOL_LANGUAGE") or "auto").strip().lower()
+    if override in ("zh", "en"):
+        return override
     if not papers:
         return "en"
-    cn_chars = 0
-    total_chars = 0
-    cn_source = sum(
-        1 for paper in papers
-        if getattr(paper, "source", "") in (Source.CNKI, Source.USER_IMPORTED)
-    )
+    cjk_titles = 0
+    titled = 0
     for paper in papers:
         text = (getattr(paper, "title", "") or "").strip()
         if not text:
             continue
-        total_chars += len(text)
-        cn_chars += sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-    cn_share = (cn_chars / total_chars) if total_chars else 0
-    src_share = cn_source / len(papers)
-    combined = 0.6 * cn_share + 0.4 * src_share
-    return "zh" if combined >= 0.4 else "en"
+        titled += 1
+        if _re.search(r"[\u4e00-\u9fff]", text):
+            cjk_titles += 1
+    if not titled:
+        cn_source = sum(
+            1 for paper in papers
+            if getattr(paper, "source", "") in (Source.CNKI, Source.USER_IMPORTED)
+        )
+        return "zh" if cn_source / len(papers) >= 0.5 else "en"
+    return "zh" if cjk_titles / titled >= 0.5 else "en"
 
 
 def _min_groups(n_papers: int) -> int:
@@ -923,8 +943,14 @@ def _desired_auto_groups(n_papers: int) -> int:
 
 
 def _title_similarity(a: str, b: str) -> float:
-    """标题字符 bigram Jaccard 相似度(纯确定性,零 LLM 成本)。"""
-    a, b = (a or "").strip(), (b or "").strip()
+    """标题字符 bigram Jaccard 相似度(纯确定性,零 LLM 成本)。
+
+    比较前统一 lower:大小写差异是措辞噪音不是主题差异 —— 否则
+    「Digital and omnichannel marketing transformation」与
+    「Digital and Omnichannel Marketing」这类仅大小写不同的同义
+    主题对会逃过 0.5 判重,裂成两个章节。
+    """
+    a, b = (a or "").strip().lower(), (b or "").strip().lower()
     if len(a) < 2 or len(b) < 2:
         return 1.0 if a == b else 0.0
     ga = {a[i : i + 2] for i in range(len(a) - 1)}
@@ -1055,6 +1081,68 @@ def _balance_oversize_groups(
     return [g for g in result if g.lit_ids]
 
 
+def _en_term_variants(word: str) -> set[str]:
+    """英文词的粗单复数归并变体(ies→y / 去尾 s,len>3 防误伤短词)。
+
+    名实粗检与 group_diagnostic 共用:topics/topics→topic、studies→study
+    归并为同一词面,避免「研究主题相同只差单复数」被误判为零重叠。
+    """
+    w = (word or "").lower()
+    if not w:
+        return set()
+    variants = {w}
+    if len(w) > 4 and w.endswith("ies"):
+        # ies→y 优先( studies→study );不做叠加去 s,避免产出 studie 伪词
+        variants.add(w[:-3] + "y")
+    elif len(w) > 3 and w.endswith("s") and not w.endswith("ss") and not w.endswith("us"):
+        variants.add(w[:-1])
+    return variants
+
+
+def _name_evidence_overlap(name: str, papers: list[Paper], lit_ids: list[str]) -> bool:
+    """名实粗检:组名关键词与组内题名是否存在词面重叠。
+
+    中文:组名中 ≥2 字的中文片段是某组内题名的子串;英文:组名实词
+    (去停用词,粗归并单复数)出现在题名。零重叠说明组名与组内文献
+    名实脱节(线上事故形态:模型自拟的通用话术名挂着一组不相干文献),
+    是「④名实粗检」的判据 —— True=有重叠(放行),False=零重叠。
+    组内无题名证据、或组名语言与全部题名不同(跨语言组,如中文池的
+    纯英文组)时保守放行 —— 跨语言词面比对无意义,命名由语言一致性
+    链路(_rename_english_groups_for_zh_pool/LLM 改名)负责。
+    """
+    by_id = {p.lit_id: p for p in papers}
+    entries = [
+        (by_id.get(lid).title or "")
+        for lid in lit_ids
+        if by_id.get(lid) is not None
+    ]
+    if not entries:
+        return True
+    name_has_zh = bool(_re.search(r"[\u4e00-\u9fff]", name or ""))
+    same_lang_titles = [
+        title for title in entries
+        if bool(_re.search(r"[\u4e00-\u9fff]", title)) == name_has_zh
+    ]
+    if not same_lang_titles:
+        return True
+    zh_terms = _re.findall(r"[\u4e00-\u9fff]{2,}", name or "")
+    en_terms = [
+        w.lower()
+        for w in _re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", name or "")
+        if w.lower() not in _ENGLISH_STOPWORDS
+    ]
+    lowered = [t.lower() for t in same_lang_titles]
+    for term in zh_terms:
+        if any(term in title for title in same_lang_titles):
+            return True
+    for term in en_terms:
+        variants = _en_term_variants(term)
+        for title in lowered:
+            if any(v in title for v in variants):
+                return True
+    return False
+
+
 def _retitle_groups_for_pool(
     papers: list[Paper], groups: list[Group], topic: str, progress=None,
 ) -> list[Group]:
@@ -1074,7 +1162,11 @@ def _retitle_groups_for_pool(
     for index, group in enumerate(groups, start=1):
         name_ok = _group_name_acceptable(group.name, pool_language=pool_lang)
         title_copy = _looks_like_title_prefix(group.name, papers, group.lit_ids)
-        if name_ok and not title_copy:
+        # ④名实粗检(2026-10-27):组名关键词与组内题名零重叠说明名实脱节,
+        # 先走同一条证据改名链收敛;修不掉的保留原名,由 harness 名实告警
+        # 通道(theme_name_quality.no_evidence)提示用户手工调整。
+        has_evidence = _name_evidence_overlap(group.name, papers, group.lit_ids)
+        if name_ok and not title_copy and has_evidence:
             continue
         renamed = _unique_evidence_group_name(
             papers, group.lit_ids, used - {group.name}, index,
@@ -1103,7 +1195,8 @@ def _retitle_groups_for_pool(
     for group, new_name in zip(need_llm, new_names):
         if (new_name
                 and new_name not in used
-                and _group_name_acceptable(new_name, pool_language=pool_lang)):
+                and _group_name_acceptable(new_name, pool_language=pool_lang)
+                and _name_evidence_overlap(new_name, papers, group.lit_ids)):
             used.discard(group.name)
             used.add(new_name)
             group.name = new_name
@@ -1554,6 +1647,10 @@ def _map_group_items(items: list[dict], index_of: dict[str, str]) -> list[dict]:
 
 _AXIS_MAX = 8
 
+# ⑪小组吸收下限:少于该篇数的组写不成可比较章节,并入最相近组。
+# 模块级常量便于测试覆盖(2026-10-27 之前硬编码 2 且只丢弃不并入)。
+MIN_GROUP_PAPERS = 2
+
 
 def _abstract_limit_for(papers: list[Paper], *, minimal: bool) -> int:
     """两遍式共用的摘要截断长度:池子越大截得越短,保证单次调用放得下。"""
@@ -1633,12 +1730,25 @@ def _salvage_text_axes(raw: str) -> list[dict]:
     return axes
 
 
+def _reject_similar_axis(name: str, used_names: set[str]) -> bool:
+    """主题名与既有集合中任一名称包含等价或 bigram≥0.5 视为近似,拒绝。
+
+    轴准入判重的唯一公共出口:包含关系(_group_name_conflicts)与
+    bigram 相似度(_title_similarity ≥ 0.5)双闸 —— 「数智化驱动的企业
+    营销策略转型」与「数智化驱动的营销策略转型」互不包含却是同一主题。
+    """
+    if _group_name_conflicts(name, used_names):
+        return True
+    return any(_title_similarity(name, used) >= 0.5 for used in used_names)
+
+
 def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None = None) -> list[Group]:
     """主题轴校验:名字合格(含池语言一致性)、互斥,数量落在下限与 _AXIS_MAX。
 
-    互斥不仅查包含关系,还查 bigram 相似度 —— 「数智化驱动的企业营销策略
-    转型」与「数智化驱动的营销策略转型」互不包含却是同一主题的两种措辞,
-    同时保留会让归组阶段无所适从。不合格/相近轴丢弃,数量不足下限返回空列表。
+    互斥不仅查包含关系,还查 bigram 相似度 —— 不合格/相近轴丢弃,
+    数量不足下限返回空列表。这是全部轴产出的唯一收口点:散文直提、
+    JSON 解析、LLM 格式转换的候选都必须经此准入,保证判重与
+    _AXIS_MAX 截断不会被任何旁路绕开(2026-10-26 事故根因 #2)。
     """
     axes: list[Group] = []
     seen: set[str] = set()
@@ -1650,9 +1760,7 @@ def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None 
             # 过短名称保留但记录告警(不丢弃——丢弃会导致归组阶段无轴可用,
             # 整个分类 blocked)。质量提示由 harness theme_name_quality 报告。
             logger.warning("主题轴名偏短(%d字): %s (保留,建议用户手动修改)", len(name), name)
-        if _group_name_conflicts(name, seen):
-            continue
-        if any(_title_similarity(name, used) >= 0.5 for used in seen):
+        if _reject_similar_axis(name, seen):
             continue
         rq = str(item.get("research_question") or item.get("question") or "").strip()
         axes.append(Group(name=name, lit_ids=[], research_question=rq or None))
@@ -1662,6 +1770,22 @@ def _normalize_axes(items: list[dict], n_papers: int, pool_language: str | None 
     if len(axes) < max(2, _min_groups(n_papers)):
         return []
     return axes
+
+
+def _enforce_group_budget(groups: list[Group], max_groups: int = _AXIS_MAX) -> list[Group]:
+    """组产出的组数预算闸:超过 _AXIS_MAX 时截断。
+
+    free fallback 让模型对全池自主分组,不经主题轴,天然没有轴数上限
+    (2026-10-26 事故的姐妹路径:任何无上限的产出出口都必须有预算闸)。
+    保留规模最大的前 max_groups 组并维持原组序;被截组整体解散,不向
+    返回值携带任何成员 —— 调用方的既有孤儿回收(_reassign_orphans)会
+    把这些文献按标题相似度挂回保留组,一篇不丢。
+    """
+    if len(groups) <= max_groups:
+        return list(groups)
+    ranked = sorted(groups, key=lambda g: len(g.lit_ids), reverse=True)
+    kept = {id(g) for g in ranked[:max_groups]}
+    return [g for g in groups if id(g) in kept]
 
 
 def _salvage_axes_from_prose(
@@ -1698,6 +1822,7 @@ def _salvage_axes_from_prose(
             response_format={"type": "json_object"},
             timeout=90.0, max_retries=0,
         )
+        _trace_llm("axis_plan", "salvage_stream", f"散文抢救输入:\n{raw[:3500]}", salvage_raw)
         axes = _normalize_axes(_parse_axis_response(salvage_raw), len(papers), language)
         if axes:
             logger.info("主题轴散文抢救成功:%d 个主题", len(axes))
@@ -1777,8 +1902,8 @@ def _build_corpus_document(papers: list[Paper], budget_chars: int | None = None)
     return "\n\n".join(lines)
 
 
-def _parse_prose_axes(raw: str, n_papers: int, language: str) -> list[Group]:
-    """从 MiniMax 输出的散文/编号列表中直接提取主题轴(不依赖 JSON)。
+def _parse_prose_axes(raw: str) -> list[dict]:
+    """从 MiniMax 输出的散文/编号列表中直接提取主题轴候选(不依赖 JSON)。
 
     线上实测 MiniMax 在 JSON 模式下仍输出 markdown 编号列表:
       1. **区域水产品品牌建设** - 相关论文…
@@ -1786,8 +1911,13 @@ def _parse_prose_axes(raw: str, n_papers: int, language: str) -> list[Group]:
     这些散文的主题簇归纳质量很好,只是格式不是 JSON。用正则直接提取,
     不需要 LLM 二次转换 —— 这是比 _salvage_axes_from_prose 更快、更稳定
     的兜底,也是 agent 循环中"格式失败→换一种解析方式再试"的体现。
+
+    本函数是纯解析器(2026-10-26 事故修复):只提取候选 items,不做任何
+    准入决策 —— 不做名称合格校验、不做相似名判重、不设数量上限。全部
+    候选必须交由唯一收口点 _normalize_axes 统一判重与截断;此前本函数
+    自带准入导致 13 个含近似对的英文轴绕过判重直接上板。
     """
-    axes: list[Group] = []
+    candidates: list[dict] = []
     seen: set[str] = set()
     # 先走编号列表分支(能从 " - 说明" 尾巴里带走研究问题),
     # 粗体分支只兜不编号的裸标题;同名以编号分支的为准。
@@ -1809,27 +1939,29 @@ def _parse_prose_axes(raw: str, n_papers: int, language: str) -> list[Group]:
         name = _clean_group_name(name)
         if not name or name in seen:
             continue
-        if not _group_name_acceptable(name, pool_language=language):
-            continue
-        axes.append(Group(name=name, lit_ids=[], research_question=rq))
+        candidates.append({"name": name, "research_question": rq or ""})
         seen.add(name)
     # 兜底:不编号的裸粗体标题 "**主题**"(MiniMax 也会输出这种形态)
     for m in _re.finditer(r"\*\*(.{4,20}?)\*\*", raw or ""):
         name = _clean_group_name(m.group(1).strip())
         if not name or name in seen:
             continue
-        if not _group_name_acceptable(name, pool_language=language):
-            continue
-        axes.append(Group(name=name, lit_ids=[], research_question=None))
+        candidates.append({"name": name, "research_question": ""})
         seen.add(name)
-    return axes
+    return candidates
 
 
 def _plan_theme_axes(
     papers: list[Paper], topic: str, language: str, *,
     abstract_limit: int, progress=None,
 ) -> list[Group]:
-    """第一遍:单次调用通读全部题录,产出全局主题轴(名称 + 研究问题)。"""
+    """第一遍:先通读全文做笔记(R1),再以笔记目录定轴(R2)。
+
+    用户策略(2026-10-27「先通读、再定主题」):R1 逐块产出行协议笔记,
+    R2 只喂笔记目录+题录短目录,不再直接吞 24 万字符原文;R2 输出仍经
+    _normalize_axes 单收口点。R1 关闭或全败时无感降级回原大文档路径
+    —— 行为与既有链路完全一致。
+    """
     # 用户策略:先拼接成大文档再划分 —— 完整摘要进上下文,
     # 主题轴基于通读全部文献而非残缺目录;无摘要文献先剔除
     candidates = _corpus_candidates(papers)
@@ -1838,7 +1970,23 @@ def _plan_theme_axes(
             "文献池中没有带摘要的文献，无法拼接大文档进行主题划分。"
             "请导入含摘要的文献后重试。"
         )
-    catalog = _build_corpus_document(candidates)
+    # R1 通读笔记:确定性乱序分块逐块读,治「两批轴」语料分段;
+    # 乱序只发生在分块内部,池顺序与 relevance_report 口径不动。
+    catalog: str | None = None
+    if _readthrough_enabled():
+        try:
+            ordered, notes = _plan_readthrough_notes(
+                candidates, topic, language, progress=progress,
+            )
+            if notes:
+                catalog = _build_axis_catalog_with_notes(
+                    ordered, {n.lit_id: n for n in notes},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("通读笔记流程失败,降级大文档定轴: %s", exc)
+            catalog = None
+    if catalog is None:
+        catalog = _build_corpus_document(candidates)
     system = render(
         "literature-review:classify-plan",
         topic=topic,
@@ -1891,6 +2039,8 @@ def _plan_theme_axes(
             finally:
                 _hb_stop.set()
             last_raw = raw
+            # trace 落盘(治日志盲区):R2 定轴的完整 prompt/响应原文
+            _trace_llm("axis_plan", f"attempt{attempt}", f"{system}\n\n{attempt_user}", raw)
         except Exception as exc:
             last_error = exc
             logger.warning("主题轴规划 LLM 调用失败(attempt=%d): %s", attempt, exc)
@@ -1905,7 +2055,12 @@ def _plan_theme_axes(
         if len(axes) < floor and raw.strip():
             # agent 循环"策略调整"层:JSON 解析不出轴时,先换解析器
             # (正则直提散文主题,零 LLM 成本),再降级到 LLM 格式转换。
-            axes = _parse_prose_axes(raw, len(papers), language) or axes
+            # 散文候选同样必须经 _normalize_axes 唯一收口 —— 判重、
+            # _AXIS_MAX 截断与名称校验在此执行,不得旁路(2026-10-26
+            # 事故:旁路直提 13 个英文轴,含 6 对同义主题)。
+            axes = _normalize_axes(
+                _parse_prose_axes(raw), len(papers), language,
+            ) or axes
         if len(axes) < floor and raw.strip():
             # 每次失败立即尝试散文抢救(不等三次全败,散文日第一次即可成功)
             axes = _salvage_axes_from_prose(
@@ -1946,6 +2101,7 @@ def _plan_theme_axes(
                 response_format={"type": "json_object"},
                 timeout=90.0, max_retries=0,
             )
+            _trace_llm("axis_plan", "salvage_final", f"散文抢救输入:\n{last_raw[:3500]}", salvage_raw)
             axes = _normalize_axes(_parse_axis_response(salvage_raw), len(papers), language)
             if len(axes) >= floor:
                 if progress:
@@ -2112,8 +2268,10 @@ def _salvage_assign_from_reasoning(
                     second_hits, best_hits, best_name = best_hits, hits, name
                 elif hits > second_hits:
                     second_hits = hits
-            # 并列或零命中不猜:宁可留给孤儿回收按标题相似度兜底
-            if best_name and best_hits >= 1 and best_hits > second_hits:
+            # 并列或零命中不猜:宁可留给孤儿回收按标题相似度兜底。
+            # ≥2 个 4-gram 同时命中才认(2026-10-26 收紧):≥1 时单条
+            # 4-gram 偶然重叠就会把文献误归主题,产出错误归属比留白更糟。
+            if best_name and best_hits >= 2 and best_hits > second_hits:
                 decided = best_name
         if decided:
             buckets.setdefault(decided, []).append(no)
@@ -2281,24 +2439,74 @@ def _assign_papers_to_axes(
             best, _ = _build_groups(
                 mapped, valid_ids, pool_language=_pool_dominant_language(papers),
             )
+            # 自主分组没有轴上限约束,组数超 _AXIS_MAX 时在此截断;
+            # 被截组成员随后经既有孤儿回收挂回保留组。
+            best = _enforce_group_budget(best)
         except Exception as exc:
             logger.warning("主题自主分组兜底失败: %s", exc)
     if not best:
         raise ValueError(
             f"主题归组失败:{last_error or '模型未把任何文献归入给定主题轴'}"
         )
-    # 孤篇组吸收:轴方案可能留下只有 1 篇的组,写不成章节。仅当吸收后
-    # 组数仍满足最低组数要求时才合并;否则保留孤篇组交给用户在确认面板
-    # 手工处置 —— 塌缩成单组会触发 theme_count 检查,反而整体作废。
-    if len(best) > 1:
-        keep = [g for g in best if len(g.lit_ids) >= 2]
-        if len(keep) >= max(1, _min_groups(len(papers))):
-            best = keep
+    # ⑪小组吸收:小于 MIN_GROUP_PAPERS 的组并入最相近组(成员一篇不丢)
+    best = _absorb_small_groups(best, papers)
     covered_ids = {lid for g in best for lid in g.lit_ids}
     _reassign_orphans(
         papers, [p.lit_id for p in papers if p.lit_id not in covered_ids], best,
     )
     return best
+
+
+def _absorb_small_groups(
+    best: list[Group], papers: list[Paper], *, min_papers: int | None = None,
+) -> list[Group]:
+    """⑪小组吸收(2026-10-27):小于 MIN_GROUP_PAPERS 的组并入最相近组。
+
+    小于下限的组写不成可比较章节;此前是直接丢弃、靠孤儿回收兜底,会让
+    小组成员脱离原主题语境,现在按组证据标题相似度并入最相近的组。
+    循环 2 轮防御性重估;吸收会减少组数,并后组数必须仍满足 _min_groups
+    下限,否则保留小组交确认面板处置。成员一篇不丢。
+    """
+    limit = MIN_GROUP_PAPERS if min_papers is None else min_papers
+    by_lid = {p.lit_id: p for p in papers}
+    min_floor = max(1, _min_groups(len(papers)))
+    result = list(best)
+
+    def _merge_similarity(source: Group, target: Group) -> float:
+        pairs = [
+            _title_similarity(
+                (by_lid.get(m).title if by_lid.get(m) else ""),
+                (by_lid.get(n).title if by_lid.get(n) else ""),
+            )
+            for m in source.lit_ids for n in target.lit_ids
+        ]
+        return max(pairs, default=0.0)
+
+    for _round in range(2):
+        small = [g for g in result if len(g.lit_ids) < limit]
+        if not small or len(result) <= min_floor:
+            break
+        merged_any = False
+        for source in small:
+            # Group 是可变 dataclass,__eq__ 按值比较;吸收判定必须用
+            # 对象身份,避免同名同 ids 的两个组互相误删。
+            if not any(g is source for g in result) or len(result) <= min_floor:
+                continue
+            candidates = [g for g in result if g is not source]
+            if not candidates:
+                break
+            target = max(
+                candidates,
+                key=lambda g: (_merge_similarity(source, g), len(g.lit_ids)),
+            )
+            target.lit_ids.extend(
+                lid for lid in source.lit_ids if lid not in target.lit_ids
+            )
+            result.pop(next(i for i, g in enumerate(result) if g is source))
+            merged_any = True
+        if not merged_any:
+            break
+    return result
 
 
 def _heartbeat_progress(progress, base_event, stop_event, interval=5.0):

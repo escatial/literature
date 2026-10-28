@@ -1,13 +1,16 @@
 <script setup lang="ts">
-/** 爬虫监控面板:任务启停 / 状态查询 / 参数热调整 / 资源面(动态池·断路器·代理池·告警)。
- *  数据源:后端 /api/crawler/*(backend/src/api/crawler_admin.py),轮询刷新。*/
+/** 监控与管理:爬虫监控 / 用户管理(管理员) / LLM 设置(按用户)。
+ *  爬虫数据源:后端 /api/crawler/*(backend/src/api/crawler_admin.py),轮询刷新。
+ *  用户与 LLM 配置:/api/auth/*(backend/src/api/auth.py)。*/
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import {
   ElButton,
   ElCard,
   ElDrawer,
   ElForm,
   ElFormItem,
+  ElInput,
   ElInputNumber,
   ElMessageBox,
   ElOption,
@@ -16,6 +19,10 @@ import {
   ElTable,
   ElTableColumn,
   ElTag,
+  ElTabs,
+  ElTabPane,
+  ElRadioButton,
+  ElRadioGroup,
 } from 'element-plus';
 import { toast } from '@/utils/toast';
 import {
@@ -27,6 +34,8 @@ import {
   stopCrawlerTask,
   updateCrawlerTaskParams,
 } from '@/api/crawlerAdmin';
+import { authApi, type AuthUser, type UpstreamModel } from '@/api/auth';
+import { useAuthStore } from '@/stores/auth';
 import type {
   AlertItem,
   BreakerSnapshot,
@@ -38,6 +47,146 @@ import type {
   PoolSnapshot,
   ProxySnapshot,
 } from '@/api/crawlerAdmin';
+
+const auth = useAuthStore();
+const route = useRoute();
+/** 支持 /crawler?tab=llm 直达指定页签(检索页「去配置」入口) */
+const _initialTab = route.query.tab === 'llm' ? 'llm'
+  : route.query.tab === 'users' ? 'users' : 'crawler';
+const activeTab = ref<'crawler' | 'users' | 'llm'>(_initialTab);
+
+// ─── LLM 设置(按用户) ───────────────────────────────────────
+
+const llmForm = ref({
+  llm_kind: 'openai' as string,
+  llm_base_url: '',
+  llm_api_key: '',
+  llm_model: '',
+});
+const llmSaving = ref(false);
+const llmProbing = ref(false);
+const modelOptions = ref<UpstreamModel[]>([]);
+
+const llmKindLabel = computed(() =>
+  llmForm.value.llm_kind === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容');
+const llmBaseUrlPlaceholder = computed(() =>
+  llmForm.value.llm_kind === 'anthropic'
+    ? '例如 https://api.anthropic.com 或 https://api.minimax.cn/anthropic'
+    : '例如 https://api.minimaxi.com/v1 或 https://openrouter.ai/api/v1');
+const llmKindHint = computed(() =>
+  llmForm.value.llm_kind === 'anthropic'
+    ? 'Anthropic Messages 协议:适用于 Claude 官方 API 及其兼容网关(含 MiniMax 的 anthropic 端点)。'
+    : 'OpenAI Chat Completions 协议:适用于 MiniMax、DeepSeek、通义、OpenRouter、Gemini OpenAI 端点等绝大多数平台。');
+
+const fillLlmForm = () => {
+  const u = auth.user;
+  if (!u) return;
+  llmForm.value.llm_kind = u.llm_kind === 'anthropic' ? 'anthropic' : 'openai';
+  llmForm.value.llm_base_url = u.llm_base_url || '';
+  llmForm.value.llm_model = u.llm_model || '';
+  llmForm.value.llm_api_key = '';
+};
+
+const saveLlm = async () => {
+  llmSaving.value = true;
+  try {
+    const { data } = await authApi.saveLlmConfig({
+      llm_kind: llmForm.value.llm_kind,
+      llm_base_url: llmForm.value.llm_base_url.trim(),
+      llm_api_key: llmForm.value.llm_api_key.trim(),
+      llm_model: llmForm.value.llm_model.trim(),
+    });
+    auth.user = data.user;
+    llmForm.value.llm_api_key = '';
+    toast.success(data.message);
+  } catch (e: any) {
+    toast.error(String(e?.response?.data?.detail ?? e?.message ?? '保存失败'));
+  } finally {
+    llmSaving.value = false;
+  }
+};
+
+const probeModels = async () => {
+  if (!llmForm.value.llm_base_url.trim()) {
+    toast.warning('请先填写 Base URL');
+    return;
+  }
+  llmProbing.value = true;
+  try {
+    const { data } = await authApi.probeModels({
+      llm_kind: llmForm.value.llm_kind,
+      llm_base_url: llmForm.value.llm_base_url.trim(),
+      llm_api_key: llmForm.value.llm_api_key.trim(),
+    });
+    modelOptions.value = data.models ?? [];
+    toast.success(`获取到 ${modelOptions.value.length} 个模型`);
+  } catch (e: any) {
+    modelOptions.value = [];
+    toast.error(String(e?.response?.data?.detail ?? e?.message ?? '获取模型列表失败'));
+  } finally {
+    llmProbing.value = false;
+  }
+};
+
+// ─── 用户管理(管理员) ───────────────────────────────────────
+
+const users = ref<AuthUser[]>([]);
+const usersLoading = ref(false);
+
+const USER_STATUS_TAG: Record<string, 'success' | 'warning' | 'danger' | 'info'> = {
+  approved: 'success', pending: 'warning', rejected: 'danger',
+};
+const USER_STATUS_LABEL: Record<string, string> = {
+  approved: '已通过', pending: '待审核', rejected: '已拒绝',
+};
+
+const loadUsers = async () => {
+  usersLoading.value = true;
+  try {
+    const { data } = await authApi.adminUsers();
+    users.value = data.users;
+  } catch {
+    /* 拦截器已弹错 */
+  } finally {
+    usersLoading.value = false;
+  }
+};
+
+watch(activeTab, (tab) => {
+  if (tab === 'users' && auth.isAdmin && users.value.length === 0) void loadUsers();
+});
+
+const doApprove = async (u: AuthUser) => {
+  await authApi.approve(u.user_id);
+  toast.success(`已通过 ${u.username}`);
+  await loadUsers();
+};
+
+const doReject = async (u: AuthUser) => {
+  try {
+    await ElMessageBox.confirm(`拒绝 ${u.username} 的注册申请?`, '拒绝注册', { type: 'warning' });
+  } catch {
+    return;
+  }
+  await authApi.reject(u.user_id);
+  toast.success(`已拒绝 ${u.username}`);
+  await loadUsers();
+};
+
+const doRemoveUser = async (u: AuthUser) => {
+  try {
+    await ElMessageBox.confirm(`删除用户 ${u.username}?该操作不可恢复。`, '删除用户', { type: 'warning' });
+  } catch {
+    return;
+  }
+  try {
+    await authApi.removeUser(u.user_id);
+    toast.success(`已删除 ${u.username}`);
+    await loadUsers();
+  } catch (e: any) {
+    toast.error(String(e?.response?.data?.detail ?? e?.message ?? '删除失败'));
+  }
+};
 
 // ─── 轮询与首屏聚合 ─────────────────────────────────────────
 
@@ -81,6 +230,9 @@ watch(autoRefresh, (v) => (v ? startPolling() : stopPolling()));
 watch(statusFilter, loadAll);
 
 onMounted(async () => {
+  // 进入页面时确保会话用户信息就绪(LLM 表单回显依赖 auth.user)
+  if (!auth.user) await auth.restore();
+  fillLlmForm();
   await loadAll();
   startPolling();
 });
@@ -201,14 +353,20 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
 
 <template>
   <div class="crawler-page">
-    <!-- 工具条 -->
+    <!-- 页头 -->
     <div class="toolbar">
       <span class="section-no">附</span>
-      <span class="section-title">爬虫监控</span>
-      <el-switch v-model="autoRefresh" active-text="自动刷新(5s)" />
-      <el-button :loading="loading" @click="loadAll">手动刷新</el-button>
-      <el-button type="danger" plain @click="stopEverything">停止全部任务</el-button>
+      <span class="section-title">监控与管理</span>
     </div>
+
+    <el-tabs v-model="activeTab" class="admin-tabs">
+      <!-- ═══ Tab 1:爬虫监控 ═══ -->
+      <el-tab-pane label="爬虫监控" name="crawler">
+        <div class="tab-toolbar">
+          <el-switch v-model="autoRefresh" active-text="自动刷新(5s)" />
+          <el-button :loading="loading" @click="loadAll">手动刷新</el-button>
+          <el-button type="danger" plain @click="stopEverything">停止全部任务</el-button>
+        </div>
 
     <!-- 任务概览:账目式六栏 -->
     <div v-if="stats" class="stat-row">
@@ -343,6 +501,111 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
         </el-table-column>
       </el-table>
     </el-card>
+      </el-tab-pane>
+
+      <!-- ═══ Tab 2:用户管理(仅管理员) ═══ -->
+      <el-tab-pane v-if="auth.isAdmin" label="用户管理" name="users">
+        <div class="tab-toolbar">
+          <span class="tab-hint">新用户注册后处于「待审核」状态,审核通过才能登录。</span>
+          <el-button :loading="usersLoading" @click="loadUsers">刷新</el-button>
+        </div>
+        <el-card shadow="never">
+          <el-table :data="users" size="small" v-loading="usersLoading">
+            <el-table-column prop="username" label="用户名" min-width="120" />
+            <el-table-column prop="email" label="邮箱" min-width="160" show-overflow-tooltip />
+            <el-table-column label="角色" width="90">
+              <template #default="{ row }">
+                <el-tag :type="row.role === 'admin' ? 'danger' : 'info'" size="small">
+                  {{ row.role === 'admin' ? '管理员' : '用户' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag :type="USER_STATUS_TAG[row.status] ?? 'info'" size="small">
+                  {{ USER_STATUS_LABEL[row.status] ?? row.status }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="注册时间" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.created_at?.replace('T', ' ').slice(0, 19) ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="200" fixed="right">
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.status === 'pending'"
+                  link type="primary" size="small" @click="doApprove(row as AuthUser)"
+                >通过</el-button>
+                <el-button
+                  v-if="row.status === 'pending'"
+                  link type="warning" size="small" @click="doReject(row as AuthUser)"
+                >拒绝</el-button>
+                <el-button
+                  v-if="row.user_id !== auth.user?.user_id"
+                  link type="danger" size="small" @click="doRemoveUser(row as AuthUser)"
+                >删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-tab-pane>
+
+      <!-- ═══ Tab 3:LLM 设置(按用户) ═══ -->
+      <el-tab-pane label="LLM 设置" name="llm">
+        <el-card shadow="never" class="llm-card">
+          <div class="tab-hint llm-hint">
+            配置你自己的大模型接口(OpenAI 兼容);保存后,你启动的写作任务将使用这份配置。
+            留空则使用系统默认(MiniMax)。API Key 只保存在本机数据库,界面仅显示掩码。
+          </div>
+          <el-form label-position="top" class="llm-form">
+            <el-form-item label="接口类型">
+              <el-radio-group v-model="llmForm.llm_kind">
+                <el-radio-button value="openai">OpenAI 兼容</el-radio-button>
+                <el-radio-button value="anthropic">Anthropic 兼容</el-radio-button>
+              </el-radio-group>
+              <div class="tab-hint llm-kind-hint">{{ llmKindHint }}</div>
+            </el-form-item>
+            <el-form-item label="Base URL">
+              <el-input v-model="llmForm.llm_base_url" :placeholder="llmBaseUrlPlaceholder" clearable />
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="llmForm.llm_api_key"
+                type="password" show-password clearable
+                :placeholder="auth.user?.llm_api_key_masked
+                  ? `已保存 ${auth.user.llm_api_key_masked},留空表示不修改`
+                  : '请输入 API Key'"
+              />
+            </el-form-item>
+            <el-form-item label="模型">
+              <div class="model-row">
+                <el-select
+                  v-model="llmForm.llm_model"
+                  filterable allow-create default-first-option
+                  placeholder="从上游获取后选择,或直接输入模型名"
+                  class="model-select"
+                >
+                  <el-option
+                    v-for="m in modelOptions"
+                    :key="m.id"
+                    :label="m.id"
+                    :value="m.id"
+                  />
+                </el-select>
+                <el-button :loading="llmProbing" @click="probeModels">从上游获取模型</el-button>
+              </div>
+            </el-form-item>
+            <div class="llm-actions">
+              <el-button type="primary" :loading="llmSaving" @click="saveLlm">保存配置</el-button>
+              <span v-if="auth.user?.llm_base_url" class="llm-current">
+                当前:{{ llmKindLabel }} · {{ auth.user.llm_base_url }} · {{ auth.user.llm_model || '(未选模型)' }}
+              </span>
+              <span v-else class="llm-current">当前:未配置,使用系统默认 MiniMax(OpenAI 兼容端点)</span>
+            </div>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+    </el-tabs>
 
     <!-- 任务详情抽屉:计数 / 质量 / 参数热调整 / 环形日志 -->
     <el-drawer v-model="drawerVisible" :title="`任务详情 ${detail?.task_id ?? ''}`" size="560px">
@@ -414,6 +677,54 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
 }
 .toolbar .el-switch {
   align-self: center;
+}
+.admin-tabs {
+  margin-top: -6px;
+}
+.tab-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.tab-hint {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  line-height: 1.7;
+}
+
+/* ── LLM 设置 ── */
+.llm-card {
+  max-width: 720px;
+}
+.llm-hint {
+  margin-bottom: 16px;
+}
+.llm-kind-hint {
+  margin-top: 6px;
+  line-height: 1.7;
+}
+.llm-form {
+  max-width: 560px;
+}
+.model-row {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.model-select {
+  flex: 1;
+}
+.llm-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+}
+.llm-current {
+  font-size: 12px;
+  color: var(--ink-faint);
+  word-break: break-all;
 }
 
 /* 概览:墨线账目栏 */

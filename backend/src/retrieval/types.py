@@ -47,7 +47,13 @@ def canonical_publication_year(
     ``[YYYY-MM-DD]`` are deliberately ignored by the journal-pattern regex.
     """
     normalized = source.value if isinstance(source, Source) else str(source or "").lower()
-    if normalized in {Source.CNKI.value, Source.USER_IMPORTED.value} and raw_citation:
+    # 2026-10-27 B0:raw_citation 必须是 str 才进正则;上游脏数据(非 str)
+    # 在此忽略并回退显式 year,构造期不得炸(Paper.__post_init__ 必经此点)。
+    if (
+        normalized in {Source.CNKI.value, Source.USER_IMPORTED.value}
+        and isinstance(raw_citation, str)
+        and raw_citation
+    ):
         match = _CNKI_PUBLICATION_YEAR_RE.search(raw_citation)
         if match:
             return int(match.group(1))

@@ -74,6 +74,17 @@ npm run build        # 产物在 frontend/dist/，任意静态服务器可托管
 | `CNKI_PROXY_LIST` | 否 | 代理列表，逗号分隔，与 config.yaml 的 proxy.pool 自动去重合并。支持 `http://user:pass@host:port` |
 | `CNKI_ALERT_WEBHOOK_URL` | 否 | 告警推送 webhook。配置后告警以 POST JSON 推送（title/level/detail/count/ts），未配置仅落内存缓冲（面板可查） |
 
+### 4.1.1 主应用环境变量（多用户部署相关，D4 补录）
+
+以下变量作用于主应用（鉴权/CORS/启动迁移），与爬虫无直接关系，但同属
+`.env` 或系统环境：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `ALLOWED_ORIGINS` | `*` | CORS 允许来源（逗号分隔）。生产建议收紧为前端 origin；`*` 与凭据模式互斥时自动降级 |
+| `AUTH_TOKEN_TTL_SECONDS` | `604800` | 登录令牌 TTL（秒，默认 7 天）。存量令牌首次校验回填 TTL，剩余寿命过半自动续期 |
+| `INIT_DB_PURGE` | 不启用 | 启动期脏数据清理开关（title 空 / year≤0 / 双摘要空的存量行）。默认跳过；设 `1` 才真正删除并提交，启用前请备份 SQLite 文件 |
+
 ### 4.2 config.yaml 关键段（backend/src/automation/cnki/config.yaml）
 
 | 段 | 关键项 | 默认 | 说明 |

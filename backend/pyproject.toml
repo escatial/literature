@@ -16,6 +16,8 @@ dependencies = [
     "requests>=2.31",
     "urllib3>=2.0",
     "lxml>=5.0",
+    # XML 安全解析(禁 DTD/实体扩展,防 billion laughs):PubMed efetch 响应解析
+    "defusedxml>=0.7",
     "PyYAML>=6.0",
     "pycryptodome>=3.19",
     # GB/T 7714-2015 引文渲染(citeproc-py 规则引擎 + csl-styles 官方 .csl 模板)

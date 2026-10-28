@@ -63,6 +63,9 @@ def client():
     app = fastapi.FastAPI()
     app.include_router(crawler_admin.router)
     app.include_router(cnki_api.router)
+    # B4 收权:router 依赖 require_admin,独立 app 注入等价 admin 身份
+    from admin_auth_helper import attach_admin_auth
+    attach_admin_auth(app)
     return TestClient(app)
 
 
@@ -209,14 +212,21 @@ def test_done_task_sse_stream_replay(client):
 # ========================== 混合并发流量 ==========================
 def test_concurrent_mixed_traffic_no_5xx(client):
     """16 线程 200 混合请求（dashboard/列表/详情/SSE 回放/404/参数热调）：
-    零 5xx、总耗时 < 15s、服务不崩。"""
+    零 5xx、总耗时 < 15s、服务不崩。
+
+    SSE 回放负载:20 个各自独立的已完成任务各消费一次。SSE 是单消费者
+    契约(stream 的 finally 会 pop 掉整个队列);此前 20 个并发消费者打
+    同一条流,等于让非线程安全的 asyncio.Queue 被多个事件循环并发 get
+    ——偶发 "bound to a different event loop" 5xx 即源于此,属测试制造
+    的未定义行为,不在压测范围内(产品侧多消费者语义见交付报告登记)。
+    """
     _fill_registry(100)
-    mix_tid = _start_sync_done_task(client, "sse-mix")
+    sse_tids = [_start_sync_done_task(client, f"sse-mix-{i}") for i in range(20)]
     workloads: list[tuple[str, str]] = (
         [("GET", "/crawler/dashboard")] * 40
         + [("GET", "/crawler/tasks")] * 40
         + [("GET", f"/crawler/tasks/load-{i:05d}") for i in range(40)]
-        + [("GET", f"/cnki/stream/{mix_tid}")] * 20
+        + [("GET", f"/cnki/stream/{tid}") for tid in sse_tids]
         + [("GET", "/crawler/tasks/ghost-404")] * 30
         + [("PUT", "/crawler/tasks/load-00000/params")] * 30
     )

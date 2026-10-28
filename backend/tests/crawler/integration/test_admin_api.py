@@ -41,6 +41,9 @@ def _isolate_singletons(monkeypatch):
 def client():
     app = fastapi.FastAPI()
     app.include_router(crawler_admin.router)
+    # B4 收权:router 依赖 require_admin,独立 app 注入等价 admin 身份
+    from admin_auth_helper import attach_admin_auth
+    attach_admin_auth(app)
     return TestClient(app)
 
 
@@ -235,6 +238,9 @@ def test_proxies_snapshot_masks_credentials(monkeypatch):
 
     app = fastapi.FastAPI()
     app.include_router(crawler_admin.router)
+    # B4 收权:本测试自建 app(不经 client fixture),同样注入 admin 身份
+    from admin_auth_helper import attach_admin_auth
+    attach_admin_auth(app)
     body = TestClient(app).get("/crawler/proxies").json()
     assert body["mode"] == "on"
     assert len(body["proxies"]) == 1

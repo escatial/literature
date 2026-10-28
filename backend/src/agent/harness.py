@@ -89,8 +89,15 @@ class AgentLoopError(RuntimeError):
     """Agent 达到停止条件，不能安全交付结果。"""
 
 
-def inspect_theme_groups(groups: list[Any], papers: list[Any]) -> list[AgentCheck]:
-    """主题方案的通用结构检查，不依赖具体学科词表。"""
+def inspect_theme_groups(
+    groups: list[Any], papers: list[Any], *, strategy: str | None = None,
+) -> list[AgentCheck]:
+    """主题方案的通用结构检查，不依赖具体学科词表。
+
+    strategy: 当前分类策略(default/minimal_abstracts/local_fallback);
+    local_fallback 豁免组名质量阻断 —— 确定性聚类的命名本就弱于 LLM,
+    阻断会让兜底稿永远到不了确认面板由用户手工调整。
+    """
     expected = {getattr(paper, "lit_id", "") for paper in papers}
     memberships = [
         getattr(group, "lit_ids", [])
@@ -140,24 +147,56 @@ def inspect_theme_groups(groups: list[Any], papers: list[Any]) -> list[AgentChec
             {"names": names},
         ),
     ]
-    # 组名质量(碎片/占位/纯英文)走 classifier 同一套校验:此前结构核查
-    # 只查非空+唯一,标题碎片与英文章节名能通过 harness 进入确认面板
-    # (线上案例:主题 3 = "Sea Table Role Traceability")。
+    # 组名质量两级检查(2026-10-27 ⑦恢复真实检查):
+    # - _group_name_acceptable 失败(碎片/占位/语言不符) → 阻断(ok=False,
+    #   打回重划;线上案例:主题 3 = "Sea Table Role Traceability");
+    # - _zh_theme_name_too_short → 仅告警(min-6 教训:丢弃短名会让归组
+    #   阶段无轴可用,整个分类 blocked;短名由用户在面板手动修改);
+    # - local_fallback 策略豁免阻断(兜底稿命名弱是已知属性,不能全链卡死);
+    # - 名实粗检(④)修不掉的零重叠组 → 告警保留。
     try:
         from writing.classifier import (
-            _group_name_acceptable, _pool_dominant_language, _zh_theme_name_too_short,
+            _group_name_acceptable, _name_evidence_overlap,
+            _pool_dominant_language, _zh_theme_name_too_short,
         )
         pool_lang = _pool_dominant_language(papers)
-        bad_names = [
+        unacceptable = [
             name for name in names
             if not _group_name_acceptable(name, pool_language=pool_lang)
-            or _zh_theme_name_too_short(name, pool_lang)
+        ]
+        strategy_exempt = strategy == "local_fallback"
+        # 豁免 = 不阻断但如实记录:unacceptable 保留原始不良名单,
+        # blocked 是实际触发阻断的名单(豁免时为空)。
+        blocked = [] if strategy_exempt else unacceptable
+        short_names = [
+            name for name in names
+            if name not in set(blocked)
+            and _zh_theme_name_too_short(name, pool_lang)
+        ]
+        no_evidence = [
+            str(getattr(group, "name", ""))
+            for group in groups
+            if str(getattr(group, "name", "")).strip() in set(names)
+            and not _name_evidence_overlap(
+                str(getattr(group, "name", "")), papers,
+                list(getattr(group, "lit_ids", []) or []),
+            )
+        ]
+        warnings = short_names + [
+            f"{name}(组名与组内题名零重叠)" for name in no_evidence
         ]
         checks.append(AgentCheck(
             "theme_name_quality",
-            True,  # 降为告警:名字偏短不阻断,由用户在面板手动修改
-            [],
-            {"bad_names": bad_names, "note": "名称质量仅供参考"},
+            not blocked,
+            [f"组名不合格(碎片/占位/语言不符): {blocked}"] if blocked else [],
+            {
+                "unacceptable": unacceptable,
+                "blocked": blocked,
+                "short_names": short_names,
+                "no_evidence": no_evidence,
+                "warnings": warnings,
+                "strategy_exempt": strategy_exempt,
+            },
         ))
     except Exception:  # noqa: BLE001
         # 校验器不可用时保持原检查集,不让结构核查本身失败
@@ -171,13 +210,13 @@ def inspect_section_result(result: Any, papers: list[Any], *, is_comment: bool =
     citations = list(getattr(result, "citations", []) or [])
     allowed = {getattr(paper, "lit_id", "") for paper in papers}
     invalid = sorted(set(citations) - allowed)
-    issues: list[AgentCheck] = [
+    checks: list[AgentCheck] = [
         AgentCheck("section_content", bool(content) and len(content) >= 80, ["章节正文为空或过短"] if not content or len(content) < 80 else [], {"chars": len(content)}),
         AgentCheck("section_citations", is_comment or bool(citations), ["章节没有可验证引用"] if not is_comment and not citations else [], {"citations": len(citations)}),
         AgentCheck("section_citation_ids", not invalid, [f"存在无效文献锚点: {', '.join(invalid[:5])}"] if invalid else [], {"invalid": len(invalid)}),
         AgentCheck("section_density", not bool(getattr(result, "density_warning", False)), ["章节引用密度未达到要求"] if getattr(result, "density_warning", False) else [], {}),
     ]
-    return issues
+    return checks
 
 
 def run_repair_loop(

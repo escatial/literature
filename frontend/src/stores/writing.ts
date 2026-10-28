@@ -18,31 +18,38 @@ import {
 } from '@/api/streaming';
 import type { WritingGroup, WritingRequest } from '@/api/types';
 
-const initialState: StreamState = {
-  phase: 'idle',
-  sections: [],
-  groups: [],
-  referenceList: '',
-  screenedOutIds: [],
-  droppedCitations: [],
-  relevanceReport: null,
-  plan: null,
-  progress: null,
-  screeningProgress: null,
-  elapsedSeconds: 0,
-  waitingSeconds: 0,
-  currentSection: null,
-  qaProgress: null,
-  qaResult: null,
-  detail: null,
-  error: null,
-  activityLog: [],
-  harness: null,
-};
+// 工厂函数而非模块级常量:常量 + {...spread} 浅拷贝会让 sections/
+// droppedCitations 等数组跨 reset 共享同一引用(与 api/streaming.ts v9.6
+// 修复的污染 bug 同源隐患),每次 reset 都必须拿到全新内层数组。
+function initialState(): StreamState {
+  return {
+    phase: 'idle',
+    sections: [],
+    groups: [],
+    referenceList: '',
+    screenedOutIds: [],
+    droppedCitations: [],
+    relevanceReport: null,
+    plan: null,
+    progress: null,
+    screeningProgress: null,
+    elapsedSeconds: 0,
+    waitingSeconds: 0,
+    currentSection: null,
+    currentReasoning: '',
+    sectionSteps: [],
+    qaProgress: null,
+    qaResult: null,
+    detail: null,
+    error: null,
+    activityLog: [],
+    harness: null,
+  };
+}
 
 export const useWritingStore = defineStore('writing', {
   state: () => ({
-    stream: { ...initialState } as StreamState,
+    stream: initialState(),
     running: false,
     /** 阶段1完成:主题划分已产出,必须等用户确认后才允许开始写正文 */
     awaitingConfirm: false,
@@ -64,7 +71,7 @@ export const useWritingStore = defineStore('writing', {
       // 重启或重新划分前，先中止仍在收尾的旧 SSE；仅递增 token
       // 只能阻止回调污染状态，不能停止后端继续消耗模型调用。
       this._controller?.abort();
-      this.stream = { ...initialState };
+      this.stream = initialState();
       this.running = false;
       this.awaitingConfirm = false;
       this._planReq = null;
@@ -124,12 +131,15 @@ export const useWritingStore = defineStore('writing', {
       this._runToken += 1;
       this._controller = markRaw(new AbortController());
       const runToken = this._runToken;
-      // 阶段2契约:do_screening 必须为 false,papers 用阶段1筛选后的文献池
+      // 阶段2契约:do_screening 必须为 false;papers 不再回传全量(C6) ——
+      // 后端按 X-Task-Id 对应的规划快照(screened_lit_ids 引用)回表取数,
+      // plan.papers 仅作前端 UI 展示暂存。relevance_report 显式传值优先,
+      // 后端缺省时回填快照值。
       const req: WritingRequest = {
         topic: planReq.topic,
         classify_mode: planReq.classify_mode,
         do_screening: false,
-        papers: plan.papers,
+        papers: [],
         confirmed_groups: groups,
         relevance_report: this.stream.relevanceReport,
       };

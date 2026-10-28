@@ -38,10 +38,16 @@ def _no_real_llm_keys():
     单测的 messages_create 都因缺 key 快速失败,绝不打真实 API。
     tests/automation、tests/retrieval(联网白盒)如需真实 key,须绕过本
     fixture 直接运行。
+
+    B2:登录限流在单测中默认关闭(AUTH_RATELIMIT_DISABLED=1),避免既有
+    auth 流测试的失败重试触发锁定;限流专项测试用例内 monkeypatch.delenv
+    显式开启,teardown 后恢复本关闭态。
     """
     for _key in _LLM_KEY_ENVS:
         os.environ.pop(_key, None)
+    os.environ["AUTH_RATELIMIT_DISABLED"] = "1"
     yield
+    os.environ.pop("AUTH_RATELIMIT_DISABLED", None)
 
 # backend/src 与 backend 加入 import 路径(与各子目录 conftest 同构,兜底)
 import sys

@@ -1,9 +1,9 @@
-"""文献池 CRUD API(需求5:服务端分页 + v7 任务隔离)。"""
+"""文献池 CRUD API(需求5:服务端分页 + v7 任务隔离 + B6 数据归属)。"""
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pathlib import Path
 import re as _re
@@ -76,38 +76,36 @@ def _resolve_task_id(x_task_id: str | None) -> str:
     return _DEFAULT_TASK_ID
 
 
-def _task_papers_as_retrieval(db: Session, task_id: str) -> list:
-    """读取任务文献池(selected)并转换为写作侧 Paper 对象。"""
-    from retrieval.types import Paper as RetrievalPaper
-    from retrieval.types import normalize_source
+def _request_user(request: Request | None):
+    """取鉴权中间件注入的当前用户(未登录上下文返回 None,如测试直挂)。"""
+    return getattr(request.state, "user", None) if request is not None else None
 
-    rows = (
-        db.execute(
-            select(PaperModel)
-            .where(PaperModel.task_id == task_id, PaperModel.selected == 1)
-            .order_by(PaperModel.id)
-        )
-        .scalars()
-        .all()
-    )
-    papers: list = []
-    for row in rows:
-        papers.append(RetrievalPaper(
-            lit_id=row.lit_id,
-            source=normalize_source(row.source or "user_imported"),
-            title=row.title or "",
-            authors=list(row.authors or []),
-            journal=row.journal or "",
-            year=row.year or 0,
-            volume=row.volume,
-            issue=row.issue,
-            pages=row.pages,
-            abstract=row.abstract or "",
-            doi=row.doi,
-            source_url=row.source_url or "",
-            raw_citation=row.raw_citation,
-        ))
-    return papers
+
+def apply_owner_scope(q, user):
+    """B6(2026-10-27) 数据归属过滤:admin 直通,普通用户仅见自己的行。
+
+    与 X-Task-Id 双层正交 —— task_id 是业务域隔离(同一用户的多任务互不
+    干扰),owner_user_id 是安全域隔离(跨用户不可见/不可改)。
+    兼容两种查询形态:sqlalchemy Query(.filter)与 Select(.where)。
+    owner 为 NULL 的存量行仅 admin 可见(回填前先由 admin 首次启动认领)。
+    """
+    if user is None or getattr(user, "role", "") == "admin":
+        return q
+    cond = PaperModel.owner_user_id == getattr(user, "user_id", None)
+    if hasattr(q, "where"):
+        return q.where(cond)
+    return q.filter(cond)
+
+
+def _task_papers_as_retrieval(db: Session, task_id: str, user=None) -> list:
+    """读取任务文献池(selected)并转换为写作侧 Paper 对象。B6:按 owner 过滤。
+
+    C6:实现机械移动至 retrieval/pool_reader.py,此处保留 re-export 兼容
+    既有调用点(corpus-document 等端点与新取数路径共用同一实现)。
+    """
+    from retrieval.pool_reader import _task_papers_as_retrieval as _impl
+
+    return _impl(db, task_id, user=user)
 
 
 def _en_author_gbt(name: str) -> str:
@@ -167,13 +165,14 @@ def _gbt_citation(paper) -> str:
 def corpus_document(
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
     task_id_query: str | None = Query(None, alias="task_id"),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """返回当前任务文献池拼接的大文档(主题划分的真实 LLM 输入)。"""
     from writing.classifier import _build_corpus_document, _corpus_candidates
 
     task_id = _resolve_task_id(task_id_query or x_task_id)
-    papers = _task_papers_as_retrieval(db, task_id)
+    papers = _task_papers_as_retrieval(db, task_id, user=_request_user(request))
     candidates = _corpus_candidates(papers)
     document = _build_corpus_document(candidates)
     return {
@@ -189,13 +188,14 @@ def corpus_document(
 def corpus_document_docx(
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
     task_id_query: str | None = Query(None, alias="task_id"),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """大文档 Word 导出:每条观点卡带真实脚注,脚注 = 文献 GB/T 著录。"""
     from delivery.docx_renderer import render_docx_with_footnotes
 
     task_id = _resolve_task_id(task_id_query or x_task_id)
-    papers = _task_papers_as_retrieval(db, task_id)
+    papers = _task_papers_as_retrieval(db, task_id, user=_request_user(request))
     if not papers:
         raise HTTPException(404, "当前任务文献池为空")
 
@@ -257,6 +257,7 @@ def list_papers(
     page: int = Query(1, ge=1, le=_MAX_PAGE),
     page_size: int = Query(_DEFAULT_PAGE_SIZE),
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """服务端分页获取文献池。
@@ -265,6 +266,7 @@ def list_papers(
     - 核心期刊筛选(in_core)只对中文文献(user_imported/cnki)生效。
       英文文献始终不受 in_core 影响。
     - 年份筛选(year_start/year_end)对所有语种生效;0 = 不约束。
+    - B6:普通用户仅见自己 owner 的文献,admin 全量。
     """
     if page_size not in _ALLOWED_PAGE_SIZES:
         page_size = _DEFAULT_PAGE_SIZE
@@ -284,10 +286,16 @@ def list_papers(
             in_core,
         )
         in_core = "all"
-    # v7 任务隔离:严格按 task_id 过滤,跨 task 不可见。
+    # v7 任务隔离:严格按 task_id 过滤,跨 task 不可见。B6:再按 owner 过滤。
     task_id = _resolve_task_id(x_task_id)
-    base = select(PaperModel).where(PaperModel.task_id == task_id)
-    count_base = select(func.count()).select_from(PaperModel).where(PaperModel.task_id == task_id)
+    _user = _request_user(request)
+    base = apply_owner_scope(
+        select(PaperModel).where(PaperModel.task_id == task_id), _user,
+    )
+    count_base = apply_owner_scope(
+        select(func.count()).select_from(PaperModel).where(PaperModel.task_id == task_id),
+        _user,
+    )
     if source:
         # 前端传逗号分隔多值(如 user_imported,cnki / openalex,pubmed)
         sources = [s.strip() for s in source.split(",") if s.strip()]
@@ -409,23 +417,58 @@ def get_task_topic(
 def get_paper(
     lit_id: str,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
-    """读取单条:仅当前 task 可见。"""
+    """读取单条:仅当前 task 可见 + B6 仅本人/admin 可见。"""
     task_id = _resolve_task_id(x_task_id)
-    p = db.query(PaperModel).filter(
-        PaperModel.lit_id == lit_id,
-        PaperModel.task_id == task_id,
+    p = apply_owner_scope(
+        db.query(PaperModel).filter(
+            PaperModel.lit_id == lit_id,
+            PaperModel.task_id == task_id,
+        ),
+        _request_user(request),
     ).first()
     if not p:
         raise HTTPException(404, f"paper {lit_id} not found")
     return p
 
 
+def _task_pool_owners(db: Session, task_id: str) -> set[str | None]:
+    """目标 task 池内已有行的 owner 集合(含 None 存量行)。"""
+    return {
+        row[0] for row in db.query(PaperModel.owner_user_id).filter(
+            PaperModel.task_id == task_id,
+        ).all()
+    }
+
+
+def _assert_task_owner(db: Session, task_id: str, user) -> None:
+    """M1(2026-10-27,QA P1):bulk 写入端 owner 校验。
+
+    读路径已有 apply_owner_scope 隔离,但写入端查重按 (identity_key, task_id)
+    不带 owner —— 普通用户可向他人 task 灌数据或借更新路径污染他人行的
+    可变字段。此处补齐写入侧对称防护:
+
+    - 目标池为空(新任务):放行,首写者经行级 stamp 认领;
+    - 池内行全部属于当前用户:放行(本人 task 的正常 update/insert);
+    - 池内存在他人行或 NULL 存量行且当前用户非 admin:404(防存在性泄漏,
+      与 retrieval_history._assert_owner 口径一致);
+    - admin bypass(与 apply_owner_scope 语义一致);user 为 None(测试直挂/
+      未过鉴权中间件)沿用读路径的直通行为。
+    """
+    if user is None or getattr(user, "role", "") == "admin":
+        return
+    uid = getattr(user, "user_id", None)
+    if _task_pool_owners(db, task_id) - {uid}:
+        raise HTTPException(404, "task pool not found")
+
+
 @router.post("/bulk", response_model=PaperBulkCreateResponse)
 def bulk_upsert(
     req: PaperBulkCreate,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """批量插入/更新(以 lit_id 为唯一键)。
@@ -433,11 +476,17 @@ def bulk_upsert(
     - 已有记录:更新可变字段,但保留 created_at(由首次插入时间决定)
     - 新记录:按 payload 插入,created_at 由数据库 default 填充
     - v7 任务隔离:每条 paper 强制打 task_id 标签,缺 X-Task-Id 默认写到 "__default__"
+    - B6:新插入行带 owner(登录用户);同 task 既有行不改归属
+    - M1(QA P1):写入前校验目标 task 归属 —— 非本人且非 admin 的既有池
+      一律 404(防存在性泄漏);NULL owner 存量池同样只允许 admin 触达
     """
     task_id = _resolve_task_id(x_task_id)
+    user = _request_user(request)
+    owner = getattr(user, "user_id", None)
+    _assert_task_owner(db, task_id, user)
     inserted = updated = skipped = 0
     # 排除 lit_id(主键)、created_at(只读时间戳)、task_id(由 header 注入,禁止客户端覆盖)
-    _EXCLUDE = {"lit_id", "created_at", "task_id"}
+    _EXCLUDE = {"lit_id", "created_at", "task_id", "owner_user_id"}
     for p in req.papers:
         payload = repair_paper_fields(p.model_dump(exclude=_EXCLUDE))
         payload["identity_key"] = build_identity_key(
@@ -455,12 +504,15 @@ def bulk_upsert(
             PaperModel.task_id == task_id,
         ).first()
         if existing:
-            # 已存在(同 task 内):更新关键字段(不要覆盖 created_at)
+            # 已存在(同 task 内):更新关键字段(不要覆盖 created_at;归属不变)
             for k, v in payload.items():
                 setattr(existing, k, v)
             updated += 1
         else:
-            db.add(PaperModel(lit_id=p.lit_id, task_id=task_id, **payload))
+            db.add(PaperModel(
+                lit_id=p.lit_id, task_id=task_id,
+                owner_user_id=owner, **payload,
+            ))
             inserted += 1
     db.commit()
     return PaperBulkCreateResponse(inserted=inserted, updated=updated, skipped=skipped)
@@ -471,13 +523,17 @@ def update_paper(
     lit_id: str,
     req: PaperUpdate,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
-    """更新单条(主要改 selected)。仅当前 task 可见。"""
+    """更新单条(主要改 selected)。仅当前 task 可见 + B6 仅本人/admin 可改。"""
     task_id = _resolve_task_id(x_task_id)
-    p = db.query(PaperModel).filter(
-        PaperModel.lit_id == lit_id,
-        PaperModel.task_id == task_id,
+    p = apply_owner_scope(
+        db.query(PaperModel).filter(
+            PaperModel.lit_id == lit_id,
+            PaperModel.task_id == task_id,
+        ),
+        _request_user(request),
     ).first()
     if not p:
         raise HTTPException(404, f"paper {lit_id} not found")
@@ -492,12 +548,16 @@ def update_paper(
 def delete_paper(
     lit_id: str,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     task_id = _resolve_task_id(x_task_id)
-    p = db.query(PaperModel).filter(
-        PaperModel.lit_id == lit_id,
-        PaperModel.task_id == task_id,
+    p = apply_owner_scope(
+        db.query(PaperModel).filter(
+            PaperModel.lit_id == lit_id,
+            PaperModel.task_id == task_id,
+        ),
+        _request_user(request),
     ).first()
     if not p:
         raise HTTPException(404, f"paper {lit_id} not found")
@@ -509,14 +569,19 @@ def delete_paper(
 def clear_papers(
     source: str | None = None,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """清空当前 task 的文献池。传 source 时只清该来源(如 user_imported=中文, openalex=英文)。
 
     v7 任务隔离:不传 task_id 时只清当前 task,不污染其他 task。
+    B6:仅清本人 owner 名下的行(admin 全量)。
     """
     task_id = _resolve_task_id(x_task_id)
-    q = db.query(PaperModel).filter(PaperModel.task_id == task_id)
+    q = apply_owner_scope(
+        db.query(PaperModel).filter(PaperModel.task_id == task_id),
+        _request_user(request),
+    )
     if source:
         q = q.filter(PaperModel.source == source)
     q.delete(synchronize_session=False)
@@ -529,11 +594,16 @@ def clear_papers(
 # ----------------------------------------------------------------------------
 
 
-def _lang_pool_range(db: Session, task_id: str, sources: tuple[str, ...]) -> LangPoolRange:
+def _lang_pool_range(
+    db: Session, task_id: str, sources: tuple[str, ...], user=None,
+) -> LangPoolRange:
     """全池范围统计(不受筛选影响):总数 + 年份 min/max,供前端生成年份下拉选项。"""
     row = db.execute(
-        select(func.count(), func.min(PaperModel.year), func.max(PaperModel.year))
-        .where(PaperModel.task_id == task_id, PaperModel.source.in_(sources))
+        apply_owner_scope(
+            select(func.count(), func.min(PaperModel.year), func.max(PaperModel.year))
+            .where(PaperModel.task_id == task_id, PaperModel.source.in_(sources)),
+            user,
+        )
     ).one()
     return LangPoolRange(
         total=int(row[0] or 0),
@@ -550,15 +620,19 @@ def _pick_by_filter(
     year_end: int,
     limit: int,
     core_only: bool = False,
+    user=None,
 ) -> tuple[list[PaperModel], bool]:
     """按年份/核心条件取候选集,再按 limit(created_at 倒序)截断。
 
     返回 (截断后的行, 是否发生了截断)。limit=0 表示不限。
     """
     rows = db.execute(
-        select(PaperModel)
-        .where(PaperModel.task_id == task_id, PaperModel.source.in_(sources))
-        .order_by(PaperModel.created_at.desc())
+        apply_owner_scope(
+            select(PaperModel)
+            .where(PaperModel.task_id == task_id, PaperModel.source.in_(sources))
+            .order_by(PaperModel.created_at.desc()),
+            user,
+        )
     ).scalars().all()
     import core_journals as _cj
     candidates: list[PaperModel] = []
@@ -581,10 +655,12 @@ def _pick_by_filter(
 def export_preview(
     req: ExportPreviewRequest,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """「去写作」筛选预览:返回全池范围、筛选后统计(核心/非核心/年份分布)与 lit_ids。"""
     task_id = _resolve_task_id(x_task_id)
+    _user = _request_user(request)
     import core_journals as _cj
 
     # 中文候选集:cn_core_only=true 时数量截断交给 cn_core_limit,cn.limit 不生效
@@ -592,7 +668,7 @@ def export_preview(
         db, task_id, _CN_SOURCES,
         req.cn.year_start, req.cn.year_end,
         0 if req.cn_core_only else req.cn.limit,
-        core_only=req.cn_core_only,
+        core_only=req.cn_core_only, user=_user,
     )
     if req.cn_core_only and req.cn_core_limit > 0 and len(cn_rows) > req.cn_core_limit:
         cn_rows = cn_rows[:req.cn_core_limit]
@@ -600,6 +676,7 @@ def export_preview(
     en_rows, en_trunc = _pick_by_filter(
         db, task_id, _EN_SOURCES,
         req.en.year_start, req.en.year_end, req.en.limit,
+        user=_user,
     )
     # 中文核心/非核心细分(对截断后的导入集合统计)
     cn_core = sum(1 for r in cn_rows if _cj.classify_journal(r.journal)["in_core"])
@@ -618,8 +695,8 @@ def export_preview(
     distribution = [dist[k] for k in sorted(dist, reverse=True)]
     return ExportPreviewResponse(
         pool=ExportPoolRange(
-            cn=_lang_pool_range(db, task_id, _CN_SOURCES),
-            en=_lang_pool_range(db, task_id, _EN_SOURCES),
+            cn=_lang_pool_range(db, task_id, _CN_SOURCES, user=_user),
+            en=_lang_pool_range(db, task_id, _EN_SOURCES, user=_user),
         ),
         filtered=ExportPreviewStats(
             total=len(cn_rows) + len(en_rows),
@@ -638,30 +715,38 @@ def export_preview(
 def batch_select(
     req: BatchSelectRequest,
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
-    """批量勾选/取消勾选(任务隔离)。
+    """批量勾选/取消勾选(任务隔离 + B6 归属隔离)。
 
     mode=replace:先清空当前 task 全部勾选,再把 lit_ids 置为勾选 —— 「去写作」导入用。
     mode=add:仅把 lit_ids 置为勾选。
     """
     task_id = _resolve_task_id(x_task_id)
+    _user = _request_user(request)
     if len(req.lit_ids) > 10_000:
         raise HTTPException(422, "lit_ids 数量超过上限 10000")
     cleared = 0
     if req.mode == "replace":
-        cleared = db.query(PaperModel).filter(
-            PaperModel.task_id == task_id,
-            PaperModel.selected.is_(True),
+        cleared = apply_owner_scope(
+            db.query(PaperModel).filter(
+                PaperModel.task_id == task_id,
+                PaperModel.selected.is_(True),
+            ),
+            _user,
         ).update({PaperModel.selected: False}, synchronize_session=False)
     # 去重保序 + 分批更新(防 SQLite 绑定变量上限)
     ids = list(dict.fromkeys(i for i in req.lit_ids if i))
     updated = 0
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
-        updated += db.query(PaperModel).filter(
-            PaperModel.task_id == task_id,
-            PaperModel.lit_id.in_(chunk),
+        updated += apply_owner_scope(
+            db.query(PaperModel).filter(
+                PaperModel.task_id == task_id,
+                PaperModel.lit_id.in_(chunk),
+            ),
+            _user,
         ).update({PaperModel.selected: True}, synchronize_session=False)
     db.commit()
     return BatchSelectResponse(updated=updated, cleared=cleared)
@@ -670,6 +755,7 @@ def batch_select(
 @router.post("/new-session")
 def new_session(
     x_task_id: str | None = Header(None, alias=_HEADER_TASK_ID),
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
     """开一个新任务(检索任务)。
@@ -679,14 +765,16 @@ def new_session(
       2. 否则生成新的 UUID,清空当前内存池(不动数据库,但下次写入会用新 task_id),
          并返回新 task_id。
       3. 清空数据库里当前 task 的所有 papers(避免历史数据穿透)。
+    B6:清理仅作用于本人 owner 名下的行(admin 全量)。
     """
     from logging import getLogger
     log = getLogger(__name__)
     current = _resolve_task_id(x_task_id)
     if current != _DEFAULT_TASK_ID:
         # 复用现有 task_id,只清这个 task 的论文
-        deleted = db.query(PaperModel).filter(
-            PaperModel.task_id == current
+        deleted = apply_owner_scope(
+            db.query(PaperModel).filter(PaperModel.task_id == current),
+            _request_user(request),
         ).delete(synchronize_session=False)
         db.commit()
         log.info("new-session: 复用 task_id=%s 清空 %d 条", current, deleted)

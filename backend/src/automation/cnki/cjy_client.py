@@ -142,11 +142,16 @@ class CjyClient:
     def _post(self, url: str, params: dict, files: dict = None,
               retry_times: int = None) -> dict:
         """POST + 网络异常/HTTP错误/解析失败 自动重试，返回 JSON dict"""
+        # SSRF 收窄:超级鹰为固定公网 API,请求前经 validate_external_url
+        # 校验(仅放行公网 http/https,内联于 requests.post 的 URL 参数,
+        # 静态可见);公网地址恒放行,校验异常按既有网络错误重试语义走。
+        from security.auth import validate_external_url
+
         times = retry_times if retry_times is not None else self.retry_times
         last_err = None
         for attempt in range(1, times + 1):
             try:
-                resp = requests.post(url, data=params, files=files,
+                resp = requests.post(validate_external_url(url), data=params, files=files,
                                      headers=self.headers, timeout=self.timeout)
                 resp.raise_for_status()
                 return resp.json()

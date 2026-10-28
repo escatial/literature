@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from api.cnki import stop_cnki_tasks
@@ -23,9 +23,18 @@ class StopResponse(BaseModel):
 
 
 @router.post("/stop", response_model=StopResponse)
-def stop_retrieval(req: StopRequest | None = None):
-    """停止任务。task_ids 传空(或不传)则停止所有运行中的知网/英文检索任务。"""
+def stop_retrieval(req: StopRequest | None = None, request: Request = None):
+    """停止任务。task_ids 传空(或不传)则停止当前用户名下所有运行中任务。
+
+    B6 用户隔离:非 admin 只能停止自己 owner 的任务;admin 全量。
+    知网爬虫任务属管理面(单跑语义),停止仍为全站动作。
+    """
+    user = getattr(request.state, "user", None) if request is not None else None
     ids = req.task_ids if req else None
-    stopped_en = stop_tasks(ids)
+    stopped_en = stop_tasks(
+        ids,
+        user_id=getattr(user, "user_id", None),
+        is_admin=getattr(user, "role", "") == "admin",
+    )
     stopped_cnki = stop_cnki_tasks(ids)
     return StopResponse(stopped=stopped_en + stopped_cnki)

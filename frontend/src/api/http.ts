@@ -2,6 +2,7 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import { toast } from '@/utils/toast';
 import { getApiBaseURL, getBackendHint } from '@/config/api';
+import { AUTH_TOKEN_KEY, setStoredToken } from './auth';
 
 const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefined;
 // dev 走 vite proxy, prod/自定义环境可通过 VITE_API_BASE 指向后端 origin。
@@ -24,6 +25,10 @@ http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   if (taskId) {
     config.headers.set('X-Task-Id', taskId);
   }
+  const token = localStorage.getItem(AUTH_TOKEN_KEY);
+  if (token) {
+    config.headers.set('X-Auth-Token', token);
+  }
   return config;
 });
 
@@ -38,6 +43,15 @@ http.interceptors.response.use(
       toast.error(
         `无法连接后端 (${getBackendHint(backendOrigin)})。请确认已执行: cd backend && python -m uvicorn main:app --reload`,
       );
+      return Promise.reject(err);
+    }
+    // 登录态失效:清令牌并回到登录页(login/register 自身的 401/403 除外,
+    // 由登录页自行展示错误)
+    if (status === 401 && !err.config?.url?.includes('/auth/')) {
+      setStoredToken('');
+      if (window.location.hash !== '#/login') {
+        window.location.hash = '#/login';
+      }
       return Promise.reject(err);
     }
     const detail = err.response?.data?.detail ?? err.message ?? '网络错误';

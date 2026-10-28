@@ -63,13 +63,39 @@ def _clear_cancel(task_id: str) -> None:
         _CANCEL_REQUESTED.discard(task_id)
 
 
-def stop_tasks(task_ids: list[str] | None = None) -> list[str]:
+def stop_tasks(
+    task_ids: list[str] | None = None,
+    *,
+    user_id: str | None = None,
+    is_admin: bool = False,
+) -> list[str]:
     """置位取消标志。task_ids 为空时停止所有已注册任务。返回实际置位了标志的任务 id。
 
     v9.6:task_id 尚未注册(任务线程还没跑到注册点)时也记账并计入返回值,
     堵住「停止请求先于任务注册到达」的竞态窗口——否则停止指令静默丢失,
     前端以为已停止,任务继续跑完并双写文献池。
+
+    B6(2026-10-27) 用户隔离:非 admin 只能停止自己(owner_user_id)名下的
+    任务 —— 显式 task_ids 中越界的条目剔除;全停请求收窄为「名下全部」,
+    名下无任务时返回 []。admin(is_admin=True)不做过滤。授权以 DB 行的
+    owner_user_id 为权威,与内存取消注册表解耦(取消表保持 task_id 单键,
+    避免把用户态穿透进任务线程触碰 v9.6 竞态修复)。
     """
+    if user_id is not None and not is_admin:
+        with _db_session.SessionLocal() as db:
+            q = db.query(RetrievalTaskModel.task_id).filter(
+                RetrievalTaskModel.owner_user_id == user_id
+            )
+            if task_ids is not None:
+                q = q.filter(RetrievalTaskModel.task_id.in_(task_ids))
+            allowed = {tid for (tid,) in q.all()}
+        if task_ids is None:
+            task_ids = sorted(allowed)  # 空列表走下方 else 分支 → 返回 []
+        else:
+            task_ids = [t for t in task_ids if t in allowed]
+            if not task_ids:
+                return []
+
     stopped: list[str] = []
     with _CANCEL_LOCK:
         if task_ids is None:
@@ -230,14 +256,16 @@ def create_task(
     use_rerank: bool = True,
     sources: list[str] | None = None,
     run_inline: bool = False,
+    owner_user_id: str | None = None,
 ) -> RetrievalTaskModel:
-    """旧 API:同步入口。"""
+    """旧 API:同步入口。owner_user_id 为创建者(B6 数据归属)。"""
     task_id = str(uuid4())
     with _db_session.SessionLocal() as db:
         task = RetrievalTaskModel(
             task_id=task_id, topic=topic, status="pending", progress=0,
             year_start=year_start, year_end=year_end,
             min_citations=min_citations, limit=limit, use_rerank=use_rerank,
+            owner_user_id=owner_user_id,
             updated_at=_utcnow(),
         )
         db.add(task); db.commit(); db.refresh(task)
@@ -335,6 +363,7 @@ def create_task_v2(
     run_id: str | None = None,
     limit: int | None = None,
     pool_task_id: str | None = None,
+    owner_user_id: str | None = None,
 ) -> RetrievalTaskModel:
     """新版任务入口。
 
@@ -347,6 +376,7 @@ def create_task_v2(
     limit 为本次英文检索的目标文献总量(两库共享同一个池),不传则用
     DEFAULT_LOOP 里的默认上限。
     pool_task_id 为前端 X-Task-Id 隔离 ID,写入文献池时打标签(v7.1)。
+    owner_user_id 为创建者(B6 数据归属:停止/查询授权的权威依据)。
     """
 
     selected = list(sources or ["openalex", "pubmed"])
@@ -359,6 +389,7 @@ def create_task_v2(
             task_id=task_id, topic=topic, status="pending", progress=0,
             year_start=year_start or 0, year_end=year_end or 0,
             use_rerank=use_snowball,  # 复用旧字段表达"扩展检索"
+            owner_user_id=owner_user_id,
             updated_at=_utcnow(),
         )
         db.add(task); db.commit(); db.refresh(task)

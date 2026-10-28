@@ -106,12 +106,20 @@ def _http_get(url: str, params: dict, timeout):
 
 
 def _http_get_urllib(url: str, params: dict, timeout) -> _HttpResp:
-    """通过 urllib 发起 GET(走系统 SSL stack,避免部分 Python ssl 兼容问题)。"""
+    """通过 urllib 发起 GET(走系统 SSL stack,避免部分 Python ssl 兼容问题)。
+
+    SSRF 收窄:OpenAlex 为固定公网 API,请求前经 validate_external_url
+    校验(仅放行公网 http/https,内联于 Request 构造,静态可见)。
+    """
     import urllib.parse, urllib.request
+
+    from security.auth import validate_external_url
 
     q = urllib.parse.urlencode(params, doseq=True, quote_via=urllib.parse.quote)
     full = f"{url}?{q}"
-    req = urllib.request.Request(full, headers={"User-Agent": "literature-review-agent/1.0"})
+    req = urllib.request.Request(
+        validate_external_url(full), headers={"User-Agent": "literature-review-agent/1.0"},
+    )
     with urllib.request.urlopen(req, timeout=timeout if isinstance(timeout, (int, float)) else 30.0) as r:
         body = r.read()
         return _HttpResp(r.status, dict(r.headers), r.geturl(), json.loads(body))

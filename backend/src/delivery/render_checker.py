@@ -81,8 +81,11 @@ def check_render(docx_path: str | Path) -> RenderCheckResult:
         fn_xml = fn_part.blob
         # 排除 separator / continuationSeparator(w:id=-1 / 0)
         # 简单做法:数 w:footnote 元素,然后减 2
-        import lxml.etree as ET
-        root = ET.fromstring(fn_xml)
+        # defusedxml:禁 DTD/实体扩展,防 billion laughs(与 pubmed 同修法;
+        # findall 的 {ns}tag 语法与 lxml 一致)
+        from defusedxml import ElementTree as SafeET
+
+        root = SafeET.fromstring(fn_xml)
         fn_def_count = len(root.findall(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}footnote"))
 
     body_xml = doc.element.body.xml if hasattr(doc.element.body, "xml") else b""

@@ -18,6 +18,22 @@ LOCALES_DIR = '.'
 NSMAP = {'cs': 'http://purl.org/net/xbiblio/csl'}
 
 
+def assert_within_locales_dir(path, base_dir=None):
+    """路径穿越防护:断言 path 解析后仍位于 locale 数据目录内。"""
+    base_abs = os.path.abspath(base_dir or LOCALES_DIR)
+    path_abs = os.path.abspath(path)
+    if os.path.commonpath([path_abs, base_abs]) != base_abs:
+        raise ValueError('locale path escapes data dir: %r' % (path,))
+
+
+def sanitize_locale_abs_path(path):
+    """净化 locale 绝对路径:commonpath 断言仍在数据目录内后原样返回。"""
+    base_abs = os.path.abspath(LOCALES_DIR)
+    path_abs = os.path.abspath(path)
+    assert os.path.commonpath([path_abs, base_abs]) == base_abs
+    return path_abs
+
+
 def get_term_id(term) -> str:
     # e.g., `editor|short`
     term_id = term.attrib['name']
@@ -64,7 +80,8 @@ def add_new_terms_to_locale(path, element_tree, new_terms, english_term_ids,
     et_str = et_str.replace('<single/>', '<single></single>')
     et_str = et_str.replace('<multiple/>', '<multiple></multiple>')
 
-    with open(path, 'w') as f:
+    assert_within_locales_dir(path)
+    with open(sanitize_locale_abs_path(path), 'w') as f:
         f.write(et_str.strip())
         f.write('\n')
 
@@ -72,6 +89,7 @@ def add_new_terms_to_locale(path, element_tree, new_terms, english_term_ids,
 def main():
     english_locale = 'locales-en-US.xml'
     english_path = os.path.join(LOCALES_DIR, english_locale)
+    assert_within_locales_dir(english_path)
     english_term_dict = dict()
     english_term_ids = []
 
@@ -85,6 +103,7 @@ def main():
         if locale_file == english_locale:
             continue
 
+        assert_within_locales_dir(path)
         element_tree = etree.parse(path)
         locale_terms_el = element_tree.find('.//cs:terms', NSMAP)
 

@@ -180,14 +180,25 @@ def _paper_to_snapshot(p: Paper) -> dict[str, Any]:
     }
 
 
-def list_recent(limit: int = _HISTORY_KEEP) -> list[dict]:
-    """获取最近 limit 条历史(按 created_at 倒序),返回 dict 列表。"""
+def list_recent(
+    limit: int = _HISTORY_KEEP,
+    *,
+    owner_user_id: str | None = None,
+    is_admin: bool = False,
+) -> list[dict]:
+    """获取最近 limit 条历史(按 created_at 倒序),返回 dict 列表。
+
+    B6(2026-10-27) 数据归属:非 admin 仅返回自己(owner_user_id)名下的
+    历史;admin 全量(含 owner 为 NULL 的存量行)。
+    """
     with _db_session.SessionLocal() as db:
         stmt = (
             select(RetrievalHistoryModel)
             .order_by(RetrievalHistoryModel.created_at.desc())
             .limit(limit)
         )
+        if owner_user_id is not None and not is_admin:
+            stmt = stmt.where(RetrievalHistoryModel.owner_user_id == owner_user_id)
         rows = list(db.execute(stmt).scalars().all())
         return [
             {
@@ -200,6 +211,7 @@ def list_recent(limit: int = _HISTORY_KEEP) -> list[dict]:
                 "task_id": r.task_id,
                 "run_id": r.run_id,
                 "created_at": _iso_utc(r.created_at),
+                "owner_user_id": r.owner_user_id,
             }
             for r in rows
         ]
@@ -220,6 +232,7 @@ def get_history(history_id: int) -> dict | None:
             "task_id": r.task_id,
             "run_id": r.run_id,
             "created_at": _iso_utc(r.created_at),
+            "owner_user_id": r.owner_user_id,
         }
     return None
 

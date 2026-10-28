@@ -61,9 +61,26 @@ def _stable_seed(papers: list[Paper]) -> int:
 
 
 def _fetch_crossref_title(doi: str) -> str | None:
-    """回源 Crossref 取官方题名;网络失败返回 None(不可达,与不匹配区分)。"""
-    url = _CROSSREF_API.format(doi=doi.strip())
-    req = urllib.request.Request(url, headers={"User-Agent": "lit-review-agent/9.10 (mailto:check@example.org)"})
+    """回源 Crossref 取官方题名;网络失败返回 None(不可达,与不匹配区分)。
+
+    SSRF 收窄:Crossref 为固定公网 API base,DOI 经 quote 编码后拼入
+    路径,不含可操控的 host 成分;请求前经 validate_external_url 校验
+    (仅放行公网 http/https,紧邻 urlopen 静态可见)。校验不过按
+    "不可达"留痕返回 None,与网络失败同语义。
+    """
+    from urllib.parse import quote
+
+    from security.auth import validate_external_url
+
+    url = _CROSSREF_API.format(doi=quote(doi.strip(), safe=""))
+    try:
+        req = urllib.request.Request(
+            validate_external_url(url),
+            headers={"User-Agent": "lit-review-agent/9.10 (mailto:check@example.org)"},
+        )
+    except ValueError as exc:
+        log.warning("Crossref 回源地址被拒(%s): %s", url, exc)
+        return None
     with urllib.request.urlopen(req, timeout=_TIMEOUT_SECONDS) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     titles = (payload.get("message", {}) or {}).get("title") or []

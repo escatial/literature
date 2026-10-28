@@ -16,7 +16,10 @@ import secrets
 import uuid
 
 from db.models import UserModel
-from db.session import SessionLocal
+# 经模块属性访问 SessionLocal:reset_engine(测试)会重绑 db.session 的全局,
+# `from ... import SessionLocal` 的对象绑定会停留在旧 engine 上导致读写穿旧库
+# (与 security/auth.py 同一修复,2026-10-27 对齐)。
+from db import session as db_session
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +65,7 @@ def create_user(
     tenant_id: str | None = None,
 ) -> UserModel:
     """新建用户(幂等 upsert by email)。"""
-    with SessionLocal() as db:
+    with db_session.SessionLocal() as db:
         row = db.query(UserModel).filter_by(email=email).one_or_none()
         if row is not None:
             log.info("user %s 已存在,跳过创建", email)
@@ -84,7 +87,7 @@ def create_user(
 
 def authenticate(*, email: str, password: str) -> UserModel | None:
     """登录校验。"""
-    with SessionLocal() as db:
+    with db_session.SessionLocal() as db:
         row = db.query(UserModel).filter_by(email=email).one_or_none()
         if row is None or not row.enabled:
             return None

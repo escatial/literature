@@ -4,6 +4,7 @@
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,6 +56,7 @@ def _configure_uvicorn_logging() -> None:
 _configure_uvicorn_logging()
 
 from api.health import router as health_router  # noqa: E402
+from api.auth import router as auth_router  # noqa: E402
 # 需求2:全站移除粘贴引文手动导入,不再注册 /api/import/cn
 from api.papers import router as papers_router  # noqa: E402
 from api.prompts import router as prompts_router  # noqa: E402
@@ -83,6 +85,13 @@ log = logging.getLogger(__name__)
 async def _lifespan(_: FastAPI):
     """应用生命周期:启动数据库,关闭数据库连接。"""
     init_db()
+    # 预置默认管理员:仅空库时创建 admin/admin;已有用户绝不覆盖。
+    try:
+        from security.auth import ensure_default_admin
+        if ensure_default_admin():
+            log.warning("已预置默认管理员 admin/admin,请登录后尽快修改密码")
+    except Exception as exc:
+        log.warning("默认管理员初始化非致命错误: %s", exc)
     # 核心期刊清单:首次冷导入(从 xlsx 一次性灌入 DB),后续启动直接走 DB
     try:
         import core_journals as _cj_init
@@ -116,16 +125,46 @@ async def _unhandled_exc(request, exc):
     )
 
 # CORS:allow_origins=["*"] 与 allow_credentials=True 同时开启会被 Starlette 拒绝
-# 开发环境放宽,带凭证的请求必须显式列出来源
+# 开发环境放宽,带凭证的请求必须显式列出来源。
+# B2(2026-10-27):ALLOWED_ORIGINS env(逗号分隔)可收紧;缺省 "*" 保持
+# 存量开发/局域网部署零感知。
+_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=(
+        [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+        or ["*"]
+    ),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ── 登录鉴权:除公开路径外一律要求 X-Auth-Token ─────────────────────
+# 公开:根路径/docs(supervisor/人工探活)、healthz(进程守护探活)、
+# auth 三件套(bootstrap/register/login —— 登录前唯三可用)。
+_PUBLIC_PATHS = {"/", "/docs", "/redoc", "/openapi.json", "/api/healthz"}
+_PUBLIC_PREFIXES = ("/api/auth/bootstrap", "/api/auth/register", "/api/auth/login")
+
+
+@app.middleware("http")
+async def _auth_middleware(request, call_next):
+    path = request.url.path
+    # OPTIONS 预检不含自定义头,直接放行(浏览器 CORS 协商)
+    if request.method == "OPTIONS" or path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+        return await call_next(request)
+    from security.auth import user_from_token
+
+    user = user_from_token(request.headers.get("X-Auth-Token"))
+    if user is None:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "未登录或登录已过期"}, status_code=401)
+    request.state.user = user
+    return await call_next(request)
+
+
 app.include_router(health_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
 app.include_router(retrieval_tasks_router, prefix="/api")
 app.include_router(retrieval_v2_router, prefix="/api")
 app.include_router(retrieval_history_router, prefix="/api")

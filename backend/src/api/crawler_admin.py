@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from api.auth import require_admin
 
 try:  # 测试/独立脚本（backend/src 在 sys.path，顶层 automation 包可导入）
     from automation.cnki import crawler as _crawler
@@ -38,7 +40,16 @@ except ImportError:  # 生产路径（main.py 注入 backend 根，与 api/cnki.
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/crawler", tags=["crawler-admin"])
+# B4(2026-10-27) RBAC 收权:整面仅 admin。权限边界分工 ——
+# 本 router 是运维管理面(任务启停/参数热调整/断路器/代理池),一律收权
+# admin;业务数据面(papers/检索任务/历史)不做角色收权,由 owner 归属
+# 过滤(B6)按用户隔离。router 级依赖读取 main 鉴权中间件注入的
+# request.state.user,未登录已在中间件层 401。
+router = APIRouter(
+    prefix="/crawler",
+    tags=["crawler-admin"],
+    dependencies=[Depends(require_admin)],
+)
 
 
 class ParamsUpdateRequest(BaseModel):

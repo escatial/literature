@@ -20,6 +20,7 @@ import { toast } from '@/utils/toast';
 import { usePapersStore } from '@/stores/papers';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { useLLMProvidersStore } from '@/stores/llmProviders';
+import { useAuthStore } from '@/stores/auth';
 import { http, apiBaseURL } from '@/api/http';
 import { useSessionStore, newTimestampId } from '@/stores/session';
 import {
@@ -64,19 +65,45 @@ const testLLMConnection = async () => {
 };
 
 // ---------- v9.11: MiniMax 模型选择(从上游获取 + 用户自选) ----------
+// 2026-10-27 起用户感知:已配置自定义 LLM 的用户,模型探测/切换作用于
+// 自己的配置;未配置用户给出提醒并引导到「监控与管理 → LLM 设置」。
 interface MiniMaxModel { id: string; owned_by: string; active: boolean }
+const auth = useAuthStore();
 const availableModels = ref<MiniMaxModel[]>([]);
 const selectedModel = ref("");
 const currentModel = ref("");
 const modelsLoading = ref(false);
 const selectingModel = ref(false);
+/** 响应里的上游失败详情(用户上游不可达时展示) */
+const upstreamError = ref('');
+
+const userLlmConfigured = computed(() =>
+  !!(auth.user?.llm_base_url && auth.user?.llm_api_key_masked));
+const userLlmKindLabel = computed(() =>
+  auth.user?.llm_kind === 'anthropic' ? 'Anthropic 兼容' : 'OpenAI 兼容');
+const userLlmBaseHost = computed(() => {
+  try {
+    return new URL(auth.user?.llm_base_url || '').host;
+  } catch {
+    return auth.user?.llm_base_url || '';
+  }
+});
+
+const goLlmSettings = () => {
+  router.push({ path: '/crawler', query: { tab: 'llm' } });
+};
 
 const fetchUpstreamModels = async () => {
   modelsLoading.value = true;
+  upstreamError.value = '';
   try {
     const resp = await http.get("/review/models/upstream");
     availableModels.value = resp.data.models ?? [];
     currentModel.value = resp.data.active ?? "";
+    upstreamError.value = String(resp.data.error ?? '');
+    if (upstreamError.value) {
+      toast.error(upstreamError.value);
+    }
     if (!selectedModel.value && availableModels.value.length) {
       selectedModel.value = currentModel.value || availableModels.value[0]?.id || "";
     }
@@ -91,8 +118,12 @@ const applyModel = async () => {
   if (!selectedModel.value) return;
   selectingModel.value = true;
   try {
-    await http.post("/review/models/select", { model_id: selectedModel.value });
+    const resp = await http.post("/review/models/select", { model_id: selectedModel.value });
     currentModel.value = selectedModel.value;
+    // 用户级切换:同步本地会话里的配置,状态栏即时反映
+    if (resp.data?.scope === 'user' && auth.user) {
+      auth.user.llm_model = selectedModel.value;
+    }
     toast.success(`模型已切换为 ${selectedModel.value}`);
     availableModels.value.forEach((m: MiniMaxModel) => { m.active = m.id === selectedModel.value; });
   } catch (e: any) {
@@ -102,8 +133,18 @@ const applyModel = async () => {
   }
 };
 
-// 页面加载时自动获取一次模型列表
-onMounted(() => { fetchUpstreamModels(); });
+// 页面加载时:已配置用户自动获取一次自己上游的模型列表
+onMounted(() => {
+  if (auth.user === null) {
+    void auth.restore().then(() => {
+      currentModel.value = auth.user?.llm_model || '';
+      if (userLlmConfigured.value) void fetchUpstreamModels();
+    });
+  } else {
+    currentModel.value = auth.user.llm_model || '';
+    if (userLlmConfigured.value) void fetchUpstreamModels();
+  }
+});
 
 const runStarted = ref(false);
 const runFailed = ref(false);
@@ -899,70 +940,76 @@ onBeforeUnmount(() => {
       <span class="run-text">{{ ustore.planning ? 'Agent 正在自动生成三库检索式…' : 'Agent 正在自动检索,可切到其他页继续工作' }}</span>
     </div>
 
-    <!-- v7.1 LLM provider 状态条:展示当前默认/备用,避免用户在 LLM 不通时疑惑 -->
+    <!-- LLM 状态条(用户感知):显示当前用户自己的接口配置;未配置则提醒 -->
     <div class="llm-providers-bar">
       <span class="llm-label">誊抄</span>
-      <el-tag
-        v-for="p in llmProviders.providers"
-        :key="p.id"
-        :type="p.is_default ? 'success' : (p.is_active_fallback ? 'warning' : 'info')"
-        :effect="p.is_default ? 'dark' : 'plain'"
-        size="small"
-      >
-        {{ p.label }}
-        <span v-if="p.is_default">·推荐</span>
-        <span v-else-if="p.is_active_fallback">·备用</span>
-        <span v-else>·配置保留</span>
-      </el-tag>
-      <el-tooltip
-        v-if="llmProviders.providers.length"
-        placement="top"
-        :content="`轮换顺序:${llmProviders.fallbackOrder.join(' → ') || '(空)'}`"
-      >
-        <span class="llm-providers-hint">ⓘ</span>
-      </el-tooltip>
-      <el-button
-        size="small"
-        text
-        bg
-        :loading="testingLLM"
-        @click="testLLMConnection"
-      >
-        测试 LLM
-      </el-button>
-
-      <span class="llm-divider" aria-hidden="true"></span>
-      <span class="llm-label">模型</span>
-      <el-select
-        v-model="selectedModel"
-        placeholder="选择模型"
-        size="small"
-        style="width: 280px"
-        :loading="modelsLoading"
-        :disabled="selectingModel"
-        clearable
-      >
-        <el-option
-          v-for="m in availableModels"
-          :key="m.id"
-          :label="m.id + (m.active ? ' (当前)' : '')"
-          :value="m.id"
-        />
-      </el-select>
-      <el-button size="small" text bg :loading="modelsLoading" @click="fetchUpstreamModels">
-        从上游获取
-      </el-button>
-      <el-button
-        size="small"
-        type="primary"
-        plain
-        :disabled="!selectedModel || selectedModel === currentModel || selectingModel"
-        :loading="selectingModel"
-        @click="applyModel"
-      >
-        切换模型
-      </el-button>
-      <span v-if="currentModel" class="llm-current">当前 {{ currentModel }}</span>
+      <template v-if="userLlmConfigured">
+        <el-tag type="success" effect="dark" size="small">
+          {{ userLlmKindLabel }}<span>·我的</span>
+        </el-tag>
+        <span class="llm-current">{{ userLlmBaseHost }}</span>
+        <el-button
+          size="small"
+          text
+          bg
+          :loading="testingLLM"
+          @click="testLLMConnection"
+        >
+          测试 LLM
+        </el-button>
+        <span class="llm-divider" aria-hidden="true"></span>
+        <span class="llm-label">模型</span>
+        <el-select
+          v-model="selectedModel"
+          placeholder="选择模型"
+          size="small"
+          style="width: 280px"
+          :loading="modelsLoading"
+          :disabled="selectingModel"
+          clearable
+          filterable
+        >
+          <el-option
+            v-for="m in availableModels"
+            :key="m.id"
+            :label="m.id + (m.active ? ' (当前)' : '')"
+            :value="m.id"
+          />
+        </el-select>
+        <el-button size="small" text bg :loading="modelsLoading" @click="fetchUpstreamModels">
+          从上游获取
+        </el-button>
+        <el-button
+          size="small"
+          type="primary"
+          plain
+          :disabled="!selectedModel || selectedModel === currentModel || selectingModel"
+          :loading="selectingModel"
+          @click="applyModel"
+        >
+          切换模型
+        </el-button>
+        <span v-if="currentModel" class="llm-current">当前 {{ currentModel }}</span>
+      </template>
+      <template v-else>
+        <el-tag type="warning" effect="plain" size="small">未配置自定义 LLM</el-tag>
+        <span class="llm-remind">
+          你还没有配置自己的大模型接口,当前使用系统默认 MiniMax(模型 {{ currentModel || '未指定' }})。
+          建议配置你自己的 Base URL / API Key,写作任务将使用你的接口与额度。
+        </span>
+        <el-button size="small" type="warning" plain @click="goLlmSettings">
+          去配置
+        </el-button>
+        <el-button
+          size="small"
+          text
+          bg
+          :loading="testingLLM"
+          @click="testLLMConnection"
+        >
+          测试 LLM
+        </el-button>
+      </template>
     </div>
   </el-card>
 
@@ -1229,6 +1276,12 @@ onBeforeUnmount(() => {
   font-size: 12px;
   color: var(--ink-faint);
   font-family: var(--font-mono);
+}
+.llm-remind {
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.7;
+  max-width: 560px;
 }
 
 /* ── 贰 · 检索式卡片目录 ── */

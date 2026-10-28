@@ -15,6 +15,8 @@ beautifulsoup4>=4.12
 requests>=2.31
 urllib3>=2.0
 lxml>=5.0
+# XML 安全解析(禁 DTD/实体扩展,防 billion laughs):PubMed efetch 响应解析
+defusedxml>=0.7
 PyYAML>=6.0
 pycryptodome>=3.19
 
@@ -25,3 +27,6 @@ openpyxl>=3.1
 # 实际安装位置:backend/lib/(Anaconda site-packages 无写权限时,装到项目内)
 # 如果部署环境 site-packages 有写权限,直接 pip install -r requirements.txt 即可
 citeproc-py>=0.10,<0.11
+
+# ⑨主题边界诊断的中文分词(延迟导入:缺失时自动回退 bigram,不阻塞主流程)
+jieba>=0.42

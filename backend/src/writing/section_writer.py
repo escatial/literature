@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import re
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Generator
@@ -23,7 +24,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 
-from src.llm.client import messages_create, messages_stream, normalize_model_output
+from src.llm.client import (
+    messages_create,
+    messages_stream_ex,
+    normalize_model_output,
+)
 from src.retrieval.types import Paper
 from src.writing.classifier import Group
 from src.writing.templates import SectionSpec
@@ -410,6 +415,7 @@ def _prepare_section_context(
     synthesis_map: dict[str, dict] | None = None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    notes_block: str | None = None,
 ) -> tuple[str, str, set[str], dict[str, str], bool]:
     allowed = {p.lit_id for p in papers}
     is_comment = section.key == "comment"
@@ -477,6 +483,10 @@ def _prepare_section_context(
             )
         if synthesis_block:
             section_role += "\n" + synthesis_block
+    # R1' 蒸馏证据层(2026-10-27 先读后写):通读笔记进 prompt,位于
+    # 综合素材之后;comment 章不引用文献,不注入笔记。None 时零改动。
+    if notes_block and not is_comment:
+        section_role += "\n" + notes_block
     if is_comment:
         rqs = [str(q).strip() for q in (research_questions or []) if str(q).strip()]
         if rqs:
@@ -514,78 +524,11 @@ def _prepare_section_context(
 
 # === v6.2: 自动从"作者(年份)"夹注派生 [lit_xxx] 锚点 ===
 # LLM 只负责写正文中的“作者(年份)”夹注, 后端以正则查询表查 paper 自动补 [lit_xxx]。
+# 2026-10-27:旧版实现(AUTHOR_YEAR_PATTERNS + _extract_surname +
+# 旧 _build_surname_year_index / _inject_citations_by_author_year,返回 2 元组)
+# 已删除 —— 它们被下方 V63 版(返回 3 元组)同名覆盖,运行时不可达,
+# 且两版返回契约不同,留存会误导维护。
 import re as _re_inject
-
-AUTHOR_YEAR_PATTERNS = [
-    _re_inject.compile(r'([\u4e00-\u9fff]{2,4})等[\uff08(]\s*(\d{4})\s*[\uff09)]'),
-    _re_inject.compile(r'([\u4e00-\u9fff]{2,4})(?:,[\u4e00-\u9fff]{2,4})*[、,]?([\u4e00-\u9fff]{2,4})[\uff08(]\s*(\d{4})\s*[\uff09)]'),
-    _re_inject.compile(r'\b([A-Z][a-zA-Z\u00c0-\u017f\.\-]+)\s+et\s+al\.?[\uff08(]\s*(\d{4})\s*[\uff09)]'),
-    _re_inject.compile(r'\b([A-Z][a-zA-Z\u00c0-\u017f\.\-]+)\s+and\s+([A-Z][a-zA-Z\u00c0-\u017f\.\-]+)[\uff08(]\s*(\d{4})\s*[\uff09)]'),
-    _re_inject.compile(r'\b([A-Z][a-zA-Z\u00c0-\u017f\.\-]+)[\uff08(]\s*(\d{4})\s*[\uff09)]'),
-]
-
-def _extract_surname(author_str):
-    s = _re_inject.sub(r'\s+et\s+al\.?', '', author_str)
-    s = _re_inject.sub(r'\s+and\s+\S+', '', s)
-    s = s.strip().rstrip('.')
-    if not s: return ''
-    if _re_inject.match(r'[A-Za-z\u00c0-\u017f]', s[0]):
-        return s.split()[-1] if s.split() else s
-    return s[0]
-
-def _build_surname_year_index(papers):
-    idx = {}
-    for p in papers:
-        p_year = int(p.year) if isinstance(p.year, (int, float)) and p.year else 0
-        if not p_year: continue
-        for a in (p.authors or []):
-            s = _extract_surname(a)
-            if not s: continue
-            idx.setdefault((s, p_year), []).append(getattr(p, 'lit_id', ''))
-    return idx
-
-def _inject_citations_by_author_year(content, papers):
-    if not content or not papers:
-        return content, []
-    surname_idx = _build_surname_year_index(papers)
-    if not surname_idx:
-        return content, []
-    paragraphs = content.split('\n')
-    out_paragraphs = []
-    seen_lit_ids = []
-    for para in paragraphs:
-        if not para.strip():
-            out_paragraphs.append(para)
-            continue
-        last_lit_id = None
-        last_match_end = -1
-        for pat in AUTHOR_YEAR_PATTERNS:
-            for m in pat.finditer(para):
-                groups = m.groups()
-                if len(groups) == 3:
-                    author = groups[0]; year = int(groups[2])
-                else:
-                    author = groups[0]; year = int(groups[1])
-                surname = _extract_surname(author)
-                lit_ids = surname_idx.get((surname, year), [])
-                if not lit_ids: continue
-                lid = lit_ids[0]
-                if m.end() > last_match_end:
-                    last_match_end = m.end()
-                    last_lit_id = lid
-        if last_lit_id and '[' not in para[last_match_end:]:
-            tail = para[last_match_end:]
-            end_idx = -1
-            for ch in ['。', '!', '?', ';', '.']:
-                idx = tail.rfind(ch)
-                if idx > end_idx: end_idx = idx
-            if end_idx > 0:
-                insert_pos = last_match_end + end_idx
-                para = para[:insert_pos] + f'[{last_lit_id}]' + para[insert_pos:]
-                if last_lit_id not in seen_lit_ids:
-                    seen_lit_ids.append(last_lit_id)
-        out_paragraphs.append(para)
-    return '\n'.join(out_paragraphs), seen_lit_ids
 
 
 # 模型偶尔输出"周。愉。峰"或"胡，大，伟"——即中文标点(。 ， 、 ,)把姓名单字拆开,
@@ -1441,17 +1384,21 @@ def write_section(
     synthesis_map: dict[str, dict] | None = None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    notes_block: str | None = None,
 ) -> SectionResult:
     """写一章。papers 是本章允许引用的全集,grades 是 lit_id -> 相关性等级。
 
     v9.9: synthesis_map(theme_key -> 综合条目)与 research_questions/review_goal
     可选注入;缺省行为与旧版完全一致。
+    R1'(2026-10-27): notes_block 为通读笔记蒸馏证据层,由调用方
+    (orchestrator)经 readthrough.section_notes_block 产出,失败传 None。
     """
     system, user, allowed, alias_map, is_comment = _prepare_section_context(
         section, topic, groups, papers, grades,
         synthesis_map=synthesis_map,
         research_questions=research_questions,
         review_goal=review_goal,
+        notes_block=notes_block,
     )
     required = 0 if is_comment else _min_citation_target(len(papers))
     raw = _invoke_section_chain(system=system, user=user, model=model)
@@ -1666,27 +1613,62 @@ def write_section_stream(
     synthesis_map: dict[str, dict] | None = None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
-) -> Generator[tuple[str, bool, SectionResult | None], None, None]:
-    """流式写一章:逐 token 返回,最后附带最终章节结果。"""
+    notes_block: str | None = None,
+) -> Generator[dict, None, None]:
+    """流式写一章:yield 事件 dict,最后附带最终章节结果。
+
+    事件契约(唯一消费方 orchestrator.generate_review_stream):
+    - {"kind": "step", "step": str, "status": "start"|"ok"|"fail",
+       "message": str, "seconds"?: float} 工具调用过程,供前端步骤面板
+    - {"kind": "reasoning", "delta": str} 思考过程增量,仅展示,绝不入正文
+    - {"kind": "token", "delta": str} 正文增量
+    - {"kind": "done", "result": SectionResult} 终稿
+    R1'(2026-10-27): notes_block 为通读笔记蒸馏证据层(调用方产出,
+    失败传 None,行为与旧版一致)。
+    """
+    prepare_t0 = time.monotonic()
+    yield {"kind": "step", "step": "prepare_context", "status": "start",
+           "message": f"正在构建《{section.title}》的写作上下文与引用约束"}
     system, user, allowed, alias_map, is_comment = _prepare_section_context(
         section, topic, groups, papers, grades,
         synthesis_map=synthesis_map,
         research_questions=research_questions,
         review_goal=review_goal,
+        notes_block=notes_block,
     )
+    yield {"kind": "step", "step": "prepare_context", "status": "ok",
+           "seconds": round(time.monotonic() - prepare_t0, 1),
+           "message": f"写作上下文就绪,本章候选文献 {len(papers)} 篇"}
+    stream_t0 = time.monotonic()
+    yield {"kind": "step", "step": "llm_stream", "status": "start",
+           "message": "模型正在思考并流式生成正文"}
     raw_parts: list[str] = []
-    for piece in messages_stream(system=system, user=user, max_tokens=8000, model=model):
+    for kind, piece in messages_stream_ex(system=system, user=user, max_tokens=8000, model=model):
+        if kind == "reasoning":
+            yield {"kind": "reasoning", "delta": piece}
+            continue
         raw_parts.append(piece)
-        yield piece, False, None
+        yield {"kind": "token", "delta": piece}
     raw = "".join(raw_parts)
+    yield {"kind": "step", "step": "llm_stream", "status": "ok",
+           "seconds": round(time.monotonic() - stream_t0, 1),
+           "message": f"正文流式生成完成,共 {len(raw)} 字"}
     unmatched: list[str] = []
     if not is_comment and papers:
         raw = _remove_model_citation_tokens(raw)
+        inject_t0 = time.monotonic()
+        yield {"kind": "step", "step": "citation_inject", "status": "start",
+               "message": "正在回填作者-年份夹注引用"}
         raw, _, unmatched = _inject_citations_by_author_year(raw, list(papers))
         # 流式版无法隐藏地重写一轮(token 已推送前端),
         # 只做整句删除兜底,不留裸作者名
         if unmatched:
             raw = _drop_sentences_with_quotes(raw, unmatched)
+        yield {"kind": "step", "step": "citation_inject",
+               "status": "ok",
+               "seconds": round(time.monotonic() - inject_t0, 1),
+               "message": (f"夹注回填完成,{len(unmatched)} 处未匹配已整句兜底删除"
+                           if unmatched else "夹注回填完成,全部命中")}
     result = _finalize_section_result(
         section,
         raw,
@@ -1700,6 +1682,9 @@ def write_section_stream(
     if required and (len(result.citations) < required or unmatched):
         needs_repair = True
     if needs_repair:
+        repair_t0 = time.monotonic()
+        yield {"kind": "step", "step": "repair_draft", "status": "start",
+               "message": f"引用密度或正文形态未达标(要求 {required} 篇),正在自动重写"}
         try:
             repaired = _repair_section_draft(
                 system=system,
@@ -1723,8 +1708,14 @@ def write_section_stream(
                 repaired_result.content, len(repaired_result.citations)
             ) > _article_quality_score(result.content, len(result.citations)):
                 result = repaired_result
+            yield {"kind": "step", "step": "repair_draft", "status": "ok",
+                   "seconds": round(time.monotonic() - repair_t0, 1),
+                   "message": f"自动重写完成,本章引用 {len(result.citations)} 处"}
         except Exception as exc:  # noqa: BLE001
             log.warning("章节 %s 流式自动重写失败,使用真实题录补证据: %s", section.key, exc)
+            yield {"kind": "step", "step": "repair_draft", "status": "fail",
+                   "seconds": round(time.monotonic() - repair_t0, 1),
+                   "message": f"自动重写失败,改用真实题录补证据:{exc}"}
         if _looks_like_non_article(result.content):
             cleaned = _strip_obvious_meta_lines(result.content)
             result.content = cleaned or "本章围绕研究主题梳理相关研究的主要问题、方法差异与证据边界。"
@@ -1734,4 +1725,4 @@ def write_section_stream(
                 "章节 %s 引用密度仍不足: %d/%d 篇",
                 section.key, len(result.citations), required,
             )
-    yield "", True, result
+    yield {"kind": "done", "result": result}

@@ -1,44 +1,44 @@
-"""任务状态机控制器(方案 §5 "端到端流程与状态机")。
+"""任务状态机控制器(2026-10-27 C3 收敛为与执行链一致的 7 节点)。
 
-13 节点状态机(按顺序):
-  PLANNING → RETRIEVING → NORMALIZED → VERIFY_1 → SCREENED → VERIFY_2 →
-  OUTLINED → DRAFTED → VERIFY_3 → CITATION_LOCKED →
-  HUMANIZED_1 → HUMANIZED_2 → HUMANIZED_3 → RENDERED → DELIVERED
+7 节点状态机(按顺序):
+  PLANNING → SCREENED → OUTLINED → DRAFTED → QA_VERIFIED → RENDERED → DELIVERED
+
+语义对照(与 orchestrator 执行链一一对应):
+  PLANNING    主题规划整体段(筛选+分级+分类;plan 阶段1与单阶段 generate 共用)
+  SCREENED    筛选+相关性分级完成的时点
+  OUTLINED    主题划分/分类完成的时点(plan_complete / classify_done)
+  DRAFTED     分章写作主循环段
+  QA_VERIFIED 全流程核查段(三级修复闭环)
+  RENDERED    正文定稿交付给前端(sections_finalized / complete)的时点
+  DELIVERED   综述交付完成的时点(docx 导出由用户在 reviews 处按需触发)
 
 设计要点:
 - 每个节点产生一条 task_stages 记录,记录 entered_at / exited_at / status;
-- 进入下一节点时,前一节点必须 status != fail,否则阻断;
-- 任意节点可调用 checkpoint() 持久化当前快照,重启任务可从 last_checkpoint 恢复;
-- 节点可重入:若当前 task 在 HUMANIZED_1 阶段崩溃,
-  下次启动 task 时从 HUMANIZED_1 续跑,无需重做 PLANNING~OUTLINED。
+- 进入下一节点时,前一节点必须 status != fail,否则阻断(can_enter);
+- 时点型节点(SCREENED/OUTLINED/RENDERED/DELIVERED)由调用方在完成时点
+  直接 record(status="pass");段型节点(PLANNING/DRAFTED/QA_VERIFIED)用
+  sm.stage() with 块包裹,异常自动 fail;
+- record 幂等:同一 (task_id, stage) 未终态行就地覆盖,重跑安全。
 """
 from __future__ import annotations
 
 import logging
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
 
 from db.models import TaskStageModel
-from db.session import SessionLocal
+# 经模块属性访问 SessionLocal:reset_engine(测试)会重绑 db.session 的全局,
+# from-import 绑定会停留在旧 engine 上写穿旧库(与 security/auth.py 同一修复)。
+from db import session as db_session
 
 log = logging.getLogger(__name__)
 
 STAGES: list[str] = [
     "PLANNING",
-    "RETRIEVING",
-    "NORMALIZED",
-    "VERIFY_1",
     "SCREENED",
-    "VERIFY_2",
     "OUTLINED",
     "DRAFTED",
-    "VERIFY_3",
-    "CITATION_LOCKED",
-    "HUMANIZED_1",
-    "HUMANIZED_2",
-    "HUMANIZED_3",
+    "QA_VERIFIED",
     "RENDERED",
     "DELIVERED",
 ]
@@ -55,7 +55,7 @@ class StageContext:
 
 
 class StateMachine:
-    """13 节点状态机控制器。
+    """7 节点状态机控制器。
 
     用法:
         sm = StateMachine(task_id="task_abc")
@@ -69,7 +69,7 @@ class StateMachine:
 
     def current_stage(self) -> str | None:
         """返回最近一个 status='running' 或最后通过的阶段名。"""
-        with SessionLocal() as db:
+        with db_session.SessionLocal() as db:
             last_running = (
                 db.query(TaskStageModel)
                 .filter_by(task_id=self.task_id, status="running")
@@ -88,7 +88,7 @@ class StateMachine:
 
     def checkpoint(self) -> str | None:
         """返回最后一个 status=pass 的阶段名(用于断点续跑)。"""
-        with SessionLocal() as db:
+        with db_session.SessionLocal() as db:
             row = (
                 db.query(TaskStageModel)
                 .filter_by(task_id=self.task_id, status="pass")
@@ -105,7 +105,7 @@ class StateMachine:
         if idx == 0:
             return True
         prev_stages = STAGES[:idx]
-        with SessionLocal() as db:
+        with db_session.SessionLocal() as db:
             passed = {
                 r.stage for r in db.query(TaskStageModel)
                 .filter(TaskStageModel.task_id == self.task_id, TaskStageModel.status == "pass")
@@ -122,7 +122,7 @@ class StateMachine:
         """
         now = datetime.now(timezone.utc)
         exited = now if status in ("pass", "fail", "skipped") else None
-        with SessionLocal() as db:
+        with db_session.SessionLocal() as db:
             row = (
                 db.query(TaskStageModel)
                 .filter(

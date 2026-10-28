@@ -334,12 +334,17 @@ class AlertManager:
             "count": alert.count,
             "ts": alert.ts,
         }).encode("utf-8")
-        req = _request.Request(
-            url, data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
-        )
-        # webhook 失败不影响主流程：告警是旁路，不能反噬爬取
+        # webhook 失败不影响主流程：告警是旁路，不能反噬爬取。
+        # SSRF 收窄:webhook URL 来自配置(CNKI_ALERT_WEBHOOK_URL),请求前
+        # 经 validate_external_url 校验(仅放行公网 http/https,内联于
+        # Request 构造,静态可见);内网地址校验失败按旁路语义静默跳过。
         try:
+            from security.auth import validate_external_url
+
+            req = _request.Request(
+                validate_external_url(url), data=payload,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
             _request.urlopen(req, timeout=5)
         except Exception:
             pass

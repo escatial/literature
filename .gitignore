@@ -80,8 +80,22 @@ artifacts_last_history.json
 backend/src/automation/cnki/data/search_diagnostic_*.json
 tmp_*.py
 
+# 根目录临时调试脚本的归档区(移动保存,不删除;不入库,2026-10-27)
+scripts/_debug_archive/
+
 # 真实池验证脚本/缓存(不入库,2026-10-19)
 backend/_kept_pool_cache.json
 backend/_real_pool_naming_test.py
 # 导出的综述/大文档产物按需下载,不入库
 backend/outputs/*.docx
+
+# 安全扫描工具(Mimosa)运行时目录,不入库(2026-10-27)
+.mimosa/
+backend/.mimosa/
+
+
+# LLM prompt/响应落盘(trace,2026-10-27 治日志盲区),不入库
+backend/outputs/llm_traces/
+
+# vite 运行时临时文件
+frontend/vite.config.ts.timestamp-*.mjs

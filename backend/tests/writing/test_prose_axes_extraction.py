@@ -6,6 +6,9 @@
 避免动用 LLM 二次转换;_plan_theme_axes 在 JSON 解析失败后先走这条
 零成本路径,再降级到 LLM 抢救 —— 这是主题划分 agent 循环中
 "解析失败 → 换解析策略再试"的一层。
+
+2026-10-26 事故后 _parse_prose_axes 改为纯解析器:只提取候选 items,
+准入决策(名称校验/判重/截断)全部收敛到唯一出口 _normalize_axes。
 """
 import writing.classifier as clf
 from retrieval.types import Paper, Source
@@ -35,42 +38,47 @@ def _paper(i: int) -> Paper:
 
 
 def test_parse_prose_axes_extracts_numbered_bold_themes():
-    axes = clf._parse_prose_axes(_PROSE, 40, "zh")
+    axes = clf._normalize_axes(clf._parse_prose_axes(_PROSE), 40, "zh")
     assert [a.name for a in axes] == ["区域品牌建设", "电商营销渠道", "消费者购买意愿"]
 
 
 def test_parse_prose_axes_keeps_rq_from_dash_tail():
     """编号项破折号后的说明文字足够长时,作为该轴的研究问题保留。"""
-    axes = clf._parse_prose_axes(_PROSE, 40, "zh")
+    axes = clf._normalize_axes(clf._parse_prose_axes(_PROSE), 40, "zh")
     assert axes[0].research_question
     assert "品牌" in axes[0].research_question
 
 
 def test_parse_prose_axes_dedups_bold_and_numbered_forms():
     """同一主题以编号+粗体重复出现时只保留一条,粗体分支不重复入列。"""
-    axes = clf._parse_prose_axes(_PROSE, 40, "zh")
-    names = [a.name for a in axes]
+    items = clf._parse_prose_axes(_PROSE)
+    names = [str(it.get("name")) for it in items]
     assert len(names) == len(set(names))
 
 
 def test_parse_prose_axes_bare_bold_without_numbers():
     """MiniMax 也可能输出不带编号的裸粗体标题,同样要能提取。"""
     raw = "建议主题如下:\n\n**冷链物流效率**\n\n**质量安全认证**\n\n以上。"
-    axes = clf._parse_prose_axes(raw, 20, "zh")
+    axes = clf._normalize_axes(clf._parse_prose_axes(raw), 20, "zh")
     assert [a.name for a in axes] == ["冷链物流效率", "质量安全认证"]
 
 
-def test_parse_prose_axes_filters_narrative_junk():
-    """叙述性引导句/过短碎片不能混进主题轴。"""
+def test_prose_pipeline_filters_narrative_junk_at_single_gate():
+    """叙述性引导句在解析层保留为候选,由唯一收口点拒绝。"""
     raw = (
         "首先我们来看第一个主题。\n"
         "1. **近年来** - 相关研究不断涌现。\n"
         "2. **产业链视角下的养殖户组织模式** - 论文探讨组织化程度。\n"
+        "3. **养殖户合作行为** - 论文研究合作意愿。\n"
     )
-    axes = clf._parse_prose_axes(raw, 20, "zh")
-    names = [a.name for a in axes]
-    assert "近年来" not in names
-    assert "产业链视角下的养殖户组织模式" in names
+    items = clf._parse_prose_axes(raw)
+    # 纯解析器不做准入决策:"近年来"也会出现在候选里
+    assert "近年来" in {str(it.get("name")) for it in items}
+    axes = clf._normalize_axes(items, 20, "zh")
+    axis_names = [a.name for a in axes]
+    assert "近年来" not in axis_names
+    assert "产业链视角下的养殖户组织模式" in axis_names
+    assert "养殖户合作行为" in axis_names
 
 
 def test_plan_theme_axes_accepts_prose_without_llm_salvage(monkeypatch):

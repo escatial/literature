@@ -102,7 +102,7 @@ def _run_stream_with_synthesis(monkeypatch, tmp_events):
             captured["theme1_has_synthesis"] = bool(
                 (synthesis_map or {}).get("theme_1")
             )
-        yield "", True, _section_result(spec)
+        yield {"kind": "done", "result": _section_result(spec)}
 
     monkeypatch.setattr(orch, "write_section_stream", fake_write_section_stream)
 
@@ -141,7 +141,7 @@ def test_stream_skips_synthesis_when_disabled(monkeypatch):
     monkeypatch.setattr(orch, "_retry_section_quality", lambda **kw: kw["result"])
 
     def fake_write_section_stream(spec, topic, groups_, section_papers, **kw):
-        yield "", True, _section_result(spec)
+        yield {"kind": "done", "result": _section_result(spec)}
     monkeypatch.setattr(orch, "write_section_stream", fake_write_section_stream)
 
     events = list(generate_review_stream(
@@ -152,6 +152,57 @@ def test_stream_skips_synthesis_when_disabled(monkeypatch):
     assert "synthesis_started" not in text
     assert '"flow_stats"' in text
     assert '"synthesis_themes": 0' in text
+
+
+# ---------- 过程透明化:思考/步骤事件 ----------
+
+def test_stream_emits_reasoning_and_step_events(monkeypatch):
+    """思考增量与步骤事件必须进 SSE;思考绝不混入正文 content。"""
+    monkeypatch.setenv("WRITING_SYNTHESIS", "0")
+    monkeypatch.setenv("WRITING_QA_ENABLED", "0")
+    papers = [_paper("lit_a"), _paper("lit_b"), _paper("lit_c")]
+    groups = [Group(name="数字技术使用研究", lit_ids=["lit_a", "lit_b", "lit_c"])]
+
+    def fake_write_section_stream(spec, topic, groups_, section_papers, **kw):
+        yield {"kind": "step", "step": "prepare_context", "status": "start",
+               "message": "构建上下文"}
+        yield {"kind": "reasoning", "delta": "先梳理文献脉络再下笔"}
+        yield {"kind": "token", "delta": "张三(2023)指出X有效。"}
+        yield {"kind": "done", "result": _section_result(spec)}
+    monkeypatch.setattr(orch, "write_section_stream", fake_write_section_stream)
+    monkeypatch.setattr(orch, "_retry_section_quality", lambda **kw: kw["result"])
+
+    published: list[tuple[str, dict]] = []
+
+    def fake_polish(result, papers_, *, progress=None):
+        # 带外 progress:模拟润色闭环在生成器挂起期间上报步骤
+        if progress is not None:
+            progress("section_step", {"step": "humanize", "status": "ok",
+                                      "message": "润色完成", "seconds": 1.2})
+        return result
+    monkeypatch.setattr(orch, "_polish_and_verify_section", fake_polish)
+
+    events = list(generate_review_stream(
+        topic="研究主题", papers=papers, classify_mode="theme",
+        do_screening=False, confirmed_groups=groups,
+        progress=lambda ev, data: published.append((ev, data)),
+    ))
+    text = "".join(events)
+    assert '"section_step"' in text
+    assert '"prepare_context"' in text
+    assert '"section_reasoning"' in text
+    assert "先梳理文献脉络再下笔" in text
+
+    # 思考文本不得进入交付正文
+    done_events = [e for e in events if '"section_done"' in e]
+    assert done_events
+    done_data = json.loads(done_events[0].removeprefix("data: "))
+    assert "先梳理文献脉络再下笔" not in done_data["data"]["content"]
+
+    # 带外上报的步骤带章节定位字段
+    step_pubs = [d for ev, d in published if ev == "section_step"]
+    assert any(d["step"] == "humanize" for d in step_pubs)
+    assert all("key" in d and "index" in d for d in step_pubs)
 
 
 def test_stream_degrades_when_synthesis_fails(monkeypatch):
@@ -167,7 +218,7 @@ def test_stream_degrades_when_synthesis_fails(monkeypatch):
     monkeypatch.setattr(orch, "_retry_section_quality", lambda **kw: kw["result"])
 
     def fake_write_section_stream(spec, topic, groups_, section_papers, **kw):
-        yield "", True, _section_result(spec)
+        yield {"kind": "done", "result": _section_result(spec)}
     monkeypatch.setattr(orch, "write_section_stream", fake_write_section_stream)
 
     events = list(generate_review_stream(

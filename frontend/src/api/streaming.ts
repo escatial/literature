@@ -1,5 +1,9 @@
-/** SSE 流式写作客户端:逐章实时回填;两阶段模式(主题划分→用户确认→正文写作)。*/
+/** SSE 流式写作客户端:逐章实时回填;两阶段模式(主题划分→用户确认→正文写作)。
+ *  C7:事件解析收敛到 api/sseTypes.parseSSELine(类型化判别联合),
+ *  阶段判断以事件 phase 字段为准(替代界面文案匹配)。 */
 import { getWritingStreamURL, getWritingPlanStreamURL, getWritingStopURL } from '@/config/api';
+import { AUTH_TOKEN_KEY } from './auth';
+import { parseSSELine, phaseCanRegressTo } from './sseTypes';
 import type { Paper, WritingRequest, WritingResponse } from './types';
 
 export type StreamPhase =
@@ -15,7 +19,10 @@ export type StreamPhase =
   | 'error';
 
 export async function stopWritingRequest(): Promise<void> {
-  await fetch(getWritingStopURL(), { method: 'POST' });
+  await fetch(getWritingStopURL(), {
+    method: 'POST',
+    headers: { 'X-Auth-Token': localStorage.getItem(AUTH_TOKEN_KEY) ?? '' },
+  });
 }
 
 /** 《文献相关性分级清单》的一行 */
@@ -119,6 +126,17 @@ export interface ReviewBlueprint {
   }[];
 }
 
+/** Agent 执行过程面板的一步(工具调用过程) */
+export interface SectionStep {
+  id: number;
+  /** 机器名: prepare_context / llm_stream / citation_inject / humanize / qa_round … */
+  step: string;
+  label: string;
+  status: 'running' | 'ok' | 'fail';
+  at: string;
+  seconds?: number;
+}
+
 export interface StreamState {
   phase: StreamPhase;
   relevanceReport: RelevanceReport | null;
@@ -140,6 +158,10 @@ export interface StreamState {
   elapsedSeconds: number;
   waitingSeconds: number;
   currentSection: { key: string; title: string; content: string } | null;
+  /** 当前章节的模型思考过程(reasoning 流式增量,仅展示不入正文) */
+  currentReasoning: string;
+  /** Agent 执行过程步骤(section_step 事件按序收集) */
+  sectionSteps: SectionStep[];
   /** QA 阶段进度(qa_started 置位,前端可展示「核查中」状态) */
   qaProgress: { checks: string[] } | null;
   /** QA 核查结果(qa_done 置位) */
@@ -181,6 +203,8 @@ function createInitialState(): StreamState {
     elapsedSeconds: 0,
     waitingSeconds: 0,
     currentSection: null,
+    currentReasoning: '',
+    sectionSteps: [],
     qaProgress: null,
     qaResult: null,
     detail: null,
@@ -202,7 +226,10 @@ async function consumeWritingSSE(
   // 凭空出现的"HTTP 500:服务器内部错误"还得手点重试
   const doFetch = () => fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Auth-Token': localStorage.getItem(AUTH_TOKEN_KEY) ?? '',
+    },
     body: JSON.stringify(req),
     signal,
   });
@@ -241,6 +268,42 @@ async function consumeWritingSSE(
     const item = { id: ++activitySeq, at: new Date().toLocaleTimeString(), message };
     state.activityLog = [...state.activityLog, item].slice(-80);
   };
+  let stepSeq = 0;
+  /** section_step 事件:start 追加一行,ok/fail 就地收敛最近同名 running 行 */
+  const applyStep = (data: any) => {
+    const stepName = String(data.step ?? '');
+    if (!stepName) return;
+    const status: SectionStep['status'] =
+      data.status === 'ok' ? 'ok' : data.status === 'fail' ? 'fail' : 'running';
+    const message = String(data.message ?? stepName);
+    const seconds = typeof data.seconds === 'number' ? data.seconds : undefined;
+    const runningIdx = state.sectionSteps.findIndex(
+      (s) => s.step === stepName && s.status === 'running',
+    );
+    if (status === 'running' || runningIdx < 0) {
+      state.sectionSteps = [...state.sectionSteps, {
+        id: ++stepSeq,
+        step: stepName,
+        label: message,
+        status,
+        at: new Date().toLocaleTimeString(),
+        seconds,
+      }].slice(-40);
+    } else {
+      const next = state.sectionSteps.slice();
+      next[runningIdx] = { ...next[runningIdx], status, label: message, seconds };
+      state.sectionSteps = next;
+    }
+    // 只把收敛结果写进活动日志,running 行不写(步骤面板已实时可见)
+    if (status !== 'running') {
+      addActivity(`${message}${seconds != null ? `(${seconds}s)` : ''}`);
+    }
+  };
+  /** 每章开始:清空上一章的思考与步骤现场 */
+  const resetSectionTrace = () => {
+    state.currentReasoning = '';
+    state.sectionSteps = [];
+  };
   const ticker = window.setInterval(() => {
     if (state.phase === 'complete' || state.phase === 'error') return;
     const now = Date.now();
@@ -270,32 +333,18 @@ async function consumeWritingSSE(
     for (const part of parts) {
       const lines = part.split('\n').filter(Boolean);
       for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload) continue;
-        let evt: { event: string; data: any };
-        try {
-          evt = JSON.parse(payload);
-        } catch {
-          continue;
-        }
+        // C7:单一解析入口(纯函数,类型化判别联合);坏帧静默跳过(与旧一致)
+        const evt = parseSSELine(line);
+        if (!evt) continue;
 
         if (evt.event !== 'heartbeat') {
           lastProgressAt = Date.now();
           state.waitingSeconds = 0;
         }
+        const evtData = evt.data as Record<string, unknown>;
         switch (evt.event) {
-          case 'agent_state': {
-            state.harness = evt.data.harness ?? null;
-            const h = state.harness;
-            if (h?.error) {
-              state.detail = `Agent ${h.stage ?? '任务'} 已阻断：${h.error}`;
-              addActivity(state.detail ?? '模型输出格式不符合协议，正在自动修复...');
-            } else if (h?.stage) {
-              state.detail = `Agent 阶段：${h.stage} · 第 ${h.attempt ?? 0} 轮 · 状态 ${h.status ?? 'running'}`;
-            }
-            break;
-          }
+          // C7:agent_state 分支已删除 —— 后端已无 agent_state 产出方
+          // (grep 零命中,契约清单见 api/sseTypes.ts),属死分支清理。
           case 'heartbeat':
             state.elapsedSeconds = Math.max(
               state.elapsedSeconds,
@@ -306,11 +355,12 @@ async function consumeWritingSSE(
             onUpdate({ ...state });
             break;
           case 'start':
-            // 阶段2的 start 事件可能因代理缓冲晚于 writing_started 到达，
-            // 不能把已经进入正文的状态回退成“初始化中”。
-            if (!state.activityLog.some((item) => item.message.includes('主题已确认，开始生成综述正文'))) {
+            // C7:以 phase 防回退替代界面文案匹配 —— 阶段2的 start 可能因
+            // 代理缓冲晚于 writing_started 到达,不能把已进入正文/确认点的
+            // 状态回退成“初始化中”。
+            if (phaseCanRegressTo(state.phase, 'start')) {
               state.phase = 'start';
-              state.detail = `已接收 ${evt.data.total_papers ?? 0} 篇文献，准备启动综述写作...`;
+              state.detail = `已接收 ${evtData.total_papers ?? 0} 篇文献，准备启动综述写作...`;
               addActivity(state.detail ?? 'AI 质检正在运行');
             }
             break;
@@ -322,9 +372,12 @@ async function consumeWritingSSE(
             break;
           case 'screening_started':
             state.phase = 'screening';
+            // 批次数不在前端估算(批大小由后端 _SCREENING_BATCH_SIZE 决定,
+            // 前端硬编码会与后端漂移):初始置 0,等 screening_progress 事件
+            // 携带后端真实 total_batches 后覆盖。
             state.screeningProgress = {
               batch: 0,
-              totalBatches: Math.ceil(Number(evt.data.total ?? 0) / 24),
+              totalBatches: 0,
               processed: 0,
               total: Number(evt.data.total ?? 0),
               status: 'started',
@@ -360,12 +413,47 @@ async function consumeWritingSSE(
             break;
           }
           case 'classify_started':
-            if (!state.activityLog.some((item) => item.message.includes('主题已确认，开始生成综述正文'))) {
+            // C7:phase 防回退(此前按活动日志文案判断,后端改文案即坏)
+            if (phaseCanRegressTo(state.phase, 'classify')) {
               state.phase = 'classify';
             }
-            state.detail = `正在按${evt.data.classify_mode === 'theme' ? '主题' : '国内外'}方式进行文献分组...`;
+            state.detail = `正在按${evtData.classify_mode === 'theme' ? '主题' : '国内外'}方式进行文献分组...`;
             addActivity(state.detail ?? 'AI 质检正在运行');
             break;
+          case 'readthrough_started': {
+            // W 批 R1 通读笔记进度:发生在 classify 期(定轴之前)。
+            // 无 phase 字段,必须走防回退守卫 —— 高位阶段(writing 等)已
+            // 进入时(代理缓冲导致事件迟到),不得把状态回退为 classify。
+            if (phaseCanRegressTo(state.phase, 'classify')) {
+              state.phase = 'classify';
+            }
+            state.detail = evt.data.message
+              ?? `正在分块通读 ${evt.data.papers ?? 0} 篇文献并记录笔记...`;
+            addActivity('正在通读文献,先读后划分主题...');
+            break;
+          }
+          case 'readthrough_chunk_done': {
+            if (phaseCanRegressTo(state.phase, 'classify')) {
+              state.phase = 'classify';
+            }
+            state.detail = `正在通读文献(${evt.data.done ?? 0}/${evt.data.total ?? 0} 块)，已记录 ${evt.data.notes ?? 0} 条笔记...`;
+            break;
+          }
+          case 'readthrough_done': {
+            if (phaseCanRegressTo(state.phase, 'classify')) {
+              state.phase = 'classify';
+            }
+            const notesCount = Number(evt.data.notes ?? 0);
+            const papersCount = Number(evt.data.papers ?? 0);
+            const failedChunks = Number(evt.data.failed_chunks ?? 0);
+            state.detail = evt.data.message
+              ?? `通读完成：${notesCount}/${papersCount} 篇已形成笔记，正在归纳主题轴...`;
+            addActivity(
+              `文献通读完成(${notesCount}/${papersCount} 篇笔记` +
+              `${failedChunks > 0 ? `，${failedChunks} 块降级原文直通` : ''})，进入主题归纳`,
+            );
+            break;
+          }
           case 'classify_progress': {
             // pipeline 内嵌 AI 质检 agent 的实时进度(感知查组/提交被拒/超时)
             state.phase = 'classify';
@@ -468,7 +556,7 @@ async function consumeWritingSSE(
             state.phase = 'await_confirm';
             state.groups = evt.data.groups ?? state.groups;
             state.screenedOutIds = evt.data.screened_out_ids ?? state.screenedOutIds;
-            state.plan = {
+            const planPayload = {
               groups: evt.data.groups ?? [],
               section_titles: evt.data.section_titles ?? [],
               papers: evt.data.papers ?? [],
@@ -477,15 +565,17 @@ async function consumeWritingSSE(
               classification: evt.data.classification,
               blueprint: evt.data.blueprint,
             };
-            state.detail = state.plan.classify_fallback
+            state.plan = planPayload;
+            state.detail = planPayload.classify_fallback
               ? `模型主题划分未完全达标，已启用本地多主题兜底；请检查各主题后再开始写作。`
-              : state.plan.classification?.degraded
+              : planPayload.classification?.degraded
                 ? `模型主题轴方案未交付，本次为本地快速聚类兜底结果；主题名为标题证据命名，建议重试或手动调整主题名。`
-                : `主题划分完成，共 ${state.plan.groups.length} 个主题，请确认或调整后开始写作。`;
+                : `主题划分完成，共 ${planPayload.groups.length} 个主题，请确认或调整后开始写作。`;
             break;
           }
           case 'section_preparing':
             state.phase = 'writing';
+            resetSectionTrace();
             state.progress = { index: evt.data.index, total: evt.data.total };
             state.currentSection = {
               key: evt.data.key,
@@ -496,6 +586,7 @@ async function consumeWritingSSE(
             break;
           case 'section_started':
             state.phase = 'writing';
+            resetSectionTrace();
             state.progress = { index: evt.data.index, total: evt.data.total };
             state.currentSection = {
               key: evt.data.key,
@@ -506,6 +597,41 @@ async function consumeWritingSSE(
             };
             state.detail = `正在流式生成《${evt.data.title}》...`;
             break;
+          case 'section_notes_done': {
+            // W 批 R1' 节级通读笔记完成:写作期内经带外通道发布,无 phase
+            // 字段;对齐 section_step 展示模式(成功收敛为 ok 行,失败为
+            // fail 行并写活动日志),失败的降级语义对用户如实可见。
+            state.phase = 'writing';
+            applyStep({
+              step: 'section_notes',
+              status: evt.data.notes === true ? 'ok' : 'fail',
+              message: evt.data.notes === true
+                ? `文献笔记完成（通读 ${evt.data.papers ?? 0} 篇）`
+                : '文献笔记失败,改用既有证据层',
+            });
+            break;
+          }
+          case 'section_reasoning': {
+            // 思考过程增量:仅上屏,绝不拼进正文 content
+            state.phase = 'writing';
+            if (state.currentSection && state.currentSection.key !== evt.data.key) {
+              state.currentSection = {
+                key: evt.data.key,
+                title: evt.data.title,
+                content: '',
+              };
+              resetSectionTrace();
+            }
+            state.currentReasoning = (
+              state.currentReasoning + (evt.data.delta ?? '')
+            ).slice(-12000);
+            break;
+          }
+          case 'section_step': {
+            state.phase = evt.data.step?.startsWith('qa_') ? 'qa' : state.phase;
+            applyStep(evt.data);
+            break;
+          }
           case 'section_token': {
             state.phase = 'writing';
             const currentSection = (!state.currentSection || state.currentSection.key !== evt.data.key)

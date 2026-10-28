@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.llm.client import (
@@ -67,8 +67,15 @@ def review_providers_health() -> dict:
 
 
 @router.post("/test", response_model=LLMTestResponse)
-def review_llm_test() -> LLMTestResponse:
-    """发送最小 hello 请求，验证当前 LLM provider 的真实连通性。"""
+def review_llm_test(request: Request) -> LLMTestResponse:
+    """发送最小 hello 请求，验证当前 LLM provider 的真实连通性。
+
+    按发起用户的 LLM 配置测试(自定义 base_url/key 优先,未配置回落系统 env)。
+    C1:请求作用域绑定 —— try/finally 恢复上下文,线程池复用防泄漏。
+    """
+    from security.auth import apply_user_llm
+
+    llm_reset = apply_user_llm(getattr(request.state, "user", None))
     started = time.perf_counter()
     try:
         text = messages_create(
@@ -92,6 +99,8 @@ def review_llm_test() -> LLMTestResponse:
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM 测试失败: {exc}") from exc
+    finally:
+        llm_reset()
 
 
 class ModelInfo(BaseModel):
@@ -104,26 +113,89 @@ class ModelSelectRequest(BaseModel):
     model_id: str = Field(..., min_length=1)
 
 
+def _user_llm_ready(user) -> bool:
+    return bool(
+        user is not None
+        and (user.llm_base_url or "").strip()
+        and (user.llm_api_key or "").strip()
+    )
+
+
 @router.get("/models/upstream")
-def fetch_upstream_models() -> dict:
-    """从 MiniMax 上游 API 获取所有可用模型。"""
-    from src.llm.client import fetch_available_models, get_model_override
+def fetch_upstream_models(request: Request) -> dict:
+    """获取可用模型列表——用户感知:已配置自定义 LLM 的用户拉自己的上游,
+    未配置的回落系统 env MiniMax。响应带 user_configured 供前端提醒。"""
+    from src.llm.client import (
+        fetch_available_models,
+        fetch_models_for,
+        get_model_override,
+    )
+
+    user = getattr(request.state, "user", None)
+    if _user_llm_ready(user):
+        try:
+            models = fetch_models_for(
+                (user.llm_kind or "openai").strip().lower(),
+                user.llm_base_url.strip(), user.llm_api_key.strip(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "models": [], "active": user.llm_model or "",
+                "user_configured": True, "source": "user",
+                "error": f"获取模型列表失败:{exc}",
+            }
+        active = (user.llm_model or "").strip()
+        for m in models:
+            m["active"] = (m["id"] == active)
+        return {
+            "models": models, "active": active,
+            "user_configured": True, "source": "user",
+        }
+
     models = fetch_available_models("minimax")
     active = get_model_override()
     for m in models:
         m["active"] = (m["id"] == active)
-    return {"models": models, "active": active}
+    return {
+        "models": models, "active": active,
+        "user_configured": False, "source": "system",
+    }
 
 
 @router.post("/models/select")
-def select_model(req: ModelSelectRequest) -> dict:
-    """运行时切换 MiniMax 模型(立即生效,不需要重启)。"""
-    from src.llm.client import set_model_override, fetch_available_models
+def select_model(req: ModelSelectRequest, request: Request) -> dict:
+    """切换模型——用户感知:已配置用户改自己的 llm_model(只影响自己的任务);
+    未配置用户保持旧语义(系统级覆盖,影响所有人)。"""
+    from src.llm.client import fetch_models_for, set_model_override, fetch_available_models
+
+    user = getattr(request.state, "user", None)
+    if _user_llm_ready(user):
+        available = {
+            m["id"] for m in fetch_models_for(
+                (user.llm_kind or "openai").strip().lower(),
+                user.llm_base_url.strip(), user.llm_api_key.strip(),
+            )
+        }
+        if req.model_id not in available:
+            raise HTTPException(
+                400, f"模型 {req.model_id} 不在你的上游可用列表中。可用: {', '.join(sorted(available))}"
+            )
+        from db import session as db_session
+        from db.models import UserModel
+
+        with db_session.SessionLocal() as db:
+            row = db.query(UserModel).filter_by(user_id=user.user_id).one_or_none()
+            if row is None:
+                raise HTTPException(404, "用户不存在")
+            row.llm_model = req.model_id
+            db.commit()
+        return {"selected": req.model_id, "ok": True, "scope": "user"}
+
     available = {m["id"] for m in fetch_available_models("minimax")}
     if req.model_id not in available:
         raise HTTPException(400, f"模型 {req.model_id} 不在可用列表中。可用: {', '.join(sorted(available))}")
     set_model_override(req.model_id)
-    return {"selected": req.model_id, "ok": True}
+    return {"selected": req.model_id, "ok": True, "scope": "system"}
 
 
 @router.get("/models/current")

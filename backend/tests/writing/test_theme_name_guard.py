@@ -120,6 +120,8 @@ def test_en_pool_english_names_untouched():
 # ---------- harness 结构核查:名字质量进检查集 ----------
 
 def test_harness_inspects_name_quality():
+    # ⑦恢复真实检查(2026-10-27):标题碎片名阻断(ok=False),
+    # 短名/零重叠告警走 metrics;旧 bad_names 字段由 unacceptable 承接。
     from agent.harness import inspect_theme_groups
     groups = [
         clf.Group(name="背景下福清沙浦镇海产品内容营销策略研究", lit_ids=["lit_001"]),
@@ -128,9 +130,11 @@ def test_harness_inspects_name_quality():
     checks = inspect_theme_groups(groups, LEAKED_PAPERS)
     by_name = {c.name: c for c in checks}
     assert "theme_name_quality" in by_name
-    # 降为告警:不阻断但通过 metrics 暴露给前端
-    assert by_name["theme_name_quality"].passed is True  # 不阻断
-    assert by_name["theme_name_quality"].metrics.get("bad_names"), "应有 bad_names 记录"
+    # 碎片名("背景下福清…"标题中段切片)必须阻断,不再放行进确认面板
+    assert by_name["theme_name_quality"].passed is False
+    metrics = by_name["theme_name_quality"].metrics
+    assert "背景下福清沙浦镇海产品内容营销策略研究" in metrics.get("unacceptable", [])
+    assert "背景下福清沙浦镇海产品内容营销策略研究" in metrics.get("blocked", [])
 
 
 # ---------- finalize 终检:碎片名触发证据重命名,不能原样过关 ----------

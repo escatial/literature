@@ -10,7 +10,7 @@ import json
 import logging
 import math
 import os
-import urllib.request
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -86,6 +86,82 @@ def _format_chinese_index(idx: int) -> str:
     return str(idx)
 
 
+# ============================================================================
+# C3(2026-10-27) 状态机接线:7 节点 task_stages 旁路记录。
+# - 状态机是旁路:任何状态机异常/前序缺失都不得阻断写作主链路;
+# - task_id 缺省(直调/单测)时不接线;
+# - 段型阶段(PLANNING/DRAFTED/QA_VERIFIED)用 scope 包裹,异常自动 fail;
+# - 时点型阶段(SCREENED/OUTLINED/RENDERED/DELIVERED)完成时点 record pass。
+# ============================================================================
+def _writing_sm(task_id: str | None):
+    """task_id 存在时返回 StateMachine,否则 None(不接线)。"""
+    if not task_id:
+        return None
+    from statemachine.controller import StateMachine
+
+    return StateMachine(task_id=task_id)
+
+
+def _stage_ctx(sm, name: str):
+    """段型阶段上下文。can_enter 不满足(如绕过阶段1直调)时退化为
+    nullcontext —— 记录降级,不阻断写作。"""
+    from contextlib import nullcontext
+
+    if sm is None:
+        return nullcontext()
+    try:
+        if sm.can_enter(name):
+            return sm.stage(name)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("状态机 can_enter(%s) 检查失败,降级不记录: %s", name, exc)
+    return nullcontext()
+
+
+def _stage_pass(sm, name: str) -> None:
+    """时点型阶段:完成时点直接记 pass(幂等;失败只 warning,不阻断)。"""
+    if sm is None:
+        return
+    try:
+        sm.record(stage=name, status="pass")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("状态机记录 %s=pass 失败(旁路,不阻断): %s", name, exc)
+
+
+class _StageSpan:
+    """生成器内包裹段型阶段的轻量句柄。
+
+    生成器函数体内不便对大段既有代码整体缩进(扰动大、易错),以显式
+    __enter__/__exit__ 等价 sm.stage() with 语义:
+    - 成功退出:显式置 ctx.status="pass" 后 __exit__(None,None,None);
+    - 失败退出:finally 捕获到活动异常 → __exit__(RuntimeError, msg, None),
+      _StageScope 按异常路径落 fail(含 detail),与 with 异常语义一致;
+    - nullcontext 降级时全部为空操作。
+    """
+
+    def __init__(self, sm, name: str) -> None:
+        self._scope = _stage_ctx(sm, name)
+        self._entered = False
+
+    def __enter__(self) -> None:
+        self._scope.__enter__()
+        self._entered = True
+
+    def exit_ok(self) -> None:
+        if not self._entered:
+            return
+        ctx = getattr(self._scope, "ctx", None)
+        if ctx is not None:
+            ctx.status = "pass"
+        self._scope.__exit__(None, None, None)
+        self._entered = False
+
+    def exit_failed(self, message: str) -> None:
+        if not self._entered:
+            return
+        self._scope.__exit__(RuntimeError, RuntimeError(message), None)
+        self._entered = False
+
+
 def build_review_sections(
     classify_mode: str,
     groups: list[Group],
@@ -107,13 +183,16 @@ def build_review_sections(
     )
     sections: list[SectionSpec] = []
     # 内部导入避免循环依赖
-    from writing.classifier import _clean_group_name, _group_name_acceptable
+    from writing.classifier import (
+        _clean_group_name,
+        _group_name_acceptable,
+        _zh_theme_name_too_short,
+    )
 
     used_names: set[str] = set()
 
     for idx, group in enumerate(groups, start=1):
         clean_name = _clean_group_name(group.name)
-        from writing.classifier import _zh_theme_name_too_short
         if (
             not _group_name_acceptable(clean_name, pool_language=pool_language)
             or _zh_theme_name_too_short(clean_name, pool_language)
@@ -169,6 +248,30 @@ class ReviewResult:
     qa_report: dict | None = None
 
 
+# ⑨group_diagnostic 停用词表(2026-10-27 扩充):学术套话/功能词不作为
+# 主题边界证据;跨组泛词(出现于 >40% 组)另由文档频率统计剔除。
+_DIAGNOSTIC_STOPWORDS = frozenset({
+    "研究", "分析", "方法", "问题", "相关", "本文", "结果", "结论", "基于",
+    "基于此", "因此", "此外", "然而", "其次", "首先", "最后", "综上", "同时",
+    "但是", "由于", "通过", "对于", "随着", "认为", "指出", "提出", "进行",
+    "以及", "其中", "之间", "方面", "要素", "影响", "作用", "情况", "现状",
+    "重要", "主要", "关键", "显著", "有效", "不同", "更多", "进一步",
+    "study", "studies", "research", "analysis", "method", "methods", "approach",
+    "this", "that", "these", "those", "with", "without", "based", "and", "the",
+    "are", "for", "from", "into", "is", "it", "its", "of", "on", "or", "to", "using",
+    "used", "use", "can", "could", "may", "might", "will", "would", "also", "than",
+    "results", "result", "paper", "papers", "work", "works", "shown", "show",
+    "find", "findings", "important", "significant", "significantly", "main",
+    "key", "different", "various", "further", "effective", "effect", "effects",
+    "such", "data", "future", "challenge", "challenges", "learning", "new",
+    "two", "one", "were", "was", "have", "has", "had", "been", "being",
+    "however", "through", "among", "their", "they", "which", "while", "both",
+    "more", "most", "other", "others", "between", "during", "about", "how",
+    "why", "where", "but", "not", "when", "what", "who", "across", "within",
+    "over", "under", "after", "before",
+})
+
+
 def build_review_blueprint(
     topic: str,
     papers: list[Paper],
@@ -184,35 +287,73 @@ def build_review_blueprint(
     group_of = {lid: group.name for group in groups for lid in group.lit_ids}
     paper_by_id = {p.lit_id: p for p in papers}
 
+    def _diagnostic_tokens(text_value: str) -> list[str]:
+        """分词:jieba 中文分词(延迟导入,缺失回退 bigram)+ 英文词面。"""
+        tokens = _re.findall(
+            r"[A-Za-z][A-Za-z0-9-]{2,}|[\u4e00-\u9fff]+", (text_value or "").lower(),
+        )
+        zh_chunks = [t for t in tokens if _re.fullmatch(r"[\u4e00-\u9fff]+", t)]
+        words = [t for t in tokens if t not in zh_chunks]
+        if zh_chunks:
+            try:
+                # 延迟导入:jieba 缺失时回退 bigram,不阻塞主流程
+                import jieba  # noqa: PLC0415
+                for chunk in zh_chunks:
+                    words.extend(
+                        w.strip() for w in jieba.cut(chunk) if len(w.strip()) >= 2
+                    )
+            except Exception:  # noqa: BLE001
+                for chunk in zh_chunks:
+                    words.extend(chunk[i:i + 2] for i in range(len(chunk) - 1))
+        return words
+
+    def _canonical_term(word: str) -> str:
+        """英文粗单复数归并(ies→y/去尾 s)后的规范词面;中文原样。"""
+        if _re.search(r"[A-Za-z]", word):
+            variants = _classifier_mod._en_term_variants(word)
+            return sorted(variants)[0] if variants else word.lower()
+        return word
+
+    # ⑨跨组泛词统计:先对全部组做词→组文档频率,出现于 >40% 组的词是
+    # 全池通用词,不作为任何单组的边界证据。
+    _group_term_df: dict[str, int] = {}
+    for _grp in groups:
+        _grp_terms: set[str] = set()
+        for _lid in _grp.lit_ids:
+            _p = paper_by_id.get(_lid)
+            if _p is not None:
+                _grp_terms.update(_diagnostic_tokens(
+                    f"{_p.title} {_p.abstract or ''}"
+                ))
+        for _term in {_canonical_term(w) for w in _grp_terms}:
+            if _term and _term not in _DIAGNOSTIC_STOPWORDS:
+                _group_term_df[_term] = _group_term_df.get(_term, 0) + 1
+    _df_total = max(1, len(groups))
+    _df_ceiling = 0.4 * _df_total
+
     def group_diagnostic(group: Group) -> dict:
-        """Create a lightweight, evidence-linked explanation of a theme boundary."""
+        """Create a lightweight, evidence-linked explanation of a theme boundary.
+
+        ⑨升级(2026-10-27):jieba 中文分词(延迟导入,缺失回退 bigram)、
+        停用词表扩充、英文粗单复数归并、跨组泛词剔除(出现于 >40% 组的
+        通用词不再作为本组边界证据)。
+        """
         texts = [
             f"{paper_by_id[lid].title} {paper_by_id[lid].abstract or ''}"
             for lid in group.lit_ids if lid in paper_by_id
         ]
-        terms: dict[str, int] = {}
+        term_groups: dict[str, int] = {}
         for text_value in texts:
-            tokens = _re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}|[\u4e00-\u9fff]{2,}", text_value.lower())
-            for token in set(tokens):
-                if token in {
-                "研究", "分析", "方法", "问题", "相关", "本文", "结果", "结论", "基于",
-                "基于此", "因此", "此外", "然而", "其次", "首先", "最后", "综上", "同时",
-                "但是", "由于", "通过", "对于", "随着", "认为", "指出", "提出", "进行",
-                "以及", "其中", "之间", "方面", "要素", "影响", "作用", "情况", "现状",
-                "study", "studies", "research", "analysis", "method", "methods", "approach",
-                "this", "that", "these", "those", "with", "without", "based", "and", "the",
-                "are", "for", "from", "into", "is", "it", "its", "of", "on", "or", "to", "using",
-                "used", "use", "can", "could", "may", "might", "will", "would", "also", "than",
-                "results", "result", "paper", "papers", "work", "works", "shown", "show", "find", "findings",
-                "such", "data", "future", "challenge", "challenges", "learning", "new", "two", "one",
-                "were", "was", "have", "has", "had", "been", "being", "however", "through",
-                "among", "their", "they", "which", "while", "both", "more", "most", "other",
-                "others", "between", "during", "about", "how", "why", "where", "but", "not",
-                "when", "what", "who", "across", "within", "over", "under", "after", "before",
-                }:
+            for word in _diagnostic_tokens(text_value):
+                canonical = _canonical_term(word)
+                if not canonical or canonical in _DIAGNOSTIC_STOPWORDS:
                     continue
-                terms[token] = terms.get(token, 0) + 1
-        repeated = [term for term, count in sorted(terms.items(), key=lambda item: (-item[1], item[0])) if count >= 2][:5]
+                term_groups[canonical] = term_groups.get(canonical, 0) + 1
+        repeated = [
+            term
+            for term, count in sorted(term_groups.items(), key=lambda item: (-item[1], item[0]))
+            if count >= 2 and _group_term_df.get(term, 0) <= _df_ceiling
+        ][:5]
         method_hits = sorted({
             term for term in ("问卷", "访谈", "实验", "案例", "面板", "回归", "仿真", "算法", "qualitative", "quantitative")
             if any(term.lower() in text_value.lower() for text_value in texts)
@@ -306,14 +447,6 @@ def _finish_screening(
     decisions: list[dict],
     enforce_source_mix: bool = True,
 ) -> tuple[list[Paper], list[str]]:
-    # #region debug-point A:screening-state
-    try:
-        _dbg_env = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), ".dbg", "auto-cnki-retrieval.env")
-        _dbg_cfg = dict(line.strip().split("=", 1) for line in open(_dbg_env, encoding="utf-8") if "=" in line)
-        urllib.request.urlopen(urllib.request.Request(_dbg_cfg.get("DEBUG_SERVER_URL", ""), data=json.dumps({"sessionId": _dbg_cfg.get("DEBUG_SESSION_ID", "auto-cnki-retrieval"), "runId": "pre", "hypothesisId": "A", "location": "orchestrator._finish_screening", "msg": "[DEBUG] screening state", "data": {"input_count": len(papers), "decision_count": len(decisions), "sources": dict(Counter(str(p.source.value) for p in papers)), "decision_relevant": sum(d.get("relevant") is True for d in decisions), "decision_abstract_ok": sum(d.get("abstract_ok") is True for d in decisions)}}).encode(), headers={"Content-Type": "application/json"}), timeout=1).read()
-    except Exception:
-        pass
-    # #endregion
     kept_ids = {
         decision["lit_id"]
         for decision in decisions
@@ -322,12 +455,6 @@ def _finish_screening(
     screened_out = [paper.lit_id for paper in papers if paper.lit_id not in kept_ids]
     kept_papers = [paper for paper in papers if paper.lit_id in kept_ids]
     if not kept_papers:
-        # #region debug-point B:screening-empty
-        try:
-            urllib.request.urlopen(urllib.request.Request(_dbg_cfg.get("DEBUG_SERVER_URL", ""), data=json.dumps({"sessionId": _dbg_cfg.get("DEBUG_SESSION_ID", "auto-cnki-retrieval"), "runId": "pre", "hypothesisId": "B", "location": "orchestrator._finish_screening", "msg": "[DEBUG] screening empty", "data": {"kept_count": 0, "chinese_count": 0}}).encode(), headers={"Content-Type": "application/json"}), timeout=1).read()
-        except Exception:
-            pass
-        # #endregion
         reason_counts = Counter(
             str(decision.get("reason") or "未说明原因")
             for decision in decisions
@@ -769,12 +896,6 @@ def _enforce_chinese_source_mix(papers: list[Paper]) -> None:
     chinese_sources = {Source.CNKI, Source.USER_IMPORTED}
     chinese_count = sum(paper.source in chinese_sources for paper in papers)
     total_count = len(papers)
-    # #region debug-point C:source-mix
-    try:
-        urllib.request.urlopen(urllib.request.Request(_dbg_cfg.get("DEBUG_SERVER_URL", ""), data=json.dumps({"sessionId": _dbg_cfg.get("DEBUG_SESSION_ID", "auto-cnki-retrieval"), "runId": "pre", "hypothesisId": "C", "location": "orchestrator._enforce_chinese_source_mix", "msg": "[DEBUG] source mix check", "data": {"kept_count": total_count, "chinese_count": chinese_count, "required_ratio": "2/3", "sources": dict(Counter(str(p.source.value) for p in papers))}}).encode(), headers={"Content-Type": "application/json"}), timeout=1).read()
-    except Exception:
-        pass
-    # #endregion
     if chinese_count * 3 < total_count * 2:
         raise ValueError(
             "筛选后中文文献占比不足三分之二: "
@@ -998,39 +1119,68 @@ def _polish_and_verify_section(
     流程: humanize(3轮,引用保持) → article_lint → 自动修复 → 再查
     不合格的段落在此修复,而不是等到最终 QA 才暴露。
     修复失败时保留原稿(density_warning 如实标记),不伪造通过。
+    progress: 可选 (event, data) 回调,流式路径用它把润色/核查各阶段
+    作为 section_step 事件实时上报;同步路径不传,行为不变。
     """
     from humanizer.agent import humanize_three_rounds
     from qa.article_lint import check_article_text, repair_article_text
+
+    def emit(step: str, status: str, message: str, seconds: float | None = None) -> None:
+        if progress is None:
+            return
+        payload: dict[str, Any] = {"step": step, "status": status, "message": message}
+        if seconds is not None:
+            payload["seconds"] = round(seconds, 1)
+        try:
+            progress("section_step", payload)
+        except Exception as exc:  # noqa: BLE001
+            # 上报永不中断主流程(含用户停止触发的 RuntimeError)
+            log.debug("章节 %s 步骤上报失败: %s", result.key, exc)
 
     # -- Phase 1: humanize 3 轮(引用保持由 humanize 内部保证) --
     def llm_call(system, user, max_tokens=8000, **kw):
         from llm.client import messages_create
         return messages_create(system, user, max_tokens=max_tokens)
 
+    humanize_t0 = time.monotonic()
+    emit("humanize", "start", "正在润色正文(3 轮去 AI 味,引用保持)")
     try:
         polished, _diffs = humanize_three_rounds(text=result.content or "", caller=llm_call)
         if polished and polished != result.content:
             result.content = polished
+        emit("humanize", "ok", "润色完成,引用保持不变", time.monotonic() - humanize_t0)
     except Exception as exc:
         log.warning("章节 %s 润色失败,保留原文: %s", result.key, exc)
+        emit("humanize", "fail", f"润色失败,保留原文:{exc}", time.monotonic() - humanize_t0)
 
     # -- Phase 2: 章节级核查 + 自动修复 --
+    lint_t0 = time.monotonic()
+    emit("article_lint", "start", "正在做章节级质量核查(article_lint)")
+    repaired_rounds = 0
     for attempt in range(2):
         check = check_article_text([result], papers=papers)
         if check.status.value == "pass":
             break
         # 确定性修复(article_lint 自带)
         repair_article_text([result], papers=papers)
+        repaired_rounds += 1
         re_check = check_article_text([result], papers=papers)
         if re_check.status.value == "pass":
             break
         if attempt == 0:
             # 还有问题 → 再修一轮(修复函数是幂等的,二次调用安全)
             repair_article_text([result], papers=papers)
+            repaired_rounds += 1
 
     # -- Phase 3: 最终校验 --
     final = check_article_text([result], papers=papers)
     result.density_warning = final.status.value == "fail"
+    if final.status.value == "pass":
+        emit("article_lint", "ok", "章节核查通过", time.monotonic() - lint_t0)
+    else:
+        emit("article_lint", "fail",
+             f"章节核查未通过(自动修复 {repaired_rounds} 轮),已如实标记密度警告",
+             time.monotonic() - lint_t0)
     return result
 
 
@@ -1053,10 +1203,27 @@ def _retry_section_quality(
     synthesis_map: dict[str, dict] | None = None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    progress=None,
 ) -> SectionResult:
-    """在 QA 前对低质量章节做一次独立重写，避免把半成品直接交付。"""
+    """在 QA 前对低质量章节做一次独立重写，避免把半成品直接交付。
+
+    progress: 可选 (event, data) 回调,流式路径上报重写轮次;同步路径不传。
+    """
+    def emit(step: str, status: str, message: str, seconds: float | None = None) -> None:
+        if progress is None:
+            return
+        payload: dict[str, Any] = {"step": step, "status": status, "message": message}
+        if seconds is not None:
+            payload["seconds"] = round(seconds, 1)
+        try:
+            progress("section_step", payload)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("章节 %s 步骤上报失败: %s", getattr(spec, "key", "?"), exc)
+
     if not _section_requires_quality_retry(result):
         return result
+    emit("quality_retry", "start", "章节质量未达标,正在独立重写")
+    retry_t0 = time.monotonic()
     try:
         from writing.section_writer import write_section, ensure_section_evidence
         from writing.section_writer import _article_quality_score
@@ -1073,6 +1240,9 @@ def _retry_section_quality(
             new_score = _article_quality_score(retry.content or "", len(retry.citations))
             if new_score >= old_score and not _section_requires_quality_retry(retry):
                 log.info("章节 %s 通过 QA 前自动重写(attempt=%d)", getattr(spec, "key", "?"), attempt + 1)
+                emit("quality_retry", "ok",
+                     f"重写通过(第 {attempt + 1} 次尝试),引用 {len(retry.citations)} 处",
+                     time.monotonic() - retry_t0)
                 return retry
             old_score = max(old_score, new_score)
     except Exception as exc:  # noqa: BLE001
@@ -1082,7 +1252,11 @@ def _retry_section_quality(
     recovered = _evidence_recovery_section_result(spec, topic, papers)
     if not _section_requires_quality_retry(recovered):
         log.warning("章节 %s 使用确定性证据稿完成恢复", getattr(spec, "key", "?"))
+        emit("quality_retry", "ok", "重写未达标,已用确定性证据稿恢复",
+             time.monotonic() - retry_t0)
         return recovered
+    emit("quality_retry", "fail", "重写与证据稿均未达标,保留原稿并如实上报",
+         time.monotonic() - retry_t0)
     return result
 
 
@@ -1225,10 +1399,12 @@ def _run_post_write_qa(
     sections: list[SectionResult],
     reference_list: str,
     grade_map: dict[str, str],
+    progress=None,
 ) -> dict:
     """执行全流程核查;失败时由 on_fail 回调决定是否抛错。
 
     为了不在写作主链路引入硬依赖,本函数对 ImportError 宽容。
+    progress: 可选 (event, data) 回调,流式路径上报核查/修复轮次。
     """
     try:
         from qa.hooks import run_post_write_qa
@@ -1242,6 +1418,17 @@ def _run_post_write_qa(
     except Exception as exc:  # noqa: BLE001
         log.warning("qa 模块不可用,跳过全流程核查: %s", exc)
         return {"skipped": True, "reason": str(exc)}
+
+    def emit(step: str, status: str, message: str, seconds: float | None = None) -> None:
+        if progress is None:
+            return
+        payload: dict[str, Any] = {"step": step, "status": status, "message": message}
+        if seconds is not None:
+            payload["seconds"] = round(seconds, 1)
+        try:
+            progress("section_step", payload)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("QA 步骤上报失败: %s", exc)
 
     rule_overrides = os.environ.get("WRITING_QA_RULESET_OVERRIDES")
     ruleset = default_rule_set
@@ -1274,6 +1461,8 @@ def _run_post_write_qa(
     #   轮次用尽仍失败的问题如实进报告,不伪造通过。
     from qa.article_lint import repair_article_text
     for attempt in range(3):
+        round_t0 = time.monotonic()
+        emit("qa_round", "start", f"质量核查第 {attempt + 1}/3 轮运行中")
         payload = run_post_write_qa(
             runner=QARunner(ruleset),
             papers=papers,
@@ -1294,21 +1483,34 @@ def _run_post_write_qa(
         if internal_repairs:
             reference_list, _ = apply_citation_numbering(sections, papers)
         if summary.get("overall") != "fail":
+            emit("qa_round", "ok",
+                 f"质量核查第 {attempt + 1} 轮通过,共自动修复 {len(auto_repairs)} 项",
+                 time.monotonic() - round_t0)
             break
         if attempt == 0 and not internal_repairs:
             # runner 没修出东西:显式再跑一遍确定性修复(幂等),有变化就复查
+            emit("qa_deterministic_fix", "start", "首轮未通过,正在补确定性修复")
             repairs = repair_article_text(sections, papers=papers)
             if repairs:
                 auto_repairs.extend(repairs)
                 reference_list, _ = apply_citation_numbering(sections, papers)
+                emit("qa_deterministic_fix", "ok",
+                     f"确定性修复 {len(repairs)} 项,正在复查",
+                     time.monotonic() - round_t0)
                 continue
+            emit("qa_deterministic_fix", "fail", "确定性修复无可修项", time.monotonic() - round_t0)
         if attempt <= 1:
             # LLM 定向重写仍不达标的章节(段落引用密度/兜底句/裸锚点等)
+            emit("qa_llm_repair", "start", "体检未通过项进入 LLM 定向重写")
             llm_repairs = _llm_repair_failed_sections(sections, papers, summary)
             if llm_repairs:
                 auto_repairs.extend(llm_repairs)
                 reference_list, _ = apply_citation_numbering(sections, papers)
+                emit("qa_llm_repair", "ok",
+                     f"定向重写修复 {len(llm_repairs)} 章,正在复查",
+                     time.monotonic() - round_t0)
                 continue
+            emit("qa_llm_repair", "fail", "定向重写无可修复章节", time.monotonic() - round_t0)
         break  # 无可修复项或轮次用尽,如实上报剩余问题
     if payload is None:
         return {"skipped": True, "reason": "QA 未执行"}
@@ -1352,6 +1554,102 @@ def _synthesis_active(classify_mode: str, groups: list[Group]) -> bool:
         return False
     from synthesis.agent import synthesis_enabled
     return synthesis_enabled()
+
+
+def _bind_llm_trace(task_id: str | None) -> list:
+    """把 task_id 绑进 llm_trace contextvar,返回 token 列表供 finally 恢复。
+
+    trace 单实例纪律:readthrough/llm_trace 内部依赖一律写死
+    ``src.writing.llm_trace``;orchestrator 属 writing 树,直接 import
+    同一 src 实例即可,contextvar 全进程只有一份。
+    """
+    if not task_id:
+        return []
+    try:
+        from src.writing import llm_trace as _trace_mod
+
+        return [_trace_mod.set_task_id(task_id)]
+    except Exception as exc:  # noqa: BLE001
+        log.debug("llm_trace task_id 绑定失败(忽略): %s", exc)
+        return []
+
+
+def _reset_llm_trace(tokens: list) -> None:
+    if not tokens:
+        return
+    try:
+        from src.writing import llm_trace as _trace_mod
+
+        for token in tokens:
+            _trace_mod.reset_task_id(token)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("llm_trace task_id 恢复失败(忽略): %s", exc)
+
+
+def _theme_progress_bridge(raw_progress):
+    """分类 progress 单参回调桥:readthrough_* 事件升格为独立 SSE 事件名。
+
+    classifier 的 progress 协议是单参 dict(kind 字段);桥把
+    kind=readthrough_done 里的紧凑笔记收进闭包(供规划快照持久化),
+    其余原样透传 —— 既有 classify_progress 事件名与字段零改动。
+    返回 (bridged_progress, notes_collector)。
+    """
+    collected: dict[str, list] = {"notes": []}
+
+    if raw_progress is None:
+        return None, collected
+
+    def _bridge(data: dict) -> None:
+        kind = str((data or {}).get("kind") or "")
+        if kind == "readthrough_done":
+            items = data.get("items") or []
+            if isinstance(items, list):
+                collected["notes"] = list(items)
+        raw_progress(data)
+
+    return _bridge, collected
+
+
+def _prepare_section_notes(
+    spec, section_papers: list[Paper], topic: str,
+    grades: dict[str, str] | None, progress=None,
+) -> str | None:
+    """R1':每节写作前通读本节文献蒸馏笔记(先读后写)。
+
+    返回笔记文本块(None = 关闭/失败,调用方零感降级到既有证据层);
+    完成时经带外 progress 发布 section_notes_done 事件(additive)。
+    comment 章不引用文献,不触发通读。
+    """
+    try:
+        if getattr(spec, "key", "") == "comment":
+            return None
+        from src.writing.readthrough import (
+            readthrough_enabled,
+            section_notes_block,
+        )
+        if not readthrough_enabled():
+            return None
+        block = section_notes_block(
+            section_papers, topic, getattr(spec, "title", "") or "",
+            grades=grades,
+        )
+        if progress is not None:
+            try:
+                progress("section_notes_done", {
+                    "key": getattr(spec, "key", ""),
+                    "title": getattr(spec, "title", ""),
+                    "papers": len(section_papers),
+                    "notes": bool(block),
+                })
+            except Exception as exc:  # noqa: BLE001
+                log.debug("section_notes_done 事件发布失败(忽略): %s", exc)
+        return block
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "章节 %s 通读笔记失败,降级既有证据层: %s",
+            getattr(spec, "key", "?"), exc,
+        )
+        return None
 
 
 def _run_theme_classification_loop(
@@ -1409,7 +1707,10 @@ def _run_theme_classification_loop(
 
     def inspect(groups, _state: AgentState):
         nonlocal last_issues
-        checks = inspect_theme_groups(groups, papers)
+        # strategy 传入质量检查:local_fallback 豁免组名阻断(兜底稿豁免)
+        checks = inspect_theme_groups(
+            groups, papers, strategy=strategies[-1] if strategies else None,
+        )
         _track_best(list(groups))
         last_issues = [issue for check in checks for issue in check.issues]
         if progress:
@@ -1468,6 +1769,7 @@ def plan_review_stream(
     progress=None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    task_id: str | None = None,
 ) -> Generator[str, None, None]:
     """两阶段·阶段1 主题规划:筛选 + 相关性分级 + 分类,停在主题确认点,不写正文。
 
@@ -1477,17 +1779,23 @@ def plan_review_stream(
     - papers: 筛选后文献(含自动补充的中文文献),前端暂存供阶段2原样回传
     - screened_out_ids: 被剔除文献
     阶段2 由 generate_review_stream(confirmed_groups=...) 接力。
+    C3:task_id 提供时旁路记录 PLANNING/SCREENED/OUTLINED 状态。
     """
+    sm = _writing_sm(task_id)
+    _plan_span = _StageSpan(sm, "PLANNING")
+    _trace_tokens = _bind_llm_trace(task_id)
     try:
         def check_stop():
             if stop_event is not None and stop_event.is_set():
                 raise RuntimeError("用户已停止写作")
 
+        _plan_span.__enter__()
         check_stop()
         yield _sse_event("start", {
             "topic": topic,
             "total_papers": len(papers),
             "classify_mode": classify_mode,
+            "phase": "planning",  # C7:显式阶段(此前前端按文案推断,脆弱)
         })
         # 无论采用何种章节组织方式，都必须先执行同一套相关性和摘要质量
         # 筛选。章节“按主题”不等于候选文献可以绕过纳入/排除标准；此前
@@ -1505,6 +1813,8 @@ def plan_review_stream(
                 papers, screened_out, relevance_report = finished.value
                 break
             yield _sse_event("screening_progress", screening_progress)
+        # C3 时点:筛选+相关性分级完成
+        _stage_pass(sm, "SCREENED")
         yield _sse_event("screening_done", {
             "kept": len(papers),
             "screened_out": screened_out,
@@ -1517,16 +1827,22 @@ def plan_review_stream(
         yield _sse_event("classify_started", {
             "classify_mode": classify_mode,
             "total": len(papers),
+            "phase": "classify",
         })
         check_stop()
         theme_meta: dict | None = None
+        readthrough_notes: list[dict] = []
         if classify_mode == "theme":
             # 主题模式走 harness 循环:default → minimal_abstracts →
             # local_fallback 三级策略,任一级通过结构核查即交付;
             # 全部失败时以结构检查错误终止,issues 里带真实原因。
+            # R1 桥:readthrough_* 升格为独立 SSE 事件名,紧凑笔记收集
+            # 进 readthrough_notes 供规划快照持久化(可追溯)。
+            bridged_progress, notes_collector = _theme_progress_bridge(progress)
             groups, theme_meta = _run_theme_classification_loop(
-                topic, papers, progress=progress, check_stop=check_stop,
+                topic, papers, progress=bridged_progress, check_stop=check_stop,
             )
+            readthrough_notes = notes_collector.get("notes") or []
             if theme_meta.get("status") != "passed":
                 issues = theme_meta.get("issues") or []
                 detail = "；".join(issues) if issues else "三级分类策略均未通过结构核查"
@@ -1556,6 +1872,7 @@ def plan_review_stream(
                 yield _sse_event("classify_progress", {"kind": evt_name, **evt_data})
                 check_stop()
         yield _sse_event("classify_done", {
+            "phase": "classify",
             "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
             "agent": agent_meta,
             "harness": (
@@ -1563,11 +1880,14 @@ def plan_review_stream(
                 if theme_meta else None
             ),
         })
+        # C3 时点:主题划分/分类完成
+        _stage_pass(sm, "OUTLINED")
         section_specs = build_review_sections(
             classify_mode, groups, topic,
             pool_language=_pool_dominant_language(papers),
         )
         yield _sse_event("plan_complete", {
+            "phase": "await_confirm",
             "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
             "section_titles": [spec.title for spec in section_specs],
             "papers": [_paper_payload(p) for p in papers],
@@ -1582,6 +1902,9 @@ def plan_review_stream(
                 or (["llm"] if agent_meta is None else ["llm", "llm_agent"]),
                 "degraded": "local_fallback" in ((theme_meta or {}).get("strategies") or []),
             },
+            # R1 通读笔记摘要字段(additive,既有字段零改动):每篇的
+            # 研究问题与主题线索,api 层原样落进规划快照 readthrough_notes。
+            "readthrough_notes": readthrough_notes,
             "blueprint": build_review_blueprint(
                 topic, papers, classify_mode, groups, screened_out,
                 research_questions=research_questions,
@@ -1589,18 +1912,28 @@ def plan_review_stream(
                 quota_cut_count=len(relevance_report.get("quota_cut") or []),
             ),
         })
+        # C3:规划全链成功 → PLANNING pass
+        _plan_span.exit_ok()
     except RuntimeError as e:
+        _plan_span.exit_failed(str(e))
         if str(e) == "用户已停止写作":
             log.info("plan_review_stream 已按用户请求停止")
-            yield _sse_event("stopped", {"message": "已停止写作任务"})
+            yield _sse_event("stopped", {"message": "已停止写作任务", "phase": "idle"})
         else:
             raise
     except ValueError as e:
+        _plan_span.exit_failed(str(e))
         log.warning("plan_review_stream 已终止: %s", e)
         yield _sse_event("error", {"message": str(e)})
     except Exception as e:
+        _plan_span.exit_failed(str(e))
         log.exception("plan_review_stream 失败")
         yield _sse_event("error", {"message": str(e)})
+    finally:
+        # GeneratorExit(SSE 断连/前端停止 → generator.close())不进上述
+        # except 分支:此处兜底落 fail;已退出的 span 为 no-op。
+        _plan_span.exit_failed("规划流被关闭或停止(GeneratorExit)")
+        _reset_llm_trace(_trace_tokens)
 
 
 def generate_review_stream(
@@ -1613,6 +1946,8 @@ def generate_review_stream(
     stop_event=None,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    progress=None,
+    task_id: str | None = None,
 ) -> Generator[str, None, None]:
     """流式生成综述,按事件 yield SSE 字符串。
 
@@ -1621,8 +1956,19 @@ def generate_review_stream(
     relevance_report 传规划阶段返回的分级清单(缺失时写作不带分级提示)。
     v9.9: research_questions / review_goal 注入写作与述评;主题模式在写作前
     先跑主题综合(证据抽取 + 共识/争议结构化),失败自动降级。
+    progress: 可选 (event, data) 回调——生成器挂起在同步函数内部(润色/重写
+    闭环)时无法 yield,步骤事件经此带外发布到同一 SSE 队列,顺序不乱;
+    与 classify_progress 同机制。
+    C3: task_id 提供时旁路记录状态机。confirmed 模式从 DRAFTED 进入
+    (阶段1已 pass,can_enter 天然满足);单阶段从 PLANNING 全链。
     """
+    sm = _writing_sm(task_id)
     input_count = len(papers)
+    _trace_tokens = _bind_llm_trace(task_id)
+    # C3 段句柄:按分支激活(单阶段=PLANNING/DRAFTED/QA_VERIFIED;两阶段=DRAFTED/QA_VERIFIED)
+    _plan_span = _StageSpan(sm, "PLANNING")
+    _draft_span = _StageSpan(sm, "DRAFTED")
+    _qa_span = _StageSpan(sm, "QA_VERIFIED")
     try:
         def check_stop():
             if stop_event is not None and stop_event.is_set():
@@ -1633,6 +1979,7 @@ def generate_review_stream(
             "topic": topic,
             "total_papers": len(papers),
             "classify_mode": classify_mode,
+            "phase": "planning",  # C7:显式阶段(此前前端按文案推断,脆弱)
         })
 
         if confirmed_groups is not None:
@@ -1651,6 +1998,7 @@ def generate_review_stream(
                 "phase": "writing",
             })
             yield _sse_event("writing_started", {
+                "phase": "writing",
                 "message": "主题已确认，开始生成综述正文。",
                 "total_sections": len(build_review_sections(
             classify_mode, groups, topic,
@@ -1662,6 +2010,8 @@ def generate_review_stream(
                 "total": len(papers),
                 "message": "正在进行主题相关性与摘要质量筛选,每批 36 篇,最多 4 批并行...",
             })
+            # C3:单阶段从 PLANNING 全链(阶段1已在 plan 流记录过时,record 幂等覆盖)
+            _plan_span.__enter__()
             screening_iterator = iter(_screen_papers_stream(topic, papers, do_screening))
             while True:
                 check_stop()
@@ -1682,6 +2032,8 @@ def generate_review_stream(
                         log.info("为 %d 篇用户导入文献合成缺失的原始引文", backfilled)
                     break
                 yield _sse_event("screening_progress", screening_progress)
+            # C3 时点:筛选+相关性分级完成
+            _stage_pass(sm, "SCREENED")
             yield _sse_event("screening_done", {
                 "kept": len(papers),
                 "screened_out": screened_out,
@@ -1694,14 +2046,22 @@ def generate_review_stream(
             yield _sse_event("classify_started", {
                 "classify_mode": classify_mode,
                 "total": len(papers),
+                "phase": "classify",
             })
             check_stop()
             groups = classify(papers, topic, classify_mode)
             yield _sse_event("classify_done", {
+                "phase": "classify",
                 "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
             })
+            # C3 时点:分类完成;规划段(单阶段前半)pass
+            _stage_pass(sm, "OUTLINED")
+            _plan_span.exit_ok()
 
         grade_map = _grade_map(relevance_report)
+
+        # === C3:DRAFTED 段开始(综合层 → 分章写作 → 门禁 → 编号) ===
+        _draft_span.__enter__()
 
         # === 主题综合层(v9.9):证据抽取 + 共识/争议结构化,写作前完成 ===
         synthesis_map: dict[str, dict] = {}
@@ -1754,14 +2114,58 @@ def generate_review_stream(
             # v9.6:流式路径单章失败此前无占位兜底(非流式 L989 起有),LLM 全失败
             # 时第 N 章异常会把前 N-1 章整体报废——对齐同步路径的占位章节语义
             completed = False
+
+            def _section_progress(event: str, data: dict) -> None:
+                # 润色/重写闭环在同步函数内部执行,生成器此时已挂起无法 yield;
+                # 经带外 progress 发布,由 SSE 网关直发同一队列(同线程,保序)。
+                if progress is None:
+                    return
+                progress(event, {
+                    "index": idx,
+                    "total": len(section_specs),
+                    "key": spec.key,
+                    "title": spec.title,
+                    **data,
+                })
+
+            # R1'(2026-10-27 先读后写):本节写作前通读本节文献蒸馏笔记,
+            # 作为蒸馏证据层进 section prompt;失败返回 None 无感降级,
+            # section_notes_done 事件经带外通道发布(additive)。
+            notes_block = _prepare_section_notes(
+                spec, section_papers, topic, grade_map, progress=_section_progress,
+            )
             try:
-                for piece, done, res in write_section_stream(
+                for evt in write_section_stream(
                     spec, topic, groups, section_papers, grades=grade_map,
                     synthesis_map=synthesis_map,
                     research_questions=research_questions,
                     review_goal=review_goal,
+                    notes_block=notes_block,
                 ):
-                    if piece:
+                    kind = evt.get("kind")
+                    if kind == "reasoning":
+                        yield _sse_event("section_reasoning", {
+                            "index": idx,
+                            "total": len(section_specs),
+                            "key": spec.key,
+                            "title": spec.title,
+                            "delta": evt["delta"],
+                        })
+                        continue
+                    if kind == "step":
+                        yield _sse_event("section_step", {
+                            "index": idx,
+                            "total": len(section_specs),
+                            "key": spec.key,
+                            "title": spec.title,
+                            "step": evt["step"],
+                            "status": evt["status"],
+                            "message": evt.get("message", ""),
+                            "seconds": evt.get("seconds"),
+                        })
+                        continue
+                    if kind == "token":
+                        piece = evt["delta"]
                         total_chars += len(piece)
                         yield _sse_event("section_token", {
                             "index": idx,
@@ -1771,11 +2175,13 @@ def generate_review_stream(
                             "delta": piece,
                             "chars": total_chars,
                         })
-                    if done and res is not None:
+                        continue
+                    if kind == "done":
                         # Final deterministic post-condition shared with the
                         # synchronous path.  The stream may have already sent
                         # raw model tokens, but the delivered section result
                         # must still retain real anchors/evidence after repair.
+                        res = evt["result"]
                         ensure_section_evidence(res, section_papers)
                         res = _retry_section_quality(
                             spec=spec,
@@ -1787,9 +2193,12 @@ def generate_review_stream(
                             synthesis_map=synthesis_map,
                             research_questions=research_questions,
                             review_goal=review_goal,
+                            progress=_section_progress,
                         )
                         # 润色+核查闭环(用户策略:agent 自我纠错)
-                        res = _polish_and_verify_section(res, section_papers)
+                        res = _polish_and_verify_section(
+                            res, section_papers, progress=_section_progress,
+                        )
                         completed = True
                         sections.append(res)
                         all_dropped.extend(res.dropped_citations)
@@ -1825,9 +2234,6 @@ def generate_review_stream(
         # 明确报错让用户重试,而不是把一堵模板墙静默交付(v9.7 软门禁只
         # 覆盖"局部兜底",覆盖不了"全线失败"的极端场景)。
         if _recovery_draft_ratio(sections) >= 0.5:
-            import sys as _sys
-            print("GATE-DEBUG ratio:", _recovery_draft_ratio(sections),
-                  {s.key: s.content[:60] for s in sections}, file=_sys.stderr)
             raise ValueError(
                 "写作引擎连续失败，各章节仅能生成题录清单而非正文。"
                 "文献池与主题划分不受影响，请稍后重试写作。"
@@ -1848,11 +2254,15 @@ def generate_review_stream(
         yield _sse_event("reference_started", {"count": len(collect_cited_ids(sections))})
         yield _sse_event("sections_finalized", {"sections": finalized_sections})
         yield _sse_event("reference_list", {"reference_list": ref})
+        # C3:DRAFTED 段成功(正文定稿;RENDERED 语义 = 前端收到定稿)
+        _draft_span.exit_ok()
+        _stage_pass(sm, "RENDERED")
 
         # === 全流程核查触发节点:apply_citation_numbering 之后 ===
         qa_payload: dict | None = None
         qa_failure: str | None = None
         if _qa_enabled():
+            _qa_span.__enter__()
             # v8.2 修复:此前本函数直接调用 get_fallback_order 等三个名字,
             # 但它们只在 _run_post_write_qa 内部 import 过,主流程作用域没有,
             # 导致 6 章写完后在 qa_started 处 NameError 全流程报废。
@@ -1876,6 +2286,7 @@ def generate_review_stream(
                     sections=sections,
                     reference_list=ref,
                     grade_map=grade_map,
+                    progress=progress,
                 )
             except Exception as exc:  # noqa: BLE001
                 # 核查子系统崩溃也不销毁已成文的综述:正文/参考文献均已交付
@@ -1915,8 +2326,12 @@ def generate_review_stream(
                             "剩余问题超出自动修复能力,请结合报告人工复核。"
                         ),
                     })
+            # C3:核查段结束(FAIL 已先经三级修复闭环,修不掉的如实上报 ——
+            # QA_VERIFIED 语义为"核查已执行",非"零问题",故按执行成功记 pass)
+            _qa_span.exit_ok()
 
         yield _sse_event("complete", {
+            "phase": "complete",
             "screened_out_ids": screened_out,
             "dropped_citations": all_dropped,
             "qa_report": qa_payload,
@@ -1931,19 +2346,35 @@ def generate_review_stream(
                 "synthesis_themes": len(synthesis_map),
             },
         })
+        # C3 时点:交付完成
+        _stage_pass(sm, "DELIVERED")
 
     except RuntimeError as e:
+        _draft_span.exit_failed(str(e))
+        _qa_span.exit_failed(str(e))
+        _plan_span.exit_failed(str(e))
         if str(e) == "用户已停止写作":
             log.info("generate_review_stream 已按用户请求停止")
-            yield _sse_event("stopped", {"message": "已停止写作任务"})
+            yield _sse_event("stopped", {"message": "已停止写作任务", "phase": "idle"})
         else:
             raise
     except ValueError as e:
+        _draft_span.exit_failed(str(e))
+        _plan_span.exit_failed(str(e))
         log.warning("generate_review_stream 已终止: %s", e)
         yield _sse_event("error", {"message": str(e)})
     except Exception as e:
+        _draft_span.exit_failed(str(e))
+        _plan_span.exit_failed(str(e))
         log.exception("generate_review_stream 失败")
         yield _sse_event("error", {"message": str(e)})
+    finally:
+        # GeneratorExit(SSE 断连/前端停止 → generator.close())不进上述
+        # except 分支:此处兜底把未退出段落 fail;已退出的 span 为 no-op。
+        _draft_span.exit_failed("写作流被关闭或停止(GeneratorExit)")
+        _qa_span.exit_failed("写作流被关闭或停止(GeneratorExit)")
+        _plan_span.exit_failed("写作流被关闭或停止(GeneratorExit)")
+        _reset_llm_trace(_trace_tokens)
 
 
 def generate_review(
@@ -1999,6 +2430,12 @@ def generate_review(
         # 单章节写入失败不应阻塞整篇综述:e2e/批量场景下,如果 LLM 全部
         # provider 都不可用,允许用一份基于真实文献题录的占位章节继续。
         # 质量会通过 qa.json 暴露给用户。
+        # T03: 同步链与流式链行为一致 —— 每节写作前先通读(R1'),笔记
+        # 作为蒸馏证据层注入;同步路径无 SSE 通道,progress 传 None 不发
+        # 事件,笔记失败返回 None 零感降级到既有证据层。
+        notes_block = _prepare_section_notes(
+            spec, section_papers, topic, grade_map, progress=None,
+        )
         try:
             res = write_section(
                 spec,
@@ -2009,6 +2446,7 @@ def generate_review(
                 synthesis_map=synthesis_map,
                 research_questions=research_questions,
                 review_goal=review_goal,
+                notes_block=notes_block,
             )
             ensure_section_evidence(res, section_papers)
             # 章节完成后先做一次本地质量门禁；题录兜底稿、内部推理泄漏稿
@@ -2103,7 +2541,15 @@ def _clean_dirty(s: str | None) -> str:
     重要:合法的 CSL 文献类型标识 [J] / [J/OL] / [M] / 访问日期 [YYYY-MM-DD]
     **不能剥**——这些是 GB/T 7714 的合法字段,不是脏数据。
     所以只剥 _CLEAN_RES 列出的已知脏片段,不做 blanket 剥 [xxx]。
+
+    2026-10-27 B0 防御:上游脏数据可能是非 str(如 int title/None 之外的
+    标量),直接进 re.sub 会 TypeError 炸穿 GB/T 渲染 —— 非空非 str 一律
+    str() 化后再清洗;真正的占位语义(「未命名」)由调用方决定。
     """
+    if s is None:
+        return ""
+    if not isinstance(s, str):
+        s = str(s)
     if not s:
         return ""
     for pat in _CLEAN_RES:
@@ -2128,8 +2574,15 @@ def _format_one_gbt(p: Paper) -> str:
         raw = _clean_dirty(getattr(p, "raw_citation", None))
         if raw:
             return _strip_doi(raw).rstrip(".") + "."
-        authors = ", ".join(a.strip() for a in (p.authors or []) if a and a.strip()) or "佚名"
-        title = _clean_dirty(p.title) or "未命名"
+        # 2026-10-27 B0:作者列表可能混入非 str 脏元素(爬虫/导入),直接
+        # a.strip() 会 AttributeError —— 非 str 一律跳过,合法作者保留。
+        authors = ", ".join(
+            a.strip() for a in (p.authors or [])
+            if isinstance(a, str) and a.strip()
+        ) or "佚名"
+        title = _clean_dirty(p.title) if isinstance(p.title, str) else "未命名"
+        if not title:
+            title = "未命名"
         journal = _clean_dirty(p.journal) or "来源不详"
         year = str(p.year) if p.year else "n.d."
         return _strip_doi(f"{authors}. {title}[J]. {journal}, {year}.")

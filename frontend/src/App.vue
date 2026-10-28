@@ -1,22 +1,38 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
+import { ElButton, ElTag } from 'element-plus';
 import AppToast from '@/components/AppToast.vue';
+import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
+const auth = useAuthStore();
 const active = computed(() => route.path);
+const isLoginPage = computed(() => route.path === '/login');
 
-// 需求2:全站移除粘贴引文,顶部导航不再有「/cn」入口
-const navs = [
+onMounted(() => {
+  // 有令牌时静默恢复会话(校验 /auth/me);失效由响应拦截器兜底跳登录
+  if (auth.isLoggedIn) void auth.restore();
+});
+
+const ROLE_LABEL: Record<string, string> = { admin: '管理员', user: '用户', reviewer: '审稿' };
+
+// 需求2:全站移除粘贴引文,顶部导航不再有「/cn」入口。
+// C7:监控与管理(crawler_admin 管理面)仅 admin 可见(B4 收权的 UI 侧);
+// 普通用户直接访问 /crawler 仍会看到 403 提示(后端已收权,双层防护)。
+const allNavs = [
   { path: '/retrieval', label: '统一检索', no: '壹' },
   { path: '/pool', label: '文献池', no: '贰' },
   { path: '/writing', label: '写作', no: '叁' },
-  { path: '/crawler', label: '爬虫监控', no: '附' },
+  { path: '/crawler', label: '监控与管理', no: '附', adminOnly: true },
 ];
+const navs = computed(() =>
+  allNavs.filter((n) => !n.adminOnly || auth.isAdmin),
+);
 </script>
 
 <template>
-  <div class="masthead-wrap">
+  <div v-if="!isLoginPage" class="masthead-wrap">
     <header class="masthead">
       <router-link to="/retrieval" class="brand">
         <span class="brand-seal" aria-hidden="true">述</span>
@@ -36,7 +52,15 @@ const navs = [
           <span class="mast-no">{{ n.no }}</span>{{ n.label }}
         </router-link>
       </nav>
-      <div class="mast-edge" aria-hidden="true">手稿在编 ·稿件随到随审</div>
+      <div class="mast-user">
+        <span v-if="auth.username" class="mast-user-name">
+          {{ auth.username }}
+          <el-tag size="small" :type="auth.isAdmin ? 'danger' : 'info'">
+            {{ ROLE_LABEL[auth.user?.role ?? ''] ?? auth.user?.role }}
+          </el-tag>
+        </span>
+        <el-button link size="small" @click="auth.logout()">退出</el-button>
+      </div>
     </header>
     <div class="masthead-rules" aria-hidden="true"></div>
   </div>
@@ -170,6 +194,22 @@ const navs = [
   letter-spacing: 0.14em;
   white-space: nowrap;
   flex: none;
+}
+
+/* 报头右侧用户区:用户名 + 角色 + 退出 */
+.mast-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  white-space: nowrap;
+}
+.mast-user-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-soft);
 }
 
 /* 期刊式双细线:粗一道 + 细一道 */

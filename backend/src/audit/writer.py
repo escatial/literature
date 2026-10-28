@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from db.models import AuditLogModel
-from db.session import SessionLocal
+# 经模块属性访问 SessionLocal:reset_engine(测试)会重绑 db.session 的全局,
+# from-import 绑定会停留在旧 engine 上写穿旧库(与 security/auth.py 同一修复)。
+from db import session as db_session
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ def audit(
 ) -> int | None:
     """写一条审计日志。返回 log_id(失败返回 None)。"""
     try:
-        with SessionLocal() as db:
+        with db_session.SessionLocal() as db:
             row = AuditLogModel(
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -64,7 +66,7 @@ def list_audit(
     offset: int = 0,
 ) -> list[AuditLogModel]:
     """查询审计日志(分页)。"""
-    with SessionLocal() as db:
+    with db_session.SessionLocal() as db:
         q = db.query(AuditLogModel)
         if user_id:
             q = q.filter_by(user_id=user_id)

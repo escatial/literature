@@ -69,6 +69,9 @@ def client():
     app = fastapi.FastAPI()
     app.include_router(crawler_admin.router)
     app.include_router(cnki_api.router)
+    # B4 收权:router 依赖 require_admin,独立 app 注入等价 admin 身份
+    from admin_auth_helper import attach_admin_auth
+    attach_admin_auth(app)
     return TestClient(app)
 
 

@@ -18,7 +18,7 @@ import {
   ElTag,
 } from 'element-plus';
 import { toast } from '@/utils/toast';
-import { apiBaseURL, http } from '@/api/http';
+import { http } from '@/api/http';
 import { getTaskTopic } from '@/api/endpoints';
 import { useTopicStore } from '@/stores/topic';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
@@ -68,6 +68,32 @@ watch(() => stream.value.activityLog.length, async () => {
   if (activityLogEl.value) activityLogEl.value.scrollTop = 0;
 });
 
+// ============ Agent 执行过程:思考流 + 工具调用步骤 ============
+
+const thinkingOpen = ref(true);
+const thinkingEl = ref<HTMLElement | null>(null);
+
+// 思考增量到达时贴底滚动;用户手动上翻后不打扰(距底 >40px 视为在回看)
+watch(() => stream.value.currentReasoning.length, async () => {
+  if (!thinkingOpen.value || !thinkingEl.value) return;
+  const el = thinkingEl.value;
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+  if (nearBottom || el.scrollHeight - el.clientHeight < 200) {
+    await nextTick();
+    el.scrollTop = el.scrollHeight;
+  }
+});
+
+watch(thinkingOpen, async (open) => {
+  if (open && thinkingEl.value) {
+    await nextTick();
+    thinkingEl.value.scrollTop = thinkingEl.value.scrollHeight;
+  }
+});
+
+const stepDotClass = (status: 'running' | 'ok' | 'fail') =>
+  status === 'running' ? 'dot-run' : status === 'ok' ? 'dot-ok' : 'dot-bad';
+
 const loadPapers = async () => {
   loadingPapers.value = true;
   try {
@@ -112,9 +138,13 @@ onBeforeUnmount(() => {
 const selectedPapers = computed(() => allPapers.value.filter((paper) => paper.selected));
 const selectedCount = computed(() => selectedPapers.value.length);
 
+// v11 写作池引导线(与后端 writing/pool_selection.py 同口径)。
+// 口径对应:后端由 env WRITING_REF_MIN / WRITING_REF_MAX 配置
+// (backend/src/writing/orchestrator.py _int_env,默认 70/90);
+// 前端此处仅作展示阈值,后端改 env 时此处需同步调整。
 const REFERENCE_LIMIT_MIN = 70;
 const REFERENCE_LIMIT_MAX = 90;
-const CHINESE_RATIO_MIN = 2 / 3;
+const POOL_SOFT_CEILING = REFERENCE_LIMIT_MAX + 10;
 const chineseSelectedCount = computed(() =>
   selectedPapers.value.filter((paper) => /^(cnki|user_imported)$/i.test(String(paper.source))).length,
 );
@@ -150,10 +180,9 @@ const topicInput = computed({
 });
 
 const phaseLabel = computed(() => {
-  const writingStarted = stream.value.activityLog.some((item) =>
-    item.message.includes('主题已确认，开始生成综述正文'),
-  );
-  if (writingStarted && ['start', 'classify'].includes(stream.value.phase)) {
+  // C7:阶段判定以事件 phase 为准(不再按活动日志文案匹配)。
+  // writing 阶段尚未进入第一节 = 阶段2 刚启动的“准备中”窗口。
+  if (stream.value.phase === 'writing' && !stream.value.progress) {
     return '章节写作准备中';
   }
   switch (stream.value.phase) {
@@ -254,9 +283,21 @@ const qaStatusTagType = (status: string) =>
 // ============ 两阶段·阶段1:先划分主题,用户确认后才能写正文 ============
 
 // ---------- 导出 Word ----------
-const exportWord = () => {
-  // 后端生成带原生脚注的 docx(宋体小四/Times New Roman/1.5 倍行距)
-  window.open(`${apiBaseURL}/reviews/latest/export/docx`, '_blank');
+const exportWord = async () => {
+  // 后端生成带原生脚注的 docx(宋体小四/Times New Roman/1.5 倍行距)。
+  // 必须走 axios blob:接口在鉴权中间件之后,window.open 新标签页
+  // 带不上 X-Auth-Token(与文献池大文档下载同模式)。
+  try {
+    const resp = await http.get('/reviews/latest/export/docx', { responseType: 'blob' });
+    const url = URL.createObjectURL(resp.data as Blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `文献综述-${topicInput.value.trim() || '导出'}.docx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    toast.error(`导出失败:${String((e as Error)?.message ?? e)}`);
+  }
 };
 
 const start = async () => {
@@ -424,7 +465,7 @@ const downloadMd = () => {
           <span class="pool-pill"><b class="figure-num">{{ selectedCount }}</b> 篇待写</span>
           <span class="pool-pill zh">中文 <b class="figure-num">{{ chineseSelectedCount }}</b></span>
           <span class="pool-pill en">英文 <b class="figure-num">{{ englishSelectedCount }}</b></span>
-          <span class="bench-hint">综述引用 {{ REFERENCE_LIMIT_MIN }}-{{ REFERENCE_LIMIT_MAX }} 篇,中文占比不低于 {{ Math.round(CHINESE_RATIO_MIN * 100) }}%;中文不足时自动补充。</span>
+          <span class="bench-hint">筛选后精选写作池至约 {{ REFERENCE_LIMIT_MAX }} 篇({{ POOL_SOFT_CEILING }} 篇以内不裁):中文核心期刊优先、非核心按相关性补足,英文按相关性取 30%-40%;裁剪明细见主题确认面板。</span>
         </div>
         <div class="bench-row">
           <span class="bench-label">章节划分</span>
@@ -533,6 +574,30 @@ const downloadMd = () => {
           第 {{ stream.harness.attempt || 0 }} 轮
           <span v-if="stream.harness.repairs?.length"> · 已修复 {{ stream.harness.repairs.length }} 次</span>
         </div>
+        <!-- Agent 执行过程:工具调用步骤(对应后端 section_step 事件) -->
+        <div v-if="stream.sectionSteps.length" class="agent-steps">
+          <div class="agent-steps-title">Agent 执行过程</div>
+          <div
+            v-for="s in stream.sectionSteps"
+            :key="s.id"
+            class="agent-step"
+          >
+            <span class="step-dot" :class="stepDotClass(s.status)"></span>
+            <span class="step-label" :class="{ 'step-fail': s.status === 'fail' }">{{ s.label }}</span>
+            <span v-if="s.seconds != null" class="step-seconds">{{ s.seconds }}s</span>
+            <span class="step-at">{{ s.at }}</span>
+          </div>
+        </div>
+        <!-- 思考过程:模型 reasoning 流式增量,只上屏不入正文 -->
+        <div v-if="stream.currentReasoning" class="thinking">
+          <button type="button" class="thinking-head" @click="thinkingOpen = !thinkingOpen">
+            <span class="thinking-title">思考过程</span>
+            <span class="thinking-meta">
+              {{ thinkingOpen ? '收起' : '展开' }} · 约 {{ stream.currentReasoning.length }} 字
+            </span>
+          </button>
+          <div v-show="thinkingOpen" ref="thinkingEl" class="thinking-body">{{ stream.currentReasoning }}</div>
+        </div>
         <el-alert
           v-if="stream.phase === 'error'"
           type="error"
@@ -634,6 +699,7 @@ const downloadMd = () => {
             placeholder="主题名称"
             :disabled="running"
             class="group-name"
+            :title="g.name"
           />
           <span class="group-count"><b class="figure-num">{{ g.lit_ids.length }}</b> 篇</span>
           <span :title="groupPreview(g.lit_ids)" class="group-preview">
@@ -799,7 +865,7 @@ const downloadMd = () => {
       </template>
       <div class="group-strip">
         <div v-for="g in stream.groups" :key="g.name" class="group-strip-item">
-          <span class="group-strip-name">{{ g.name }}</span>
+          <span class="group-strip-name" :title="g.name">{{ g.name }}</span>
           <span class="group-strip-count">{{ g.lit_ids.length }} 篇</span>
         </div>
       </div>
@@ -1069,6 +1135,106 @@ const downloadMd = () => {
   font-size: 12px;
   line-height: 1.7;
   font-family: var(--font-mono);
+}
+
+/* ── Agent 执行过程:步骤流水 + 思考流 ── */
+.agent-steps {
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--sheet-dim);
+}
+.agent-steps-title {
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
+}
+.agent-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--ink-soft);
+}
+.step-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  align-self: center;
+}
+.dot-run {
+  background: var(--cinnabar);
+  animation: step-pulse 1.2s ease-in-out infinite;
+}
+.dot-ok { background: var(--ok); }
+.dot-bad { background: var(--bad); }
+@keyframes step-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.step-label { flex: 1 1 auto; min-width: 0; }
+.step-fail { color: var(--bad); }
+.step-seconds {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.step-at {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-ghost);
+}
+
+.thinking {
+  margin-top: 10px;
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-deep);
+}
+.thinking-head {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+.thinking-title {
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+}
+.thinking-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-ghost);
+}
+.thinking-body {
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0 14px 10px;
+  padding: 10px 12px;
+  background: #fffef9;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ink-faint);
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .activity {

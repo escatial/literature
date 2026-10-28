@@ -14,6 +14,9 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 
+from defusedxml import DefusedXmlException
+from defusedxml import ElementTree as SafeET
+
 import httpx
 
 from retrieval.sources.base import AcademicSource, SourcePage
@@ -340,10 +343,14 @@ class PubMedSource:
         )
 
     def _extract_abstract_from_xml(self, xml_text: str) -> str | None:
-        """简单 XML 解析:抓 <AbstractText>...</AbstractText>。"""
+        """简单 XML 解析:抓 <AbstractText>...</AbstractText>。
+
+        defusedxml 解析:禁止 DTD/实体定义,实体扩展攻击(billion laughs)
+        抛 DefusedXmlException 后走正则回退(正则不展开实体,天然安全)。
+        """
         try:
-            root = ET.fromstring(xml_text)
-        except ET.ParseError:
+            root = SafeET.fromstring(xml_text)
+        except (ET.ParseError, DefusedXmlException):
             # 回退:用正则抓 <AbstractText ...>...</AbstractText>
             m = re.search(r"<AbstractText[^>]*>(.*?)</AbstractText>", xml_text, re.DOTALL)
             return re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else None
@@ -359,10 +366,13 @@ class PubMedSource:
         return "\n".join(parts) or None
 
     def _extract_abstracts_from_batch_xml(self, xml_text: str) -> dict[str, str]:
-        """解析批量 efetch XML(多个 PubmedArticle),返回 {pmid: abstract}。"""
+        """解析批量 efetch XML(多个 PubmedArticle),返回 {pmid: abstract}。
+
+        同样走 defusedxml:含 DTD/实体的恶意响应按非法 XML 处理,整批跳过。
+        """
         try:
-            root = ET.fromstring(xml_text)
-        except ET.ParseError:
+            root = SafeET.fromstring(xml_text)
+        except (ET.ParseError, DefusedXmlException):
             log.warning("PubMed 批量 efetch 返回非法 XML,跳过本批")
             return {}
         out: dict[str, str] = {}

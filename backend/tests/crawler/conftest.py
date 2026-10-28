@@ -179,6 +179,11 @@ def kns():
     server.stop()
 
 
+# B4 收权适配:crawler_admin.router 依赖 require_admin(request.state.user)。
+# 独立 app 测试用 attach_admin_auth 注入身份 —— 见同目录 admin_auth_helper.py
+# (本目录已入 sys.path,`from admin_auth_helper import attach_admin_auth`)。
+
+
 # ========================== 爬虫隔离环境 ==========================
 @pytest.fixture
 def crawler_env(kns, tmp_path, monkeypatch):

@@ -205,11 +205,85 @@ def load_cookies(path: str) -> dict:
         return {}
 
 
+# ========================== 写路径安全（路径穿越防护） ==========================
+# Windows/Linux 通用非法字符(控制字符 + Windows 保留字符)
+_FILENAME_ILLEGAL_RE = re.compile(r'[<>:"|?*\x00-\x1f]')
+
+
+def sanitize_filename(name: str, default: str = "cnki_file") -> str:
+    """文件名净化:剥目录成分/盘符/穿越段/非法字符,保留合法中文题名。
+
+    把不可信字符串(题名、作者、配置、CLI 参数末段)安全化为单段文件名;
+    净化后为空时回落 default。合法中文/字母/数字/常用标点不受影响。
+    """
+    text = str(name or "")
+    # 统一分隔符后取最后一段:..\ 与 ../ 的目录成分整体剥离
+    text = text.replace("\\", "/").split("/")[-1]
+    # 剥 Windows 盘符前缀(如 "C:")
+    text = re.sub(r"^[A-Za-z]:", "", text)
+    # 去控制字符与 Windows 保留字符,再去首尾空白与点(防 ".." 等残段)
+    text = _FILENAME_ILLEGAL_RE.sub("", text).strip(" .\t")
+    if not text:
+        return default
+    return text[:150]
+
+
+def sanitize_write_path(path: str, base_dir: Path | None = None) -> Path:
+    """写路径净化:剥穿越段(`..`/`.`)与文件名段中的盘符/非法字符。
+
+    - base_dir 给定时:结果强制收敛为 base_dir 下的净化文件名,resolve 后
+      断言仍在 base_dir 内,越界抛 ValueError(包内固定文件专用)。
+    - 缺省时:保留受控配置声明的目录意图(生产为包内 data 目录、测试为
+      tmp_path 隔离目录、CLI 为用户显式输出目录),仅目录段中的穿越成分
+      被丢弃、文件名段净化——无论输入如何拼接,结果都不可能借 `..`
+      或文件名注入逃出原目录树。
+    """
+    p = Path(str(path))
+    name = sanitize_filename(p.name, default="")
+    if not name:
+        raise ValueError(f"写路径净化后为空: {path!r}")
+    if base_dir is not None:
+        base = Path(base_dir).resolve()
+        target = (base / name).resolve()
+        if os.path.commonpath([str(target), str(base)]) != str(base):
+            raise ValueError(f"写路径越出基目录: {path!r}")
+        return target
+    anchor = p.anchor
+    dirs = [s for s in p.parts if s != anchor][:-1]
+    dirs = [s for s in dirs if s not in ("..", ".") and ":" not in s]
+    parent = Path(anchor, *dirs) if (anchor or dirs) else Path()
+    return parent / name
+
+
+# 兼容别名:既有测试与调用方仍可用旧名
+secure_write_path = sanitize_write_path
+
+
+def user_output_path(path_str: str, default_prefix: str = "result") -> Path:
+    """用户显式指定的输出路径(sanitize_write_path 缺省语义 + 空名自动命名)。
+
+    合法子目录与合法文件名(含中文)原样保留;文件名段净化后为空
+    (`..`/盘符根/空串)时回落 default_prefix + 时间戳自动命名,
+    目录意图仍保留(与旧自动命名行为一致)。
+    """
+    p = Path(str(path_str))
+    if sanitize_filename(p.name, default=""):
+        return sanitize_write_path(p)
+    anchor = p.anchor
+    dirs = [s for s in p.parts if s != anchor][:-1]
+    dirs = [s for s in dirs if s not in ("..", ".") and ":" not in s]
+    parent = Path(anchor, *dirs) if (anchor or dirs) else Path()
+    return parent / f"{default_prefix}_{int(time.time())}.json"
+
+
 def save_cookies(cookies: dict, path: str):
-    """保存 cookie 到文件"""
-    with open(path, "w", encoding="utf-8") as f:
+    """保存 cookie 到文件(写路径穿越防护)"""
+    cookie_path = sanitize_write_path(path, _DATA_DIR)
+    # 收窄断言:cookie 是包内运行时文件,resolve 后必须落在 data 目录内
+    assert cookie_path.resolve().is_relative_to(_DATA_DIR.resolve())
+    with open(str(sanitize_write_path(path, _DATA_DIR)), "w", encoding="utf-8") as f:
         json.dump(cookies, f, ensure_ascii=False, indent=2)
-    print(f"[cookies] 已保存到 {path}")
+    print(f"[cookies] 已保存到 {cookie_path}")
 
 
 def get_env_override(cfg: dict) -> dict:
@@ -1003,11 +1077,15 @@ def make_pointjson(x1, y1, x2, y2, captcha_id, secret_key=""):
 
 
 def save_b64_image(b64_str: str, path: str):
+    """保存 base64 图片(写路径穿越防护)"""
     if not b64_str:
         return
     if "," in b64_str:
         b64_str = b64_str.split(",", 1)[1]
-    with open(path, "wb") as f:
+    safe_path = sanitize_write_path(path)
+    # 收窄断言:穿越段已剥除,落点不借 `..` 逃逸出配置声明的目录树
+    assert ".." not in safe_path.parts
+    with open(str(sanitize_write_path(path)), "wb") as f:
         f.write(base64.b64decode(b64_str))
 
 
@@ -1027,7 +1105,7 @@ def _cjy_fatal_msg(e) -> str:
 
 
 def recognize_slider(info):
-    back_path = CONFIG["paths"]["captcha_back_image"]
+    back_path = str(sanitize_write_path(CONFIG["paths"]["captcha_back_image"]))
     save_b64_image(info["backImage"], back_path)
     if not os.path.exists(back_path):
         raise RuntimeError("滑块背景图保存失败（backImage 为空？），无法识别")
@@ -1389,8 +1467,11 @@ def _dump_sanitized_search_diagnostic(*, query_json: str, page_num: int,
 
 
 def parse_list(html: str):
-    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底返回 0 条
-    tree = etree.HTML(html) or etree.Element("html")
+    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底返回 0 条。
+    # 显式 is not None 判断:对 Element 直接 or 真值判断会触发 lxml FutureWarning。
+    tree = etree.HTML(html)
+    if tree is None:
+        tree = etree.Element("html")
     items = []
     for tr in tree.xpath('//tr[td[@class="name"]]'):
         # 1) 标题链接(原来就有的)
@@ -2079,7 +2160,7 @@ def fetch_abstract(detail_url: str) -> dict:
     # 三代模板选择器都没取到摘要:落盘页面样本取证(同 URL 只存一份,总量上限 10 份)
     if not (parsed.get("abstract") or "").strip():
         try:
-            debug_base = Path(CONFIG["paths"]["debug_abstract_html"])
+            debug_base = sanitize_write_path(CONFIG["paths"]["debug_abstract_html"])
             url_tag = md5(detail_url.encode("utf-8")).hexdigest()[:8]
             dump_path = debug_base.with_name(f"debug_abstract_{url_tag}.html")
             if (not dump_path.exists()
@@ -2114,7 +2195,13 @@ def fetch_abstract(detail_url: str) -> dict:
     if False:
         # 仅解析失败时保留页面供调试，避免每抓一篇都覆盖写盘
         try:
-            with open(CONFIG["paths"]["debug_abstract_html"], "w", encoding="utf-8") as f:
+            debug_dump = sanitize_write_path(CONFIG["paths"]["debug_abstract_html"], _DATA_DIR)
+            # 收窄断言:调试页是包内运行时文件,resolve 后必须落在 data 目录内
+            assert debug_dump.resolve().is_relative_to(_DATA_DIR.resolve())
+            with open(
+                str(sanitize_write_path(CONFIG["paths"]["debug_abstract_html"], _DATA_DIR)),
+                "w", encoding="utf-8",
+            ) as f:
                 f.write(text)
         except Exception:
             pass
@@ -2122,8 +2209,12 @@ def fetch_abstract(detail_url: str) -> dict:
 
 
 def _parse_detail(text: str, detail_url: str) -> dict:
-    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底走字段全空路径
-    tree = etree.HTML(text) or etree.Element("html")
+    # v9.6:etree.HTML("") 返回 None 会 AttributeError,空树兜底走字段全空路径。
+    # 显式 is not None 判断:对 Element 直接 or 真值判断会触发 lxml FutureWarning
+    # (空 Element 布尔语义未来将变更为 False)。
+    tree = etree.HTML(text)
+    if tree is None:
+        tree = etree.Element("html")
 
     def clean(s):
         return s.replace("\n", " ").replace("\r", " ").strip() if s else ""
@@ -2223,7 +2314,11 @@ def save_results(results: list, output: str):
     if not output:
         prefix = CONFIG["paths"]["default_output_prefix"]
         output = f"{prefix}_{int(time.time())}.json"
-    if output.endswith(".csv"):
+    # 路径穿越防护:保留用户目录意图,丢弃 `..`/`.` 段,文件名净化
+    out_path = Path(user_output_path(output, CONFIG["paths"]["default_output_prefix"]))
+    # 收窄断言:穿越段已剥除,落点不借 `..` 逃逸出原目录树
+    assert ".." not in out_path.parts
+    if str(out_path).endswith(".csv"):
         flat = [{
             "title": r.get("title", ""),
             "authors": " | ".join(r.get("authors", []) or []),
@@ -2239,14 +2334,14 @@ def save_results(results: list, output: str):
             "publish_time": r.get("publish_time", ""),
             "url": r.get("url", ""),
         } for r in results]
-        with open(output, "w", encoding="utf-8-sig", newline="") as f:
+        with open(str(sanitize_write_path(out_path)), "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             writer.writeheader()
             writer.writerows(flat)
     else:
-        with open(output, "w", encoding="utf-8") as f:
+        with open(str(sanitize_write_path(out_path)), "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"[保存] 已写入 {output} ({len(results)} 条)")
+    print(f"[保存] 已写入 {out_path} ({len(results)} 条)")
 
 
 def save_failed(failed_items: list, path: str):
@@ -2255,17 +2350,21 @@ def save_failed(failed_items: list, path: str):
     空清单时删除旧文件:防止上一次运行遗留的陈旧清单误导后续补抓
     (陈旧清单里的 URL 可能已在新一轮全量抓取中成功,重抓纯属浪费)。
     """
+    # 路径穿越防护:与 save_results 同规则(目录意图保留,穿越段丢弃)
+    failed_path = Path(user_output_path(path, "failed"))
+    # 收窄断言:穿越段已剥除,落点不借 `..` 逃逸出原目录树
+    assert ".." not in failed_path.parts
     if not failed_items:
         try:
-            if os.path.exists(path):
-                os.remove(path)
-                print(f"[保存] 失败清单已清空，删除旧文件 {path}")
+            if failed_path.exists():
+                failed_path.unlink()
+                print(f"[保存] 失败清单已清空，删除旧文件 {failed_path}")
         except Exception:
             pass
         return
-    with open(path, "w", encoding="utf-8") as f:
+    with open(str(sanitize_write_path(failed_path)), "w", encoding="utf-8") as f:
         json.dump(failed_items, f, ensure_ascii=False, indent=2)
-    print(f"[保存] 失败清单 {len(failed_items)} 条已写入 {path}")
+    print(f"[保存] 失败清单 {len(failed_items)} 条已写入 {failed_path}")
 
 
 def load_existing_results(output: str) -> tuple:

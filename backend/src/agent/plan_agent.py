@@ -17,7 +17,12 @@ from typing import Generator
 
 from llm.client import messages_create_with_tools
 from retrieval.types import Paper
-from writing.classifier import Group, _group_name_acceptable, _min_groups
+from writing.classifier import (
+    Group,
+    _group_name_acceptable,
+    _min_groups,
+    _pool_dominant_language,
+)
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +103,14 @@ def _validate_submission(
             None,
             f"只分了 {len(final)} 组,低于下限 {min_groups} 组;请按研究方法/情境等维度继续拆分后重新提交",
         )
-    # 硬校验 2:组名必须像章节标题(QC 改名也不能引入废品名)
-    bad_names = [g.name for g in final if not _group_name_acceptable(g.name)]
+    # 硬校验 2:组名必须像章节标题(QC 改名也不能引入废品名)。
+    # pool_language 传实参:中文池下纯英文通用话术组名(2026-10-26 事故
+    # 形态)必须在 QC 层就拦住,而不是漏到确认面板。
+    pool_language = _pool_dominant_language(papers)
+    bad_names = [
+        g.name for g in final
+        if not _group_name_acceptable(g.name, pool_language=pool_language)
+    ]
     if bad_names:
         return (
             None,

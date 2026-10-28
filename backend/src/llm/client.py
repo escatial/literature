@@ -1,10 +1,15 @@
 """多 Provider LLM 客户端封装。
 
-仅支持 MiniMax(OpenAI Compatible)。
-默认 provider 由 LLM_PROVIDER 环境变量决定,调用方也可显式传入 provider。
+协议维度双通道:
+- openai(OpenAI 兼容 Chat Completions,含 MiniMax 别名;支持 reasoning_split 思考分离);
+- anthropic(Anthropic Messages,system 顶层 + x-api-key + thinking/text 双通道 SSE)。
+
+默认 provider 由 LLM_PROVIDER 环境变量决定;用户级运行时覆盖
+(set_runtime_llm,kind ∈ openai/anthropic)激活时优先生效。
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -54,7 +59,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
 
 _clients: dict[str, OpenAI] = {}
 # 记录上一次 messages_create 成功调用的 provider id。主要用于
-# 主题阶段的结构化决策日志(如 provider 列、息该实际落在哪一级),
+# 主题阶段的结构化决策日志(如 provider 列、以及该实际落在哪一级),
 # 以及 harness 绕圈重试时决定是否切换 provider。这个 contextvar
 # 起始为 None; 调用后由 _create_with_provider 在成功分支后设置。测试可以直接
 # 调用 set_last_used_provider("minimax") 注入假数据。
@@ -161,9 +166,12 @@ def _provider_has_key(provider_id: str) -> bool:
 def select_providers(requested: str | None) -> tuple[str, ...]:
     """根据请求的 provider 决定实际尝试顺序。
 
+    - 用户运行时覆盖激活:绕过 env key 检查,直接走覆盖配置(单 provider)。
     - 显式传 provider: 仅用该 provider,不降级。
     - 传 None 或 "auto": 按 fallback 顺序筛掉未配置 key 的 provider。
     """
+    if _runtime_llm_active():
+        return (get_default_provider(),)
     if requested and requested.strip().lower() != "auto":
         normalized = requested.strip().lower()
         if normalized not in PROVIDER_SPECS:
@@ -181,25 +189,274 @@ def select_providers(requested: str | None) -> tuple[str, ...]:
 
 
 # ---- v9.11: 运行时模型选择(从上游获取 + 用户自选) ----
+# C1(2026-10-27) contextvar 化:模型覆盖与用户级 provider 覆盖都绑定到
+# 当前执行上下文 —— SSE worker 线程内 set、finally reset,天然按请求隔离,
+# 多任务并发不再互相串台。ContextVar 在同一线程内随 async 任务复制语义
+# 与线程本地语义一致(本工具的调用形态是同步生成器跑在 worker 线程)。
 
-_model_override: str | None = None
-_model_override_lock = __import__("threading").Lock()
+_model_override_ctx: ContextVar[str | None] = ContextVar("model_override", default=None)
 
 
-def set_model_override(model_id: str | None) -> None:
-    """运行时覆盖 MINIMAX_MODEL(优先级高于 env)。传 None 取消覆盖。"""
-    global _model_override
-    with _model_override_lock:
-        _model_override = model_id.strip() if model_id and model_id.strip() else None
+def set_model_override(model_id: str | None):
+    """运行时覆盖 MINIMAX_MODEL(优先级高于 env)。返回 Token 供 reset。"""
+    return _model_override_ctx.set(
+        model_id.strip() if model_id and model_id.strip() else None
+    )
+
+
+def reset_model_override(token) -> None:
+    """恢复 set_model_override 之前的上下文值(须在同一线程调用)。"""
+    _model_override_ctx.reset(token)
 
 
 def get_model_override() -> str | None:
-    with _model_override_lock:
-        return _model_override
+    return _model_override_ctx.get()
+
+
+# ---- 按用户运行时覆盖(用户管理:自定义 base_url / api_key / model) ----
+_runtime_llm_ctx: ContextVar[dict | None] = ContextVar("runtime_llm", default=None)
+
+
+def set_runtime_llm(*, kind: str, base_url: str, api_key: str, model: str):
+    """启用用户自定义 provider(当前上下文)。kind ∈ openai/anthropic(协议维度);
+
+    历史 kind "minimax"(MiniMax 的 OpenAI 兼容端点)归一化为 openai。
+    返回 Token,配套 reset_runtime_llm(token) 恢复。
+    """
+    normalized = (kind or "openai").strip().lower()
+    if normalized == "minimax":
+        normalized = "openai"
+    return _runtime_llm_ctx.set({
+        "kind": normalized,
+        "base_url": (base_url or "").strip().rstrip("/"),
+        "api_key": (api_key or "").strip(),
+        "model": (model or "").strip(),
+    })
+
+
+def reset_runtime_llm(token) -> None:
+    """恢复 set_runtime_llm 之前的上下文值(须在同一线程调用)。"""
+    _runtime_llm_ctx.reset(token)
+
+
+def clear_runtime_llm() -> None:
+    """兼容入口:在当前上下文清除覆盖(回落系统 .env)。
+
+    与 reset 的区别:clear 是无条件置 None(任意上下文可调,旧测试大量
+    依赖);reset 是精确恢复 set 前状态(请求作用域 try/finally 用)。
+    """
+    _runtime_llm_ctx.set(None)
+
+
+def get_runtime_llm() -> dict | None:
+    rt = _runtime_llm_ctx.get()
+    return dict(rt) if rt else None
+
+
+def _runtime_llm_active() -> bool:
+    rt = _runtime_llm_ctx.get()
+    return bool(
+        rt and rt.get("base_url") and rt.get("api_key")
+    )
+
+
+def _anthropic_url(base_url: str, path: str) -> str:
+    """Anthropic 协议 base_url → 完整 URL。path ∈ messages/models。
+
+    官方 SDK 约定 base 不带 /v1(如 https://api.anthropic.com、
+    https://api.minimax.cn/anthropic);个别网关自带 /v1 —— 两者都兼容。
+    """
+    base = (base_url or "").strip().rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/{path}"
+    return f"{base}/v1/{path}"
+
+
+def _anthropic_headers(api_key: str) -> dict:
+    return {
+        "x-api-key": (api_key or "").strip(),
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+
+
+def _anthropic_text(data: dict) -> str:
+    """取 Messages 响应里的全部 text 块。"""
+    parts = []
+    for block in (data or {}).get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text") or ""))
+    return "".join(parts)
+
+
+def _anthropic_thinking(data: dict) -> str:
+    """取 Messages 响应里的全部 thinking 块(正文为空时的兜底来源)。"""
+    parts = []
+    for block in (data or {}).get("content") or []:
+        if isinstance(block, dict) and block.get("type") == "thinking":
+            parts.append(str(block.get("thinking") or ""))
+    return "".join(parts)
+
+
+def _anthropic_parse_sse_line(line: str) -> tuple[str, str] | None:
+    """解析 Anthropic SSE 的一行 data → (kind, text);非内容增量返回 None。
+
+    kind ∈ reasoning(thinking_delta)/content(text_delta);error 事件直接抛。
+    """
+    line = line.strip()
+    if not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if not payload or payload == "[DONE]":
+        return None
+    try:
+        evt = json.loads(payload)
+    except ValueError:
+        return None
+    etype = evt.get("type")
+    if etype == "content_block_delta":
+        delta = evt.get("delta") or {}
+        dtype = delta.get("type")
+        if dtype == "text_delta":
+            text = delta.get("text")
+            return ("content", text) if text else None
+        if dtype == "thinking_delta":
+            text = delta.get("thinking")
+            return ("reasoning", text) if text else None
+    elif etype == "error":
+        err = evt.get("error") or {}
+        raise RuntimeError(f"Anthropic 接口流式错误: {err.get('message') or evt}")
+    return None
+
+
+def _assert_public_http_url(url: str) -> None:
+    """出站 URL 的词法收窄断言(与 _guard_outbound_url 同规,双保险)。
+
+    scheme 必须 http/https 且 host 存在;host 为本机/内网主机名或
+    环回/私网/保留地址字面量时抛 RuntimeError。域名侧 DNS 校验由
+    _guard_outbound_url(validate_external_url)负责,本断言保证请求行
+    上游的公网语义静态可见。
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise RuntimeError(f"LLM 接口地址非法(仅允许公网 http/https): {url!r}")
+    host = parsed.hostname.lower()
+    if host == "localhost" or host.endswith((".local", ".internal")):
+        raise RuntimeError(f"LLM 接口地址被拒绝(仅允许公网 http/https): {host}")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return  # 域名字面量:DNS 侧校验由 _guard_outbound_url 负责
+    if (ip.is_loopback or ip.is_private or ip.is_reserved
+            or ip.is_link_local or ip.is_multicast or ip.is_unspecified):
+        raise RuntimeError(f"LLM 接口地址被拒绝(仅允许公网 http/https): {host}")
+
+
+def _guard_outbound_url(url: str) -> str:
+    """发请求前的 SSRF 兜底校验(与 resolve_provider 的 B3 二次校验同源)。
+
+    纵深防御:即使调用方绕过 resolve_provider 直接以用户可控 base_url
+    构造请求,出站前也拦截内网/环回/保留地址。公网域名放行(含
+    api.minimax.cn 网关);域名暂不可解析沿用既有 NXDOMAIN 放行语义,
+    连接期报真实错误。校验失败按本模块错误契约抛 RuntimeError。
+    """
+    from security.auth import validate_external_url
+
+    try:
+        guarded = validate_external_url(url)
+    except ValueError as exc:
+        raise RuntimeError(f"LLM 接口地址被拒绝(仅允许公网 http/https): {exc}") from exc
+    _assert_public_http_url(guarded)
+    return guarded
+
+
+def _anthropic_request(
+    base_url: str, api_key: str, payload: dict, timeout: float,
+) -> dict:
+    """非流式 Anthropic Messages 调用(httpx 为 openai SDK 传递依赖,零新装包)。
+
+    错误一律 RuntimeError 且带上游原文,直达前端。
+    """
+    import httpx
+    url = _guard_outbound_url(_anthropic_url(base_url, "messages"))
+    _assert_public_http_url(url)  # 请求行上游紧跟公网断言(静态可见)
+    try:
+        resp = httpx.post(_guard_outbound_url(url), headers=_anthropic_headers(api_key), json=payload, timeout=timeout)
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Anthropic 接口连接失败: {exc}") from exc
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Anthropic 接口错误 {resp.status_code}: {resp.text[:300]}")
+    return resp.json()
+
+
+def _anthropic_stream(
+    base_url: str, api_key: str, payload: dict, timeout: float,
+) -> Generator[tuple[str, str], None, None]:
+    """流式 Anthropic Messages:yield (kind, text),kind ∈ reasoning/content。"""
+    import httpx
+    url = _guard_outbound_url(_anthropic_url(base_url, "messages"))
+    _assert_public_http_url(url)  # 建流行上游紧跟公网断言(静态可见)
+    try:
+        with httpx.stream(
+            "POST", _guard_outbound_url(url), headers=_anthropic_headers(api_key), json=payload, timeout=timeout,
+        ) as resp:
+            if resp.status_code >= 400:
+                body = resp.read().decode("utf-8", "replace")
+                raise RuntimeError(f"Anthropic 接口错误 {resp.status_code}: {body[:300]}")
+            for line in resp.iter_lines():
+                parsed = _anthropic_parse_sse_line(line)
+                if parsed is not None:
+                    yield parsed
+    except RuntimeError:
+        raise
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"Anthropic 接口连接失败: {exc}") from exc
+
+
+def fetch_models_for(kind: str, base_url: str, api_key: str, timeout: float = 15.0) -> list[dict]:
+    """从上游获取可用模型列表,按协议选端点与鉴权头。
+
+    openai(含 minimax 别名): GET {base}/models + Bearer
+    anthropic:               GET {base}/v1/models + x-api-key
+    """
+    kind = (kind or "openai").strip().lower()
+    if kind == "anthropic":
+        url = _guard_outbound_url(_anthropic_url(base_url, "models"))
+        headers = _anthropic_headers(api_key)
+    else:
+        url = _guard_outbound_url(f"{(base_url or '').strip().rstrip('/')}/models")
+        headers = {"Authorization": f"Bearer {(api_key or '').strip()}"}
+    _assert_public_http_url(url)  # 请求行上游紧跟公网断言(静态可见)
+    import urllib.request
+    req = urllib.request.Request(_guard_outbound_url(url), headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    models = data.get("data") or []
+    return [
+        {
+            "id": m["id"],
+            "owned_by": m.get("owned_by") or m.get("display_name") or "",
+            "created": m.get("created", 0),
+        }
+        for m in models if m.get("id")
+    ]
 
 
 def fetch_available_models(provider_id: str = "minimax") -> list[dict]:
-    """从上游 API 的 GET /models 端点获取可用模型列表。"""
+    """从上游 API 的 GET /models 端点获取可用模型列表(系统 env 配置)。
+
+    用户运行时覆盖激活时优先用覆盖的 base_url/api_key;否则读系统 env。
+    """
+    rt = get_runtime_llm()
+    if rt and rt.get("base_url") and rt.get("api_key"):
+        try:
+            return fetch_models_for(rt.get("kind") or "openai", rt["base_url"], rt["api_key"])
+        except Exception as exc:
+            log.warning("获取上游模型列表失败: %s", exc)
+            return []
     spec = PROVIDER_SPECS.get(provider_id)
     if spec is None:
         return []
@@ -207,26 +464,54 @@ def fetch_available_models(provider_id: str = "minimax") -> list[dict]:
     base = (os.environ.get(spec.env_base) or "").strip()
     if not api_key or not base:
         return []
-    import urllib.request, json as _json
-    req = urllib.request.Request(
-        f"{base.rstrip('/')}/models",
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
-        models = data.get("data") or []
-        return [
-            {"id": m["id"], "owned_by": m.get("owned_by", ""), "created": m.get("created", 0)}
-            for m in models if m.get("id")
-        ]
+        return fetch_models_for("openai", base, api_key)
     except Exception as exc:
         log.warning("获取上游模型列表失败: %s", exc)
         return []
 
 
 def resolve_provider(provider: str | None = None) -> ResolvedProvider:
-    """读取 provider 配置,校验 API key,并返回统一配置。"""
+    """读取 provider 配置,校验 API key,并返回统一配置。
+
+    用户运行时覆盖(set_runtime_llm)激活时优先:base_url/api_key/model
+    全部来自覆盖;model 留空时依次回落 全局模型覆盖 → env 模型 → 报错。
+    """
+    rt = get_runtime_llm()
+    if rt and rt.get("base_url") and rt.get("api_key"):
+        normalized_kind = rt.get("kind") or "openai"
+        if normalized_kind == "minimax":
+            normalized_kind = "openai"
+        # B3(2026-10-27):请求侧 SSRF 二次校验。保存侧(api/auth.
+        # save_llm_config)已校验,但运行时覆盖是模块级 set_runtime_llm,
+        # 可被测试/脚本绕过保存直接注入;所有 chat/stream 调用必经本函数,
+        # 在此兜底。残余风险:校验与真实建连间的 DNS rebinding 窗口仍在,
+        # 彻底方案为 transport 层 pin 已校验 IP(遗留项)。
+        from security.auth import validate_external_url
+
+        try:
+            validated_base = validate_external_url(rt["base_url"])
+        except ValueError as exc:
+            raise RuntimeError(f"LLM 接口地址被拒绝(仅允许公网 http/https): {exc}") from exc
+        spec = PROVIDER_SPECS.get(normalized_kind)
+        model = rt.get("model") or get_model_override() or ""
+        if not model and spec is not None:
+            model = (os.environ.get(spec.env_model) or "").strip()
+        if not model:
+            raise RuntimeError(
+                "未指定模型:请在「监控与管理 → LLM 设置」中选择模型后保存。"
+            )
+        return ResolvedProvider(
+            id=normalized_kind,
+            label={"anthropic": "Anthropic 兼容", "openai": "OpenAI 兼容"}.get(
+                normalized_kind, "自定义接口",
+            ),
+            api_key=rt["api_key"],
+            base_url=validated_base,
+            model=model,
+            mode="anthropic" if normalized_kind == "anthropic" else "chat",
+        )
+
     provider_id = (provider or get_default_provider()).strip().lower()
     spec = PROVIDER_SPECS.get(provider_id)
     if spec is None:
@@ -265,25 +550,29 @@ def resolve_provider(provider: str | None = None) -> ResolvedProvider:
     )
 
 
-def _client_key(provider_id: str, timeout: float) -> str:
-    return f"{provider_id}:{timeout}"
+def _client_key(provider_id: str, timeout: float, api_key: str = "", base_url: str = "") -> str:
+    # 缓存键须带 base_url/key 指纹:用户运行时覆盖会切换同一 provider id 的
+    # 指向,仅按 id+timeout 缓存会复用旧配置的客户端。
+    fp = hashlib.sha1(f"{api_key}|{base_url}".encode("utf-8")).hexdigest()[:12]
+    return f"{provider_id}:{timeout}:{fp}"
 
 
 def _close_client(provider_id: str, timeout: float) -> None:
-    key = _client_key(provider_id, timeout)
-    client = _clients.pop(key, None)
-    if client is not None:
-        try:
-            client.close()
-        except Exception:
-            pass
+    prefix = f"{provider_id}:"
+    for key in [k for k in list(_clients) if k.startswith(prefix)]:
+        client = _clients.pop(key, None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def get_client(provider: str | None = None, timeout: float | None = None) -> OpenAI:
     """懒加载指定 provider 的 OpenAI 客户端。"""
     resolved = resolve_provider(provider)
     timeout_value = timeout if timeout is not None else 300.0
-    key = _client_key(resolved.id, timeout_value)
+    key = _client_key(resolved.id, timeout_value, resolved.api_key, resolved.base_url)
     if key not in _clients:
         # SDK 内部重试关闭:openai>=1 在 client 创建时默认开启 max_retries=2,
         # 与外层 messages_create(max_retries=1) 叠加导致单次调用在客户端侧
@@ -412,36 +701,42 @@ def _responses_input(system: str, user: str) -> list[dict]:
     ]
 
 
-def messages_stream(
+def messages_stream_ex(
     system: str,
     user: str,
     max_tokens: int = 4000,
     model: str | None = None,
     temperature: float | None = None,
     provider: str | None = None,
-) -> Generator[str, None, None]:
-    """流式调用 LLM,逐块返回增量文本。
+) -> Generator[tuple[str, str], None, None]:
+    """流式调用 LLM,逐块返回 (kind, text) 二元组。
 
-    按 `select_providers` 给出的顺序尝试 provider: 第一个能产出首段文本的
-    provider 胜出;首个 provider 在还没产生任何文本前就抛鉴权/超时/网关错误时
-    自动换到下一级。一旦开始产出文本,后续就不再切 provider(流式内切会污染下游)。
+    kind="reasoning" 为模型思考增量(reasoning_details / reasoning_content),
+    仅供过程展示,调用方不得拼入正文;kind="content" 为正文增量。
+    按 `select_providers` 给出的顺序尝试 provider: 第一个能产出正文增量的
+    provider 胜出;首个 provider 在还没产生任何正文前就抛鉴权/超时/网关错误时
+    自动换到下一级。一旦开始产出正文,后续就不再切 provider(流式内切会污染下游)。
     """
     candidates = select_providers(provider)
 
     fallback_used: list[str] = []
     last_err: Exception | None = None
     for pid in candidates:
+        # 2026-10-27:必须先于 try 初始化。此前放在 try 内 resolve_provider
+        # 之后,resolve 抛 RuntimeError(如覆盖态未选模型)时 except 分支访问
+        # 未绑定的 yielded_any 抛 UnboundLocalError,掩盖原始错误信息。
+        yielded_any = False
         try:
             resolved = resolve_provider(pid)
-            yielded_any = False
-            for piece in _stream_with_resolved(
+            for kind, piece in _stream_with_resolved(
                 resolved, system=system, user=user,
                 max_tokens=max_tokens, model=model, temperature=temperature,
             ):
-                yielded_any = True
-                yield piece
+                if kind == "content":
+                    yielded_any = True
+                yield kind, piece
             if pid != candidates[0] and fallback_used:
-                log.info("流式调用从 %s 回退到 %s", candidates[0], pid)
+                log.info("流式调用从 %s 回退到 %s", pid, candidates[0])
             return
         except Exception as exc:  # noqa: BLE001
             last_err = exc
@@ -463,6 +758,23 @@ def messages_stream(
     )
 
 
+def messages_stream(
+    system: str,
+    user: str,
+    max_tokens: int = 4000,
+    model: str | None = None,
+    temperature: float | None = None,
+    provider: str | None = None,
+) -> Generator[str, None, None]:
+    """流式调用 LLM,逐块返回正文增量(向后兼容包装,思考增量不外发)。"""
+    for kind, piece in messages_stream_ex(
+        system=system, user=user, max_tokens=max_tokens,
+        model=model, temperature=temperature, provider=provider,
+    ):
+        if kind == "content":
+            yield piece
+
+
 def _stream_with_resolved(
     resolved: ResolvedProvider,
     *,
@@ -471,12 +783,36 @@ def _stream_with_resolved(
     max_tokens: int,
     model: str | None,
     temperature: float | None,
-) -> Generator[str, None, None]:
-    """单个 provider 的流式调用。"""
+) -> Generator[tuple[str, str], None, None]:
+    """单个 provider 的流式调用,yield (kind, text): kind ∈ reasoning/content。"""
     model = model or resolved.model
-    client = get_client(provider=resolved.id)
     emitted_any = False
     try:
+        if resolved.mode == "anthropic":
+            # Anthropic Messages 协议(system 顶层、x-api-key 鉴权、
+            # thinking_delta/text_delta 双通道),与 chat 分支同语义
+            payload = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            }
+            if temperature is not None:
+                payload["temperature"] = temperature
+            got_any = False
+            for kind, text in _anthropic_stream(
+                resolved.base_url, resolved.api_key, payload, timeout=300.0,
+            ):
+                got_any = True
+                if kind == "content":
+                    emitted_any = True
+                yield kind, text
+            if not got_any:
+                raise RuntimeError("Anthropic 接口未返回任何内容")
+            _record_provider_status(resolved.id, success=emitted_any, error=None)
+            return
+
+        client = get_client(provider=resolved.id)
         if resolved.mode == "responses":
             kwargs = dict(
                 model=model,
@@ -492,13 +828,13 @@ def _stream_with_resolved(
                 if event_type.startswith("response.output_text") and isinstance(delta, str):
                     if delta:
                         emitted_any = True
-                        yield delta
+                        yield "content", delta
                 elif event_type == "response.completed" and not emitted_any:
                     response = getattr(event, "response", None)
                     text = getattr(response, "output_text", "") or ""
                     if text:
                         emitted_any = True
-                        yield text
+                        yield "content", text
             _record_provider_status(resolved.id, success=emitted_any, error=None)
             return
 
@@ -514,8 +850,8 @@ def _stream_with_resolved(
             # 官方 reasoning_split:思考内容分离到 reasoning_details,content 只留正文
             kwargs["extra_body"] = {"reasoning_split": True}
 
-        # reasoning_split 下思考增量落在 delta.reasoning_details;缓冲不输出,
-        # 仅在 content 全空(模型把正文整体写进 think 块的已知怪癖)时兜底
+        # 思考增量双来源:reasoning_split 的 reasoning_details 与 deepseek 风格的
+        # delta.reasoning_content;实时对外 yield 供过程展示,同时留 buffer 兜底
         reasoning_buffer = ""
         for chunk in client.chat.completions.create(**kwargs):
             if not getattr(chunk, "choices", None):
@@ -523,15 +859,20 @@ def _stream_with_resolved(
             delta = chunk.choices[0].delta
             details = getattr(delta, "reasoning_details", None)
             if details:
-                reasoning_buffer += "".join(
-                    t for t in (_item_text(i) for i in details) if t
-                )
+                think_text = "".join(t for t in (_item_text(i) for i in details) if t)
+                if think_text:
+                    reasoning_buffer += think_text
+                    yield "reasoning", think_text
+            rc = getattr(delta, "reasoning_content", None)
+            if isinstance(rc, str) and rc:
+                reasoning_buffer += rc
+                yield "reasoning", rc
             piece = getattr(delta, "content", None)
             if not piece:
                 continue
             if isinstance(piece, str):
                 emitted_any = True
-                yield piece
+                yield "content", piece
                 continue
             if isinstance(piece, list):
                 text_parts: list[str] = []
@@ -543,10 +884,10 @@ def _stream_with_resolved(
                         text_parts.append(str(item["text"]))
                 if text_parts:
                     emitted_any = True
-                    yield "".join(text_parts)
+                    yield "content", "".join(text_parts)
         if not emitted_any and reasoning_buffer.strip():
             # 兜底:等价于 _strip_think 的「剥完为空 → 正文必在 think 内」
-            yield re.sub(r"</?think>", "", reasoning_buffer).strip()
+            yield "content", re.sub(r"</?think>", "", reasoning_buffer).strip()
         # v9.6:success 此前为 emitted_any or True 恒真,provider 健康面板永远显示
         # 成功——改为「有正文输出或 reasoning 兜底产出」才算成功
         _record_provider_status(
@@ -591,6 +932,27 @@ def _create_with_provider(
     # 变成 TypeError: exceptions must derive from BaseException。
     for attempt in range(max(1, max_retries)):
         try:
+            if resolved.mode == "anthropic":
+                # Anthropic Messages 协议:错误为 RuntimeError(非 openai 异常族),
+                # 不进下方 openai 异常重试分支——覆盖态单 provider,直接抛给前端
+                payload = {
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "system": system,
+                    "messages": [{"role": "user", "content": user}],
+                }
+                if temperature is not None:
+                    payload["temperature"] = temperature
+                data = _anthropic_request(
+                    resolved.base_url, resolved.api_key, payload, timeout=timeout,
+                )
+                content = _anthropic_text(data)
+                if not content.strip():
+                    # M3 类怪癖的 Anthropic 版:正文整体落在 thinking 块
+                    content = _anthropic_thinking(data).strip()
+                _record_provider_status(resolved.id, success=True, error=None)
+                last_used_provider.set(resolved.id)
+                return content
             client = get_client(provider=resolved.id, timeout=timeout)
             if resolved.mode == "responses":
                 kwargs = dict(
