@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Generator
 
@@ -110,6 +111,11 @@ _SCREENING_ABSTRACT_CHARS = 2000
 _SCREENING_TIMEOUT_SECONDS = 75.0
 _SCREENING_MAX_RETRIES = 2
 
+# 批次级外层重试(2026-10-30 F2):内部重试(重采样/二分)耗尽后整批
+# 歇 20 秒完整重跑,最多 2 次;仍失败按原语义抛出。
+_BATCH_OUTER_RETRY_SLEEP_SECONDS = 20.0
+_BATCH_OUTER_RETRY_MAX = 2
+
 
 def _screen_chunk(
     papers: list[Paper],
@@ -154,8 +160,46 @@ def _screen_chunk_with_fallback(
     topic: str,
     abstract_chars: int,
     _retried: bool = False,
+    _outer_attempt: int = 0,
 ) -> list[dict]:
-    """解析或覆盖不完整时缩小请求范围,绝不默认补齐结果。"""
+    """解析或覆盖不完整时缩小请求范围,绝不默认补齐结果。
+
+    外层批次重试(2026-10-30 F2 事故:批次 8 残片 4 篇二分重试两次都
+    超时 → 整批 raise → 已完成 252/399 白跑 35 分钟):单批所有内部重试
+    (整批重采样/二分)耗尽后仍失败,整批歇
+    _BATCH_OUTER_RETRY_SLEEP_SECONDS 秒再完整重跑一次,最多
+    _BATCH_OUTER_RETRY_MAX 次,仍失败才按原语义抛出 —— 超时风暴通常是
+    分钟级的,歇一次再整批重跑的存活率远高于当场放弃。只发 WARNING
+    日志提示(复用既有日志通道,不加新事件)。
+    """
+    try:
+        return _screen_chunk_attempt(papers, topic, abstract_chars, _retried)
+    except Exception as exc:
+        if _outer_attempt >= _BATCH_OUTER_RETRY_MAX:
+            raise
+        log.warning(
+            "筛选批次内部重试耗尽(size=%d),第 %d/%d 次外层重试:歇 %d 秒后整批重跑。原因: %s",
+            len(papers), _outer_attempt + 1, _BATCH_OUTER_RETRY_MAX,
+            int(_BATCH_OUTER_RETRY_SLEEP_SECONDS), str(exc)[:160],
+        )
+        time.sleep(_BATCH_OUTER_RETRY_SLEEP_SECONDS)
+        return _screen_chunk_with_fallback(
+            papers, topic, abstract_chars,
+            _outer_attempt=_outer_attempt + 1,
+        )
+
+
+def _screen_chunk_attempt(
+    papers: list[Paper],
+    topic: str,
+    abstract_chars: int,
+    _retried: bool = False,
+) -> list[dict]:
+    """单轮批次筛选:整批重采样与二分重试(原 _screen_chunk_with_fallback 主体)。
+
+    二分递归经外层包装 `_screen_chunk_with_fallback` 发起,子批自带
+    完整的内层/外层重试预算。
+    """
     try:
         llm_decisions = _screen_chunk(papers, topic, abstract_chars)
         return _normalize_chunk_decisions(llm_decisions, papers)
@@ -188,7 +232,8 @@ def _screen_chunk_with_fallback(
         )
     except Exception as exc:
         # 连接/超时/网关错误也按“当前批次失败”处理：先二分降低上下文和输出，
-        # 不让一个批次的异常取消其他已完成批次。小批次仍失败才上抛。
+        # 不让一个批次的异常取消其他已完成批次。小批次仍失败才上抛
+        # (上抛后由外层包装的批次级重试兜底)。
         if len(papers) <= 6:
             raise ScreeningError(f"筛选批次调用失败(size={len(papers)}): {exc}") from exc
         midpoint = len(papers) // 2

@@ -944,6 +944,13 @@ def _min_citation_target(n_papers: int) -> int:
     固定“8 篇”会让几十篇甚至几百篇候选最终只留下个位数引用，
     既不能覆盖证据，也会让主题章节与参考文献池脱节。目标采用分段比例
     并设置上限，兼顾覆盖面和正文可读性；小池子仍保留最低 2 篇规则。
+
+    上限封顶(2026-10-30 策略矛盾修复):48 → 16。单章正文窗口
+    (max_tokens=8000 ≈ 2000-3200 字)按学术密度(~1 引用/150 字)可自然
+    容纳 12-16 篇;旧公式 70% 比例让 34/35 篇组要求 24-25 篇(70%),
+    物理不可达 —— 诚实正文 10-22 篇也被判不足,重写 3 轮后整段替换成
+    题录模板墙。修正方向是"要求上限封顶"而非放宽已有底线:下限 max(12)
+    与 70% 比例照旧,中小组(≤22 篇)要求值完全不变。
     """
     if n_papers <= 0:
         return 0
@@ -951,9 +958,9 @@ def _min_citation_target(n_papers: int) -> int:
         return min(n_papers, max(2, n_papers // 2 + 1))
     if n_papers < 15:
         return min(n_papers, max(5, (n_papers + 1) // 2))
-    # 15 篇以上至少覆盖约七成候选,并设置 48 篇上限控制正文可读性。
+    # 15 篇以上至少覆盖约七成候选,但按单章正文容量封顶 16 篇;
     # 代表性文献仍由筛选阶段控制,章节不能只引用少数几篇“代表作”。
-    return min(n_papers, max(12, min(48, math.ceil(n_papers * 0.70))))
+    return min(n_papers, max(12, min(16, math.ceil(n_papers * 0.70))))
 
 
 def _unmatched_citation_feedback(unmatched: list[str]) -> str:

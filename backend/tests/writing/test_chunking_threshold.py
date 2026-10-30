@@ -52,10 +52,13 @@ def test_chunk_threshold_is_30(monkeypatch):
 
 
 def _fake_two_pass_create(papers, axis_names):
-    """两遍式 fake:按提示词特征区分「定轴」与「归组」两种调用。"""
+    """两遍式 fake:按提示词特征区分「定轴」与「归组」两种调用。
+
+    2026-10-30 行协议迁移后,定轴提示词的特征标记是「#序号|轴名|研究问题」。
+    """
     def fake_create(**kwargs):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return json.dumps({"themes": [
                 {"name": name, "research_question": f"如何研究{name}的核心问题"}
                 for name in axis_names

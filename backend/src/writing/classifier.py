@@ -827,7 +827,13 @@ def _repair_invalid_group_response(raw: str, *, topic: str, papers: list[Paper],
     try:
         try:
             repaired = messages_create(
-                system=system, user=user, max_tokens=min(1800, max(500, len(papers) * 12)),
+                system=system, user=user,
+                # M3 思考预算(2026-10-30 事故):MiniMax M3 的思考与正文共享
+                # 输出预算,旧公式 min(1800, max(500, n*12))(90 篇=1080)连
+                # 思考都不够,内容通道只写得出被截断的思考散文 —— 不是模型
+                # 不遵守协议,是没预算写。60 token/篇摊销逐篇思考,
+                # 8000 上限对齐筛选先例(max_tokens=8000 一直正常)。
+                max_tokens=min(8000, max(3000, len(papers) * 60)),
                 temperature=0.0, response_format={"type": "json_object"},
                 timeout=20.0, max_retries=0,
             )
@@ -1099,6 +1105,15 @@ def _en_term_variants(word: str) -> set[str]:
     return variants
 
 
+# 名实粗检的跨语言豁免阈值(2026-10-30 边界放宽):组内与组名同语言的
+# 题录占比低于该值时,词面比对本就无意义 —— 今晚实锤:82% 英文组配语义
+# 贴切的中文名「可持续水产蛋白供给」,8 条中文标题(海产品/渔业/品牌建设)
+# 里必然找不到 ≥2 字子串,零重叠误杀。保守放行,命名质量由 harness 名实
+# 告警 + 确认面板手工调整兜底;占比 ≥ 该值维持严格判定(防「通用话术名
+# 挂不相干文献」事故形态的本意不变)。
+_CROSS_LANG_MINOR_SHARE = 0.30
+
+
 def _name_evidence_overlap(name: str, papers: list[Paper], lit_ids: list[str]) -> bool:
     """名实粗检:组名关键词与组内题名是否存在词面重叠。
 
@@ -1106,9 +1121,10 @@ def _name_evidence_overlap(name: str, papers: list[Paper], lit_ids: list[str]) -
     (去停用词,粗归并单复数)出现在题名。零重叠说明组名与组内文献
     名实脱节(线上事故形态:模型自拟的通用话术名挂着一组不相干文献),
     是「④名实粗检」的判据 —— True=有重叠(放行),False=零重叠。
-    组内无题名证据、或组名语言与全部题名不同(跨语言组,如中文池的
-    纯英文组)时保守放行 —— 跨语言词面比对无意义,命名由语言一致性
-    链路(_rename_english_groups_for_zh_pool/LLM 改名)负责。
+    组内无题名证据、或与组名同语言的题录占比 < _CROSS_LANG_MINOR_SHARE
+    (跨语言主导组,如 82% 英文组配中文名)时保守放行 —— 少数派语言的
+    词面比对本就无意义,豁免边界从「同名语言题录数为 0」放宽为
+    「占比 < 30%」(2026-10-30);同语言占比足够时维持严格判定。
     """
     by_id = {p.lit_id: p for p in papers}
     entries = [
@@ -1123,7 +1139,7 @@ def _name_evidence_overlap(name: str, papers: list[Paper], lit_ids: list[str]) -
         title for title in entries
         if bool(_re.search(r"[\u4e00-\u9fff]", title)) == name_has_zh
     ]
-    if not same_lang_titles:
+    if len(same_lang_titles) / len(entries) < _CROSS_LANG_MINOR_SHARE:
         return True
     zh_terms = _re.findall(r"[\u4e00-\u9fff]{2,}", name or "")
     en_terms = [
@@ -1609,12 +1625,17 @@ def _semantic_cluster_groups(papers: list[Paper], topic: str, progress=None) -> 
 def _output_token_budget(papers: list[Paper]) -> int:
     """分类输出的 max_tokens 预算,随池子规模缩放。
 
-    历史教训:固定 5000 时,300+ 篇池子(每个 lit_id 是 lit_cnki_+16 位十六进制
-    ≈ 10-18 token)的回显需求即达 4000-6000 token,JSON 必然被截断。
-    编号协议下每篇仅 ~4 token,仍按池子规模放大并设 32k 硬顶
+    历史教训 1:固定 5000 时,300+ 篇池子(每个 lit_id 是 lit_cnki_+16 位
+    十六进制 ≈ 10-18 token)的回显需求即达 4000-6000 token,JSON 必然被
+    截断(当时用抢救兜底而非加预算,见 :674 注释)。
+    历史教训 2(2026-10-30 M3 思考预算事故):MiniMax M3 的思考与正文共享
+    输出预算,90 篇分配任务的思考摊销就要数千 token,5000 下限的内容通道
+    只写得出被截断的思考散文 —— 不是模型不遵守协议,是没预算写。
+    新口径:下限提到 8000(对齐筛选先例 max_tokens=8000 一直正常),
+    60 token/篇摊销逐篇思考(与归组修复公式同口径),仍设 32k 硬顶
     (各 provider 输出上限不一,过大值会被 API 拒绝)。
     """
-    return min(32000, max(5000, 1500 + 6 * len(papers)))
+    return min(32000, max(8000, 1500 + 60 * len(papers)))
 
 
 def _map_group_items(items: list[dict], index_of: dict[str, str]) -> list[dict]:
@@ -1680,6 +1701,46 @@ def _axis_catalog(axes: list[Group]) -> str:
             line += f" —— {axis.research_question}"
         lines.append(line)
     return "\n".join(lines)
+
+
+_AXIS_LINE_RE = _re.compile(r"^\s*#\s*(\d{1,2})\s*[|｜]\s*(.+?)\s*$", _re.M)
+
+
+def _parse_axis_line_protocol(raw: str, papers_count: int) -> list[dict]:
+    """解析轴规划行协议「#序号|轴名|研究问题」(每轴一行,2026-10-30 F1)。
+
+    线上四场跑批实测:MiniMax M3 对 24 万字符大文档稳定拒绝输出 JSON
+    (轴规划 JSON 首试成功率 0/4),而归组阶段的行协议(2a84c79 先例)
+    稳定可用 —— 轴规划输出协议随之迁移为行协议为主。解析规则:
+    - 只认行首 `#数字|` 形态:思考散文、JSON、markdown 标题行不误匹配
+      (归组阶段同款「英文思考散文 + 末尾几行行协议」混合形态可解析);
+    - 序号越界(非 1.._AXIS_MAX)丢弃;重复序号以首行为准;
+    - 研究问题可空(#2|轴名| 或 #2|轴名),下游 RQ 注入已容忍部分缺失;
+    - 有效行数低于 max(2, _min_groups(papers_count)) 视为整体失败返回空,
+      交回调用方走既有 JSON/散文解析链兜底。
+    本函数是纯解析器:只提取候选,判重、名称校验与上限截断仍由唯一
+    收口点 _normalize_axes 执行,不得旁路。
+    """
+    if not (raw or "").strip():
+        return []
+    items: list[dict] = []
+    seen_nos: set[int] = set()
+    for m in _AXIS_LINE_RE.finditer(raw):
+        no = int(m.group(1))
+        if not 1 <= no <= _AXIS_MAX:
+            continue  # 序号越界:丢弃该行
+        if no in seen_nos:
+            continue  # 重复序号:以首行为准
+        parts = _re.split(r"[|｜]", m.group(2), maxsplit=1)
+        name = parts[0].strip().strip("*#· ")
+        if not name:
+            continue
+        rq = parts[1].strip() if len(parts) > 1 else ""
+        seen_nos.add(no)
+        items.append({"name": name, "research_question": rq})
+    if len(items) < max(2, _min_groups(papers_count)):
+        return []
+    return items
 
 
 def _parse_axis_response(raw: str) -> list[dict]:
@@ -1818,7 +1879,9 @@ def _salvage_axes_from_prose(
                 "\n\n分组方案文本:"
                 f"\n{raw[:3500]}"
             ),
-            max_tokens=2500, temperature=0.0,
+            # M3 思考预算(2026-10-30):思考与正文共享输出预算,2500 连思考
+            # 都不够(输入是 3500 字符散文),对齐筛选先例提到 8000。
+            max_tokens=8000, temperature=0.0,
             response_format={"type": "json_object"},
             timeout=90.0, max_retries=0,
         )
@@ -1995,10 +2058,14 @@ def _plan_theme_axes(
         axis_min=max(2, _min_groups(len(papers))),
     )
     lang_name = "中文" if (language or "zh") == "zh" else "English"
+    axis_floor = max(2, _min_groups(len(papers)))
     user = (
         f"研究主题:{topic}\n请通读以上 {len(papers)} 篇文献,输出主题划分方案。"
-        f"name 与 research_question 必须使用{lang_name}。"
-        "只输出 JSON 对象,不输出任何解释文字。"
+        f"轴名与 research_question 必须使用{lang_name}。"
+        "输出协议(机器逐行解析,格式错误整个任务作废):每行一个主题轴,"
+        "严格为 #序号|轴名|研究问题;轴名 3-12 字、不得含与/和/及;"
+        f"共 {axis_floor}-8 行;除此之外一个字都不要输出,"
+        "严禁思考过程、严禁解释、严禁 JSON。"
     )
     # 防偷懒下限:18 篇以上的异质文献池通常不止 2 个研究问题簇,
     # 前两次尝试少于 3 个主题轴按"未完成"返工;最后一次仍偷懒则接受,
@@ -2013,10 +2080,11 @@ def _plan_theme_axes(
         attempt_user = user
         if attempt >= 2:
             attempt_user = (
-                f"{user}\n\n返工要求:上一次输出的主题轴不可用(语言不符、"
-                f"占位名、缺少 research_question 或数量不足)。主题名必须全部"
-                f"使用{lang_name};每个主题轴的 research_question 不得为空;"
-                f"至少 {lazy_floor} 个主题。"
+                f"{user}\n\n返工要求:上一次输出不可用。每行必须严格为 "
+                f"#序号|轴名|研究问题,轴名 3-12 字、不得含与/和/及,"
+                f"共 {axis_floor}-8 行;轴名与 research_question 必须全部"
+                f"使用{lang_name};research_question 不得为空"
+                f"(确实无法概括时该段留空);至少 {lazy_floor} 行。"
             )
         try:
             if progress:
@@ -2031,9 +2099,16 @@ def _plan_theme_axes(
             )
             try:
                 raw = messages_create(
-                    system=system, user=attempt_user, max_tokens=2500,
+                    system=system, user=attempt_user,
+                    # M3 思考预算(2026-10-30 事故):思考与正文共享输出预算,
+                    # 2500 对 24 万字符输入连思考都不够,内容通道只写得出
+                    # 被截断的思考散文(轴规划 JSON 首试成功率 0/4 的根因
+                    # 之一);8000 对齐筛选先例(max_tokens=8000 一直正常)。
+                    max_tokens=8000,
                     temperature=temperature,
-                    response_format={"type": "json_object"},
+                    # 行协议迁移(2026-10-30 F1):去掉 response_format=json_object
+                    # —— 归组阶段(2a84c79)同款先例:MiniMax 长上下文下 JSON
+                    # 纪律不可靠(JSON 首试成功率 0/4),行协议反而稳定。
                     timeout=120.0, max_retries=1,
                 )
             finally:
@@ -2051,13 +2126,21 @@ def _plan_theme_axes(
                     "error_type": type(exc).__name__, "message": str(exc)[:500],
                 })
             continue
-        axes = _normalize_axes(_parse_axis_response(raw), len(papers), language)
+        # 解析链(2026-10-30 F1 行协议迁移):行协议为主 → 既有 JSON 解析
+        # (兼容保留,防上游行为变化)→ 散文直提 → LLM 格式转换。全部候选
+        # 仍经 _normalize_axes 唯一收口 —— 判重、_AXIS_MAX 截断与名称校验
+        # 在此执行,不得旁路(2026-10-26 事故:旁路直提 13 个英文轴)。
+        axes = _normalize_axes(
+            _parse_axis_line_protocol(raw, len(papers)), len(papers), language,
+        )
+        if len(axes) < floor and raw.strip():
+            # 兼容保留:模型仍回 JSON 时直接解析
+            axes = _normalize_axes(
+                _parse_axis_response(raw), len(papers), language,
+            ) or axes
         if len(axes) < floor and raw.strip():
             # agent 循环"策略调整"层:JSON 解析不出轴时,先换解析器
             # (正则直提散文主题,零 LLM 成本),再降级到 LLM 格式转换。
-            # 散文候选同样必须经 _normalize_axes 唯一收口 —— 判重、
-            # _AXIS_MAX 截断与名称校验在此执行,不得旁路(2026-10-26
-            # 事故:旁路直提 13 个英文轴,含 6 对同义主题)。
             axes = _normalize_axes(
                 _parse_prose_axes(raw), len(papers), language,
             ) or axes
@@ -2097,7 +2180,9 @@ def _plan_theme_axes(
                     '{"themes": [{"name": "...", "research_question": "..."}]}'
                 ),
                 user=f"研究主题:{topic}\n\n分组方案文本:\n{last_raw[:3500]}",
-                max_tokens=2500, temperature=0.0,
+                # M3 思考预算(2026-10-30):与 _salvage_axes_from_prose 同口径,
+                # 2500 连思考都不够,对齐筛选先例提到 8000。
+                max_tokens=8000, temperature=0.0,
                 response_format={"type": "json_object"},
                 timeout=90.0, max_retries=0,
             )
@@ -2269,10 +2354,17 @@ def _salvage_assign_from_reasoning(
                 elif hits > second_hits:
                     second_hits = hits
             # 并列或零命中不猜:宁可留给孤儿回收按标题相似度兜底。
-            # ≥2 个 4-gram 同时命中才认(2026-10-26 收紧):≥1 时单条
-            # 4-gram 偶然重叠就会把文献误归主题,产出错误归属比留白更糟。
-            if best_name and best_hits >= 2 and best_hits > second_hits:
-                decided = best_name
+            # 双门槛(2026-10-30 放宽有标记路径):有结论标记(Clearly/归入/
+            # → …)时标记本身已是判词,≥1 个 4-gram 命中即接受 —— 标记短语
+            # 常是英文复述(中英混排思考),对中文轴名凑不满 ≥2 命中,此前
+            # 一刀切 ≥2 把抢救网饿死(90 篇池只捞回 10 篇);无标记的纯词面
+            # 路径保持 ≥2:单条 4-gram 偶然重叠就会误归,宁缺勿错。
+            if best_name and best_hits > second_hits:
+                if c_m:
+                    if best_hits >= 1:
+                        decided = best_name
+                elif best_hits >= 2:
+                    decided = best_name
         if decided:
             buckets.setdefault(decided, []).append(no)
     return [{"name": name, "ids": ids} for name, ids in buckets.items()]
@@ -2399,7 +2491,11 @@ def _assign_papers_to_axes(
         # 再烧两次 LLM 也只会重复同一种失败形态(线上 15 分钟教训)
         if best_covered >= -(-len(papers) * 9 // 10):
             break
-    if not best:
+    # 自由分组降级出口:三次尝试都没到验收线(≥90% 覆盖)就触发。
+    # 不能只判 `not best` —— 2026-10-30 事故:思考文本抢救捞回 6 组 10 篇,
+    # best 非空把本出口短路,10/90 的残局直接送去结构检查被拒
+    # (「有 N 篇文献未归组」),设计中的自由分组退路一次都没跑。
+    if not best or best_covered < -(-len(papers) * 9 // 10):
         # 轴绑定三次全败(模型无视给定轴自拟主题是 MiniMax 的常见行为)。
         # 与其报废整个划分,不如顺水推舟:让模型按自己的判断对全量文献
         # 直接分组一次 —— 自拟主题名经过 _build_groups/_finalize_theme_groups
@@ -2436,12 +2532,17 @@ def _assign_papers_to_axes(
             if len(items) >= len(papers):
                 items = []
             mapped = _map_group_items(items, index_of)
-            best, _ = _build_groups(
+            free_groups, _ = _build_groups(
                 mapped, valid_ids, pool_language=_pool_dominant_language(papers),
             )
             # 自主分组没有轴上限约束,组数超 _AXIS_MAX 时在此截断;
             # 被截组成员随后经既有孤儿回收挂回保留组。
-            best = _enforce_group_budget(best)
+            free_groups = _enforce_group_budget(free_groups)
+            # 至少不差于轴绑定残局才接管;残局仍由尾部孤儿回收兜底,
+            # 自由分组失败(空/异常)时不覆盖已抢救到的部分成果。
+            free_covered = len({lid for g in free_groups for lid in g.lit_ids})
+            if free_groups and free_covered >= max(best_covered, 1):
+                best = free_groups
         except Exception as exc:
             logger.warning("主题自主分组兜底失败: %s", exc)
     if not best:

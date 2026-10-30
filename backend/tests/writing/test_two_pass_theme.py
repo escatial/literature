@@ -54,7 +54,7 @@ def test_axis_plan_retries_on_placeholder_names(monkeypatch):
     def fake_create(**kwargs):
         calls.append(kwargs)
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             if len(calls) == 1:
                 return json.dumps({"themes": [
                     {"name": "主题一", "research_question": "占位名一"},
@@ -76,7 +76,7 @@ def test_axis_plan_raises_when_all_attempts_invalid(monkeypatch):
 
     def fake_create(**kwargs):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return json.dumps({"themes": [
                 {"name": "研究方向1", "research_question": "占位"},
             ]}, ensure_ascii=False)
@@ -96,7 +96,7 @@ def test_assign_name_drift_anchors_back_to_axis(monkeypatch):
 
     def fake_create(**kwargs):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return _axis_reply(names)
         return _assign_reply(papers, names, rename={1: "数字化转型路径研究"})
 
@@ -114,7 +114,7 @@ def test_assign_wild_group_papers_recovered_by_orphan_reassign(monkeypatch):
 
     def fake_create(**kwargs):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return _axis_reply(names)
         return json.dumps({"groups": [
             {"name": names[0], "ids": list(range(1, 30))},
@@ -136,7 +136,7 @@ def test_singleton_axis_group_absorbed_into_neighbor(monkeypatch):
 
     def fake_create(**kwargs):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return _axis_reply(names)
         return json.dumps({"groups": [
             {"name": names[0], "ids": list(range(1, 30))},
@@ -160,7 +160,7 @@ def test_axis_research_question_flows_into_final_groups(monkeypatch):
 
     def fake_create(**kwargs):
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return _axis_reply(names)
         return _assign_reply(papers, names)
 

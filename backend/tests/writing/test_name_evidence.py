@@ -189,5 +189,67 @@ def test_absorb_below_min_papers_threshold():
         clf.Group(name="主题丙丙", lit_ids=[p.lit_id for p in papers[9:]]),
     ]
     out = clf._absorb_small_groups(groups, papers, min_papers=4)
-    assert len(out) == 2, "3 篇组在 min_papers=4 下应被吸收"
+    assert len(out) == 2
     assert sum(len(g.lit_ids) for g in out) == 12
+
+
+# ---------- 跨语言豁免阈值(2026-10-30 边界放宽:同名语言占比 < 30% 放行) ----------
+
+def _en_paper(i: int, title: str) -> Paper:
+    return Paper(
+        lit_id=f"lit_openalex_{i:016x}", source=Source.OPENALEX,
+        title=title, authors=[f"Author {i}"], journal="Aquaculture",
+        year=2022, abstract="This paper studies sustainable seafood protein.",
+    )
+
+
+# 今晚事故组同款中文题录(海产品/渔业/品牌建设主题,与改名零子串)
+_ZH_MINOR_TITLES = [
+    "海产品区域品牌建设路径研究", "渔业产业化经营与农户增收机制分析",
+    "品牌水产品消费行为调查研究", "水海产品贸易壁垒应对策略分析",
+    "渔业合作社组织模式比较研究", "海产品加工业转型升级路径分析",
+    "水产品牌溢价形成机制探讨", "远洋渔业资源养护政策评述",
+]
+
+
+def test_cross_lang_minor_share_majority_english_group_passes(monkeypatch):
+    """今晚真实形态复现:82% 英文组(36 en + 8 zh)配语义贴切的中文名
+    「可持续水产蛋白供给」—— 中文名在 8 条中文标题里零子串,旧逻辑
+    (豁免仅当同名语言题录数为 0)误杀;8/44=18% < 30% → 放行。"""
+    papers = [
+        _en_paper(i, f"Sustainable shrimp protein supply chain study {i}")
+        for i in range(1, 37)
+    ]
+    papers += _pool(_ZH_MINOR_TITLES, start=100)
+    ids = [p.lit_id for p in papers]
+    assert len(ids) == 44
+    name = "可持续水产蛋白供给"
+    assert clf._name_evidence_overlap(name, papers, ids) is True, (
+        "跨语言主导组(同名语言占比 <30%)必须保守放行"
+    )
+    # 对照:阈值设 0(恢复旧的「同名语言题录数为 0 才豁免」语义)时,
+    # 同一输入走严格判定判 False → 放行确由豁免边界产生
+    monkeypatch.setattr(clf, "_CROSS_LANG_MINOR_SHARE", 0.0)
+    assert clf._name_evidence_overlap(name, papers, ids) is False
+
+
+def test_cross_lang_gate_keeps_strict_for_majority_same_lang():
+    """同名语言占比 ≥30% 维持严格判定:90% 中文题录 + 零重叠中文通用名
+    → 仍拒绝(「通用话术名挂不相干文献」事故防线不变);全中文组既有
+    行为回归。"""
+    zh_titles = [
+        "冷链物流配送网络优化研究", "冷链仓储温控技术应用研究",
+        "冷链运输成本控制策略研究", "物流企业服务质量评价研究",
+        "配送路径规划算法比较研究", "仓储选址模型实证分析研究",
+        "运输网络均衡理论研究", "物流信息平台建设研究",
+        "配送时效影响因素研究",
+    ]
+    papers = _pool(zh_titles)
+    papers.append(_en_paper(200, "Retail channel performance analysis"))
+    ids = [p.lit_id for p in papers]
+    # 9/10 = 90% 同语言 → 严格判定:零子串通用名拒绝
+    assert clf._name_evidence_overlap("品牌溢价机制", papers, ids) is False
+    # 全中文组(100%)既有行为回归:同样拒绝
+    assert clf._name_evidence_overlap(
+        "品牌溢价机制", papers[:9], [p.lit_id for p in papers[:9]],
+    ) is False

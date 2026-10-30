@@ -162,11 +162,97 @@ class _StageSpan:
         self._entered = False
 
 
+def _section_group_name_violates(
+    clean_name: str, used_names: set[str], pool_language: str | None,
+) -> bool:
+    """终检违规判定:名称不合格 / 中文短名(<6 字)/ 与已用名重复。
+
+    与 harness 的 theme_name_quality 口径对齐 —— 上游对短名仅告警放行
+    (T04 语义),这里的判定只用于决定「是否需要先收敛」。
+    """
+    from writing.classifier import _group_name_acceptable, _zh_theme_name_too_short
+
+    return (
+        not _group_name_acceptable(clean_name, pool_language=pool_language)
+        or _zh_theme_name_too_short(clean_name, pool_language)
+        or clean_name in used_names
+    )
+
+
+def _converge_section_group_name(
+    group: Group,
+    index: int,
+    used_names: set[str],
+    pool_language: str | None,
+    topic: str,
+    papers: list[Paper],
+) -> tuple[str, list[str]]:
+    """终检违规名的收敛出口(min-6 教训:检查必须配收敛出口)。
+
+    复用 T04 既有证据改名链,两级尝试:
+    ① 确定性证据改名 `_unique_evidence_group_name` —— 用组内文献题录
+       提取合规名(非标题片段、无连词、不与已用名冲突),零 LLM 成本;
+    ② ①失败时 LLM 批量改名 `_llm_retitle_group_names`(与
+       `_retitle_groups_for_pool` 同一套,单组小批量),候选须与组内
+       题录有词面重叠(名实相符),防止模型凭空造名。
+    每个候选复跑终检同组检查(合格 + 非 6 字短名 + 不与已用名冲突);
+    全部失败返回空串,并返回尝试记录供拦截信息诊断。
+    """
+    from writing.classifier import (
+        _group_name_acceptable,
+        _group_name_conflicts,
+        _llm_retitle_group_names,
+        _name_evidence_overlap,
+        _pool_dominant_language,
+        _unique_evidence_group_name,
+        _zh_theme_name_too_short,
+    )
+
+    attempts: list[str] = []
+
+    def _usable(candidate: str) -> bool:
+        return bool(
+            candidate
+            and not _group_name_conflicts(candidate, used_names)
+            and _group_name_acceptable(candidate, pool_language=pool_language)
+            and not _zh_theme_name_too_short(candidate, pool_language)
+        )
+
+    # ① 确定性证据改名:组内题录提取,零 LLM 成本
+    try:
+        candidate = _unique_evidence_group_name(
+            papers, group.lit_ids, set(used_names), index,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("终检证据改名失败(第 %d 组): %s", index, exc)
+        candidate = ""
+    attempts.append(candidate)
+    if _usable(candidate):
+        return candidate, attempts
+    # ② LLM 批量改名(单组小批量),候选须名实相符
+    try:
+        pool_lang = pool_language or _pool_dominant_language(papers)
+        renamed = _llm_retitle_group_names(topic, pool_lang, [group], papers)
+        candidate = (renamed or [""])[0]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("终检 LLM 改名失败(第 %d 组): %s", index, exc)
+        candidate = ""
+    if candidate:
+        attempts.append(candidate)
+        if (
+            _name_evidence_overlap(candidate, papers, group.lit_ids)
+            and _usable(candidate)
+        ):
+            return candidate, attempts
+    return "", attempts
+
+
 def build_review_sections(
     classify_mode: str,
     groups: list[Group],
     topic: str = "",
     pool_language: str | None = None,
+    papers: list[Paper] | None = None,
 ) -> list[SectionSpec]:
     """根据分类结果构造综述章节。
 
@@ -175,6 +261,13 @@ def build_review_sections(
       - 不接受叙述性连接词("近年来"/"然而"/"综上所述" 等)
       - 不接受英文碎片("英文单词+相关研究"式拼接标题)
     不合格时拒绝进入写作，避免把“主题5”或关键词碎片包装成正式章节。
+
+    终检收敛出口(2026-10-30「高邮大虾」事故):上游 harness 的
+    theme_name_quality 对短名仅告警放行(T04 语义),本终检却是硬拦截,
+    中间没有改名收敛 —— 违规名(unacceptable / 中文短名 / 重名)先走
+    既有证据改名链收敛(_converge_section_group_name),改名后复跑同一组
+    检查,全部通过才用新名继续;仍不合规保留原 raise,信息附上尝试记录。
+    papers 为 None 时保留旧行为(直接拦截,不做收敛)。
     """
     instruction_template = (
         SECTION_THEME_INSTRUCTION_TEMPLATE
@@ -193,11 +286,28 @@ def build_review_sections(
 
     for idx, group in enumerate(groups, start=1):
         clean_name = _clean_group_name(group.name)
+        # 先收敛再拦截:违规名走证据改名链,而不是直接毙掉整场写作
+        attempts: list[str] = []
+        if papers and _section_group_name_violates(
+            clean_name, used_names, pool_language,
+        ):
+            converged, attempts = _converge_section_group_name(
+                group, idx, used_names, pool_language, topic, papers,
+            )
+            if converged:
+                clean_name = converged
+                # 组名同步替换:后续 plan_complete 事件、确认面板与
+                # 正文章节使用同一名字,避免面板/正文两张皮。
+                group.name = converged
         if (
             not _group_name_acceptable(clean_name, pool_language=pool_language)
             or _zh_theme_name_too_short(clean_name, pool_language)
         ) or clean_name in used_names:
-            raise ValueError(f"第 {idx} 个主题名称不可靠，请重新划分主题：{group.name or '空名称'}")
+            detail = f"{group.name or '空名称'}"
+            if attempts:
+                tried = "、".join(a for a in attempts if a)
+                detail += f"(证据改名尝试:{tried or '无可提取证据'},仍不合规)"
+            raise ValueError(f"第 {idx} 个主题名称不可靠，请重新划分主题：{detail}")
         used_names.add(clean_name)
         sections.append(
             SectionSpec(
@@ -1184,15 +1294,36 @@ def _polish_and_verify_section(
     return result
 
 
-def _section_requires_quality_retry(result: SectionResult) -> bool:
-    """判断章节是否仍是占位/题录兜底稿，需要重新请求模型。"""
+# 节级硬失败重试间隔(2026-10-30 D2):流式超时/空响应常是分钟级抖动,
+# 歇 20s 再完整写作一次,避免把整节题录模板墙直接交付给用户。
+_SECTION_HARD_RETRY_SLEEP_SECONDS = 20.0
+
+
+def _section_hard_failed(result: SectionResult) -> bool:
+    """LLM 硬失败形态:无正文 / 非文章 / 纯兜底句墙。
+
+    只有这种形态才允许题录恢复稿(`_evidence_recovery_section_result`)
+    接管;诚实薄稿(有真实正文、仅引用密度不足,density_warning)不走
+    恢复稿 —— 模板墙质量远差于诚实薄稿,还会推高恢复稿占比触发全场
+    交付门禁(2026-10-30 策略矛盾修复,theme_2「密度警告保留诚实内容」
+    先例同一出口)。
+    """
     try:
         from writing.section_writer import _is_fallback_only, _looks_like_non_article
+        content = result.content or ""
         return bool(
-            _looks_like_non_article(result.content or "")
-            or _is_fallback_only(result.content or "")
-            or result.density_warning
+            not content.strip()
+            or _looks_like_non_article(content)
+            or _is_fallback_only(content)
         )
+    except Exception:
+        return not bool((result.content or "").strip())
+
+
+def _section_requires_quality_retry(result: SectionResult) -> bool:
+    """判断章节是否仍是占位/题录兜底稿或密度不足，需要重新请求模型。"""
+    try:
+        return _section_hard_failed(result) or bool(result.density_warning)
     except Exception:
         return bool(result.density_warning)
 
@@ -1224,10 +1355,15 @@ def _retry_section_quality(
         return result
     emit("quality_retry", "start", "章节质量未达标,正在独立重写")
     retry_t0 = time.monotonic()
+    # 择优记忆:重写不完全达标但质量高于原稿(且非硬失败)时记住它,
+    # 供保底出口保留更好的诚实正文(theme_4 实得 22/24 只差 2 的场景,
+    # 不该把更差的 10/24 原稿留到最后)。
+    best = result
     try:
         from writing.section_writer import write_section, ensure_section_evidence
         from writing.section_writer import _article_quality_score
         old_score = _article_quality_score(result.content or "", len(result.citations))
+        best_score = old_score
         # 模型偶发输出截断句，连续重试两次；每次都重新做证据绑定。
         for attempt in range(2):
             retry = write_section(
@@ -1244,11 +1380,59 @@ def _retry_section_quality(
                      f"重写通过(第 {attempt + 1} 次尝试),引用 {len(retry.citations)} 处",
                      time.monotonic() - retry_t0)
                 return retry
+            if new_score > best_score and not _section_hard_failed(retry):
+                best, best_score = retry, new_score
             old_score = max(old_score, new_score)
     except Exception as exc:  # noqa: BLE001
         log.warning("章节 %s QA 前自动重写失败: %s", getattr(spec, "key", "?"), exc)
-    # 重试仍失败时，使用真实题录证据稿，保证正文完整、作者年份与锚点
-    # 一一对应，并让最终 QA 能明确反映剩余的元数据风险。
+    # 2026-10-30 策略矛盾修复:重写仍不达标时,诚实薄稿(有真实正文、仅
+    # 引用密度不足)保留正文 + 密度警告标记 —— 与 theme_2「密度警告保留
+    # 诚实内容」先例同一出口。题录恢复稿只留给 LLM 硬失败(无正文/非文章/
+    # 兜底墙):模板墙质量远差于诚实薄稿,且会推高恢复稿占比触发全场
+    # 交付门禁(今晚 theme_3/4 被整段替换成模板墙、3/5 占比硬拦整场)。
+    if not _section_hard_failed(best):
+        log.warning(
+            "章节 %s 重写仍未达引用密度要求,保留诚实正文(%d 字,%d 处引用)并标记密度警告",
+            getattr(spec, "key", "?"), len(best.content or ""), len(best.citations),
+        )
+        emit("quality_retry", "fail",
+             "重写仍未达引用密度,保留诚实正文并标记密度警告(不生成题录恢复稿)",
+             time.monotonic() - retry_t0)
+        return best
+    # 2026-10-30 D2 节级重试:硬失败(流式超时/空响应等分钟级抖动)后直接
+    # 交付整节题录模板墙对用户不可接受(今晚第二节 24×「题录已核验」)。
+    # 歇 20s 再完整写作一次,成功则恢复真实正文;仍失败保留恢复稿,
+    # QA 经 article_lint 的 FALLBACK 词表(含「题录已核验」)以
+    # ARTICLE_FALLBACK_ONLY 如实标注。
+    if _section_hard_failed(best):
+        log.warning(
+            "章节 %s 硬失败,歇 %d 秒后节级重试一次完整写作",
+            getattr(spec, "key", "?"), _SECTION_HARD_RETRY_SLEEP_SECONDS,
+        )
+        time.sleep(_SECTION_HARD_RETRY_SLEEP_SECONDS)
+        try:
+            retry = write_section(
+                spec, topic, groups, papers, grades=grades,
+                synthesis_map=synthesis_map,
+                research_questions=research_questions,
+                review_goal=review_goal,
+            )
+            ensure_section_evidence(retry, papers)
+            if not _section_hard_failed(retry):
+                log.info(
+                    "章节 %s 节级重试成功,恢复真实正文(%d 字,%d 处引用)",
+                    getattr(spec, "key", "?"),
+                    len(retry.content or ""), len(retry.citations),
+                )
+                emit("quality_retry", "ok",
+                     f"节级重试成功,恢复真实正文(引用 {len(retry.citations)} 处)",
+                     time.monotonic() - retry_t0)
+                return retry
+            log.warning("章节 %s 节级重试产出仍为硬失败形态,保留恢复稿", getattr(spec, "key", "?"))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("章节 %s 节级重试仍失败: %s", getattr(spec, "key", "?"), exc)
+    # 重试仍失败且原稿是硬失败形态时，使用真实题录证据稿，保证正文完整、
+    # 作者年份与锚点一一对应，并让最终 QA 能明确反映剩余的元数据风险。
     recovered = _evidence_recovery_section_result(spec, topic, papers)
     if not _section_requires_quality_retry(recovered):
         log.warning("章节 %s 使用确定性证据稿完成恢复", getattr(spec, "key", "?"))
@@ -1885,6 +2069,7 @@ def plan_review_stream(
         section_specs = build_review_sections(
             classify_mode, groups, topic,
             pool_language=_pool_dominant_language(papers),
+            papers=papers,
         )
         yield _sse_event("plan_complete", {
             "phase": "await_confirm",
@@ -2003,6 +2188,7 @@ def generate_review_stream(
                 "total_sections": len(build_review_sections(
             classify_mode, groups, topic,
             pool_language=_pool_dominant_language(papers),
+            papers=papers,
         )),
             })
         else:
@@ -2091,6 +2277,7 @@ def generate_review_stream(
         section_specs = build_review_sections(
             classify_mode, groups, topic,
             pool_language=_pool_dominant_language(papers),
+            papers=papers,
         )
         sections: list[SectionResult] = []
         all_dropped: list[str] = []
@@ -2421,6 +2608,7 @@ def generate_review(
     section_specs = build_review_sections(
             classify_mode, groups, topic,
             pool_language=_pool_dominant_language(papers),
+            papers=papers,
         )
     sections: list[SectionResult] = []
     all_dropped: list[str] = []

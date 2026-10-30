@@ -57,9 +57,19 @@ def test_language_rebalance_keeps_each_feasible_theme_bilingual():
 # ---------- _output_token_budget ----------
 
 def test_token_budget_floor_and_scaling():
-    assert clf._output_token_budget(_papers(10)) == 5000
-    # 1000 篇:1500 + 6000 = 7500
-    assert clf._output_token_budget(_papers(1000)) == 7500
+    """预算公式 min(32000, max(8000, 1500 + 60*n))。
+
+    2026-10-30 M3 思考预算事故后口径升级:下限 5000 → 8000(对齐筛选
+    先例),6 token/篇 → 60 token/篇(摊销 M3 思考与正文共享输出预算)。
+    """
+    # 小池子吃 8000 下限(对齐筛选先例 max_tokens=8000 一直正常)
+    assert clf._output_token_budget(_papers(10)) == 8000
+    # 90 篇(今晚事故池):1500 + 5400 = 6900 < 8000 → 仍吃下限
+    assert clf._output_token_budget(_papers(90)) == 8000
+    # 等比段:300 篇 = 1500 + 18000 = 19500
+    assert clf._output_token_budget(_papers(300)) == 19500
+    # 1000 篇:1500 + 60000 = 61500 → 撞硬顶
+    assert clf._output_token_budget(_papers(1000)) == 32000
     # 硬顶 32000,不给 provider 拒绝的机会
     assert clf._output_token_budget(_papers(100000)) == 32000
 
@@ -275,7 +285,7 @@ class TestClassifyByThemeLargePool:
 
         def fake_create(**kwargs):
             body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-            if '"themes"' in body:
+            if "轴名|研究问题" in body:
                 # 第一遍(定轴)正常返回 3 个主题轴。
                 return json.dumps({"themes": [
                     {"name": "协同治理机制", "research_question": "如何协同治理"},

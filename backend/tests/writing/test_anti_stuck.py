@@ -92,7 +92,7 @@ def test_harness_loop_emits_progress_during_axis_planning(monkeypatch):
         # event fires from _heartbeat_progress.
         _t.sleep(7.0)
         body = (kwargs.get("system") or "") + "\n" + (kwargs.get("user") or "")
-        if '"themes"' in body:
+        if "轴名|研究问题" in body:
             return json.dumps({"themes": [
                 {"name": "协同配送研究", "research_question": "如何协同配送"},
                 {"name": "路径优化研究", "research_question": "如何优化路径"},

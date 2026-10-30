@@ -29,6 +29,29 @@ log = logging.getLogger(__name__)
 # 兼容 markdown / inline / 数字三种锚点形态
 _CITE_RE = re.compile(r"\[(?:(\d{1,3})|lit_[a-zA-Z0-9_]+|hash:[a-zA-Z0-9_]+)\]")
 
+# 生成的文档不允许出现 DOI 标识(用户硬性要求,模块 docstring 同款约束):
+# DOI 前缀/doi.org 链接/PubMed 链接整段移除。corpus 导出路径
+# (api/papers.py::_strip_doi_marks)已同语义;review 导出的英文条目
+# (citeproc/OpenAlex 渲染)此前直通泄漏([25]-[48] 带 DOI:10.xxx 与
+# pubmed 链接,2026-10-30 导出产物实锤),在 refs 拆行处统一剥 ——
+# 脚注定义与参考文献列表段同源自 fn_items,单点覆盖两个出口;
+# 对已剥过的 corpus 条目幂等无害。
+_DOI_MARK_RE = re.compile(
+    r"(?:DOI\s*[:：]?\s*|https?://(?:dx\.)?doi\.org/|doi\.org/)\S+"
+    r"|https?://(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov/\S+",
+    re.IGNORECASE,
+)
+
+
+def _strip_doi_marks(text: str) -> str:
+    """移除参考文献条目中的 DOI 标识与 PubMed 链接(不改写其余字符)。"""
+    cleaned = _DOI_MARK_RE.sub("", text or "")
+    # 剥离后可能留下悬空的分隔标点("作者. 标题. , ."形态),只做
+    # 保守的尾段清理:重复标点/空白收敛,不碰任何文字内容。
+    cleaned = re.sub(r"\s+,(\s*,)*\s*$", "", cleaned)
+    cleaned = re.sub(r"\.\s*(,\s*)+\.$", ".", cleaned)
+    return cleaned.strip()
+
 
 @dataclass
 class FootnoteItem:
@@ -241,7 +264,8 @@ def render_docx_with_footnotes(
     if not refs_text:
         refs_text = render_reference_list(papers)
 
-    # 2. 把 references 拆成 list[FootnoteItem]
+    # 2. 把 references 拆成 list[FootnoteItem](逐条剥 DOI/PubMed 链接,
+    #    脚注与参考文献表两出口同源,见 _strip_doi_marks 注释)
     fn_items: list[FootnoteItem] = []
     for i, line in enumerate(refs_text.splitlines(), start=1):
         s = line.strip()
@@ -255,7 +279,7 @@ def render_docx_with_footnotes(
         else:
             idx = i
             body = s
-        fn_items.append(FootnoteItem(index=idx, text=body))
+        fn_items.append(FootnoteItem(index=idx, text=_strip_doi_marks(body)))
 
     # 3. 创建 Document
     doc = Document()

@@ -146,3 +146,46 @@ def test_empty_output_then_degenerate_recovers_via_bisect(monkeypatch):
         "lit_oa_aaaa0001", "lit_oa_bbbb0002", "lit_oa_cccc0003",
     ]
     assert calls["n"] >= 4  # 空正文→重采样→退化→拆半恢复
+
+
+# ---------- 批次级外层重试(2026-10-30 F2 事故:残片批连续超时全场作废) ----------
+
+def test_batch_outer_retry_recovers_after_timeouts(monkeypatch):
+    """前 2 次调用超时(内部重试耗尽)→ 外层歇 20 秒整批重跑,第 3 次成功,
+    批次最终完成,不炸整场。"""
+    calls = {"n": 0}
+    sleeps: list[float] = []
+
+    def fake_llm(system, user, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise TimeoutError("simulated gateway timeout")
+        return _full_results()
+
+    monkeypatch.setattr(lf, "messages_create", fake_llm)
+    monkeypatch.setattr(lf.time, "sleep", lambda s: sleeps.append(s))
+    result = lf._screen_chunk_with_fallback(BATCH, "水产品营销策略", 500)
+    assert calls["n"] == 3, "两次超时 + 外层重跑一次成功"
+    assert [d["lit_id"] for d in result] == [
+        "lit_oa_aaaa0001", "lit_oa_bbbb0002", "lit_oa_cccc0003",
+    ]
+    assert sleeps == [20.0, 20.0], "每次外层重试前歇 _BATCH_OUTER_RETRY_SLEEP_SECONDS"
+
+
+def test_batch_outer_retry_exhausts_and_raises(monkeypatch, caplog):
+    """始终超时 → 外层最多重试 2 次后按现语义抛 ScreeningError。"""
+    import logging
+
+    calls = {"n": 0}
+
+    def fake_llm(system, user, **kwargs):
+        calls["n"] += 1
+        raise TimeoutError("simulated gateway timeout")
+
+    monkeypatch.setattr(lf, "messages_create", fake_llm)
+    monkeypatch.setattr(lf.time, "sleep", lambda s: None)
+    with caplog.at_level(logging.WARNING, logger="screening.llm_filter"):
+        with pytest.raises(ScreeningError, match="筛选批次调用失败"):
+            lf._screen_chunk_with_fallback(BATCH, "水产品营销策略", 500)
+    assert calls["n"] == 3, "首跑 + 2 次外层重试,耗尽即抛"
+    assert any("外层重试" in r.message for r in caplog.records), "WARNING 提示复用日志通道"
