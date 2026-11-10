@@ -12,7 +12,11 @@ import time
 from dataclasses import dataclass, field
 
 from prompts.service import parse_llm_json, render
-from src.llm.client import messages_create
+from src.llm.client import messages_create, messages_stream_ex
+from src.writing.readthrough import ThinkingTap as _ThinkingTap
+
+# 原始同步引用(守卫式流式替身):测试替换本模块 messages_create 时自动退回同步路径。
+_ORIGINAL_CREATE = messages_create
 from src.retrieval.types import Paper, Source
 from src.writing.llm_trace import record as _trace_llm
 from src.writing.readthrough import (
@@ -23,6 +27,23 @@ from src.writing.readthrough import (
 from src.writing.settings import LOCALE_GROUP_DOMESTIC, LOCALE_GROUP_FOREIGN
 
 logger = logging.getLogger(__name__)
+
+
+def _create_with_thinking(system: str, user: str, *, on_thinking, **kwargs) -> str:
+    """守卫式流式替身(R2 定轴主调用):messages_create 被测试替换时走同步路径;
+    生产路径经 messages_stream_ex 外放思考增量,正文拼接返回。"""
+    if on_thinking is None or messages_create is not _ORIGINAL_CREATE:
+        return messages_create(system=system, user=user, **kwargs)
+    parts: list[str] = []
+    for kind, piece in messages_stream_ex(system=system, user=user, **kwargs):
+        if kind == "content":
+            parts.append(piece)
+        elif kind == "reasoning":
+            on_thinking(piece)
+    content = "".join(parts).strip()
+    if not content:
+        raise RuntimeError("流式调用未返回正文")
+    return content
 
 
 @dataclass
@@ -2097,22 +2118,23 @@ def _plan_theme_axes(
                 {"attempt": attempt, "papers": len(papers), "stage": "axis_plan"},
                 _hb_stop, interval=5.0,
             )
+            tap = _ThinkingTap(progress, "classify") if progress else None
             try:
-                raw = messages_create(
+                raw = _create_with_thinking(
                     system=system, user=attempt_user,
+                    on_thinking=tap,
                     # M3 思考预算(2026-10-30 事故):思考与正文共享输出预算,
                     # 2500 对 24 万字符输入连思考都不够,内容通道只写得出
                     # 被截断的思考散文(轴规划 JSON 首试成功率 0/4 的根因
                     # 之一);8000 对齐筛选先例(max_tokens=8000 一直正常)。
                     max_tokens=8000,
                     temperature=temperature,
-                    # 行协议迁移(2026-10-30 F1):去掉 response_format=json_object
-                    # —— 归组阶段(2a84c79)同款先例:MiniMax 长上下文下 JSON
-                    # 纪律不可靠(JSON 首试成功率 0/4),行协议反而稳定。
-                    timeout=120.0, max_retries=1,
+                    timeout=120.0,
                 )
             finally:
                 _hb_stop.set()
+                if tap is not None:
+                    tap.flush()
             last_raw = raw
             # trace 落盘(治日志盲区):R2 定轴的完整 prompt/响应原文
             _trace_llm("axis_plan", f"attempt{attempt}", f"{system}\n\n{attempt_user}", raw)

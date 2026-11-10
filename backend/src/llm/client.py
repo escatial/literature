@@ -708,6 +708,7 @@ def messages_stream_ex(
     model: str | None = None,
     temperature: float | None = None,
     provider: str | None = None,
+    timeout: float | None = None,
 ) -> Generator[tuple[str, str], None, None]:
     """流式调用 LLM,逐块返回 (kind, text) 二元组。
 
@@ -731,6 +732,7 @@ def messages_stream_ex(
             for kind, piece in _stream_with_resolved(
                 resolved, system=system, user=user,
                 max_tokens=max_tokens, model=model, temperature=temperature,
+                timeout=timeout,
             ):
                 if kind == "content":
                     yielded_any = True
@@ -783,6 +785,7 @@ def _stream_with_resolved(
     max_tokens: int,
     model: str | None,
     temperature: float | None,
+    timeout: float | None = None,
 ) -> Generator[tuple[str, str], None, None]:
     """单个 provider 的流式调用,yield (kind, text): kind ∈ reasoning/content。"""
     model = model or resolved.model
@@ -801,7 +804,7 @@ def _stream_with_resolved(
                 payload["temperature"] = temperature
             got_any = False
             for kind, text in _anthropic_stream(
-                resolved.base_url, resolved.api_key, payload, timeout=300.0,
+                resolved.base_url, resolved.api_key, payload, timeout=timeout or 300.0,
             ):
                 got_any = True
                 if kind == "content":

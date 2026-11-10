@@ -26,6 +26,7 @@ import hashlib
 import logging
 import random
 import re
+import time
 from dataclasses import dataclass
 
 from src.retrieval.types import Paper
@@ -33,9 +34,69 @@ from src.retrieval.types import Paper
 # 共同消费,内部依赖一律写死 src 前缀,保证 llm_trace 的 contextvar 与
 # 本模块的 patch 点(src.writing.readthrough.messages_create)只有一份。
 from src.writing.llm_trace import record as _trace_record
-from src.llm.client import messages_create
+from src.llm.client import messages_create, messages_stream_ex
+
+# 原始同步引用(守卫式流式替身用):测试 monkeypatch 本模块 messages_create 时,
+# 替身自动退回同步路径 —— 存量测试零改动,生产路径才有思考增量外放。
+_ORIGINAL_CREATE = messages_create
 
 logger = logging.getLogger(__name__)
+
+
+class ThinkingTap:
+    """思考增量节流合并器:每 interval 秒或 max_chars 字符发一条 stage_thinking。
+
+    LLM 流式思考增量可能每秒数百条,直发会打爆 SSE 与 J1 事件表;
+    合并后既有"逐字滚动"观感,写入频度又可控。flush 时 progress 异常
+    (用户停止)原样上抛,保证协作式取消不被吞。
+    """
+
+    def __init__(self, progress, stage: str, chunk: int | None = None,
+                 interval: float = 0.8, max_chars: int = 600) -> None:
+        self._progress = progress
+        self._stage = stage
+        self._chunk = chunk
+        self._interval = interval
+        self._max = max_chars
+        self._buf: list[str] = []
+        self._chars = 0
+        self._last = time.monotonic()
+
+    def __call__(self, piece: str) -> None:
+        self._buf.append(piece)
+        self._chars += len(piece)
+        now = time.monotonic()
+        if now - self._last >= self._interval or self._chars >= self._max:
+            self.flush()
+
+    def flush(self) -> None:
+        if not self._buf:
+            return
+        text = "".join(self._buf)
+        self._buf = []
+        self._chars = 0
+        self._last = time.monotonic()
+        payload: dict = {"kind": "stage_thinking", "stage": self._stage, "delta": text}
+        if self._chunk is not None:
+            payload["chunk"] = self._chunk
+        self._progress(payload)
+
+
+def _create_with_thinking(system: str, user: str, *, on_thinking, **kwargs) -> str:
+    """守卫式流式替身:messages_create 被测试替换时走同步路径(行为不变);
+    生产路径经 messages_stream_ex 外放思考增量,正文拼接返回。"""
+    if on_thinking is None or messages_create is not _ORIGINAL_CREATE:
+        return messages_create(system=system, user=user, **kwargs)
+    parts: list[str] = []
+    for kind, piece in messages_stream_ex(system=system, user=user, **kwargs):
+        if kind == "content":
+            parts.append(piece)
+        elif kind == "reasoning":
+            on_thinking(piece)
+    content = "".join(parts).strip()
+    if not content:
+        raise RuntimeError("流式调用未返回正文")
+    return content
 
 # R1/R1' 行协议:#<编号>|<作者(年份)>|<研究问题>|<方法>|<结论要点>|<主题线索>
 _NOTE_LINE_RE = re.compile(r"^#?\s*(\d{1,4})\s*[.、]?\s*\|(.+)$")
@@ -267,15 +328,31 @@ def plan_readthrough_notes(
         user = _chunk_user_prompt(chunk, no_of, abstract_limit=800, language=language)
         label = f"chunk{index}"
         try:
-            raw = messages_create(
+            tap = ThinkingTap(progress, "readthrough", chunk=index) if progress else None
+            raw = _create_with_thinking(
                 system=system,
                 user=user,
+                on_thinking=tap,
                 # 思考预算随块内篇数线性放大(每篇一行笔记约 60-200 token)
                 max_tokens=1500 + 250 * len(chunk),
                 temperature=0.1,
                 timeout=120.0,
-                max_retries=1,
             )
+            if tap is not None:
+                tap.flush()
+        except RuntimeError as exc:
+            if "用户已停止" in str(exc):
+                raise  # 停止哨兵:不可降级吞掉(协作式取消)
+            failed_chunks += 1
+            logger.warning("通读笔记块 %d/%d LLM 失败(该块降级原文直通): %s",
+                           index, len(chunks), exc)
+            if progress:
+                progress({
+                    "kind": "readthrough_chunk_done",
+                    "done": index, "total": len(chunks),
+                    "notes": len(notes), "failed": True,
+                })
+            continue
         except Exception as exc:  # noqa: BLE001
             failed_chunks += 1
             logger.warning("通读笔记块 %d/%d LLM 失败(该块降级原文直通): %s",
@@ -461,6 +538,7 @@ __all__ = [
     "chunk_for_readthrough",
     "parse_note_lines",
     "plan_readthrough_notes",
+    "ThinkingTap",
     "build_axis_catalog_with_notes",
     "section_notes_block",
 ]

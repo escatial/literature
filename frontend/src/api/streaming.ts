@@ -176,6 +176,8 @@ export interface StreamState {
     error?: string | null;
     trace?: unknown[];
   } | null;
+  /** J1:阶段思考(通读/定轴的流式思考增量;stage 切换自动清空) */
+  stageThinking: { label: string; text: string } | null;
   /** D1:摘要/关键词(abstract_done 事件) */
   abstract: string | null;
   keywords: string[] | null;
@@ -211,6 +213,7 @@ function createInitialState(): StreamState {
     error: null,
     activityLog: [],
     harness: null,
+    stageThinking: null,
     abstract: null,
     keywords: null,
     manifest: null,
@@ -444,6 +447,19 @@ async function runSSELoop(
             // pipeline 内嵌 AI 质检 agent 的实时进度(感知查组/提交被拒/超时)
             state.phase = 'classify';
             const kind = String(evt.data.kind ?? '');
+            if (kind === 'stage_thinking') {
+              // J1:通读/定轴的思考增量(后端节流合并,~0.8s/条);stage
+              // 切换(R1→R2)自动清空重计,缓冲上限 24k 字符保护 DOM。
+              const stage = String(evt.data.stage ?? 'classify');
+              const label = stage === 'readthrough' ? '通读笔记' : '主题划分';
+              const prev = state.stageThinking;
+              const base = prev && prev.label === label ? prev.text : '';
+              state.stageThinking = {
+                label,
+                text: (base + String(evt.data.delta ?? '')).slice(-24000),
+              };
+              break;
+            }
             if (kind === 'chunk_started') {
               state.detail = `正在处理第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块（${evt.data.count ?? 0} 篇）...`;
             } else if (kind === 'llm_attempt') {
@@ -536,6 +552,7 @@ async function runSSELoop(
             state.phase = 'writing';
             state.detail = evt.data.message ?? '主题已确认，开始生成综述正文。';
             addActivity(String(state.detail));
+                        state.stageThinking = null;
             break;
           case 'plan_complete': {
             // 两阶段模式:阶段1到此为止,等用户确认主题划分后才进入正文写作

@@ -51,6 +51,7 @@ function initialState(): StreamState {
     error: null,
     activityLog: [],
     harness: null,
+    stageThinking: null,
     abstract: null,
     keywords: null,
     manifest: null,

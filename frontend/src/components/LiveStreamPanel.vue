@@ -10,6 +10,7 @@ const store = useWritingStore();
 const { stream, running } = storeToRefs(store);
 
 const reasoning = computed(() => stream.value.currentReasoning ?? '');
+const stageThinking = computed(() => stream.value.stageThinking);
 const content = computed(() => stream.value.currentSection?.content ?? '');
 const sectionTitle = computed(() => stream.value.currentSection?.title ?? '');
 const reasoningLen = computed(() => reasoning.value.length);
@@ -30,7 +31,10 @@ const PHASE_LABELS: Record<string, string> = {
 const phaseLabel = computed(() => PHASE_LABELS[stream.value.phase] ?? stream.value.phase);
 
 /** 有逐字流才显示流块;批处理阶段(筛选/核查)无逐字事件,如实说明。 */
-const hasStreamText = computed(() => reasoningLen.value > 0 || contentLen.value > 0);
+const stageThinkingLen = computed(() => stageThinking.value?.text.length ?? 0);
+const hasStreamText = computed(
+  () => reasoningLen.value > 0 || contentLen.value > 0 || stageThinkingLen.value > 0,
+);
 const batchHint = computed(() => {
   if (stream.value.phase === 'screening') {
     return '筛选是分批批处理(模型逐批返回结构化结果),此阶段没有逐字流;进入「通读/主题划分」与「正文写作」后,思考与正文将在这里逐字打印。';
@@ -66,7 +70,7 @@ const onScroll = () => {
   if (!el) return;
   stick.value = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
 };
-watch([reasoningLen, contentLen, () => tickerLines.value.length], async () => {
+watch([reasoningLen, contentLen, stageThinkingLen, () => tickerLines.value.length], async () => {
   if (!stick.value) return;
   await nextTick();
   const el = bodyEl.value;
@@ -81,6 +85,7 @@ onBeforeUnmount(() => { /* watcher 随组件销毁 */ });
       <span class="lc-dot" :class="running ? 'lc-dot-run' : 'lc-dot-idle'" />
       <span class="lc-title">LLM 实时流</span>
       <span class="lc-meta">{{ phaseLabel }}</span>
+      <span v-if="stageThinkingLen" class="lc-meta">{{ stageThinking?.label }} {{ stageThinkingLen }} 字</span>
       <span v-if="reasoningLen" class="lc-meta">思考 {{ reasoningLen }} 字</span>
       <span v-if="contentLen" class="lc-meta">输出 {{ contentLen }} 字</span>
       <span class="lc-flex" />
@@ -90,6 +95,12 @@ onBeforeUnmount(() => { /* watcher 随组件销毁 */ });
     </div>
     <div ref="bodyEl" class="lc-body" @scroll="onScroll">
       <template v-if="hasStreamText">
+        <div v-if="stageThinkingLen" class="lc-block">
+          <div class="lc-block-tag lc-tag-think">
+            阶段思考 · {{ stageThinking?.label }} · 流式
+          </div>
+          <div class="lc-text lc-reasoning">{{ stageThinking?.text }}</div>
+        </div>
         <div v-if="reasoningLen" class="lc-block">
           <div class="lc-block-tag lc-tag-think">思考过程 · 流式</div>
           <div class="lc-text lc-reasoning">{{ reasoning }}</div>
