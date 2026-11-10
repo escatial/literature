@@ -18,7 +18,7 @@ function backendSupervisor(): Plugin {
 
   const target = new URL(apiTarget);
   const isLocalBackend = ['127.0.0.1', 'localhost'].includes(target.hostname);
-  const healthUrl = new URL('/api/healthz', target).toString();
+  const healthUrl = new URL('/api/health', target).toString();  // 后端实际健康路由(此前误写 /api/healthz,探测恒 404 → 每个 /api 请求都卡 waitUntilHealthy 超时)
 
   const isHealthy = async (): Promise<boolean> => {
     try {
