@@ -47,16 +47,18 @@ function backendSupervisor(): Plugin {
   // VITE_API_PROXY_TARGET 覆盖(开发联调用途,spawn 前另有回环主机名与
   // 纯数字端口校验)。
   const allowedPythonPaths = [
-    'D:\\Anaconda\\Anaconda\\envs\\literature\\python.exe',
-    'D:\\Anaconda\\Anaconda\\python.exe',
+    'D:\Anaconda\Anaconda\envs\literature\python.exe',
+    'D:\Anaconda\Anaconda\python.exe',
   ];
 
   const resolvePython = (): string => {
     const found = allowedPythonPaths.find((candidate) => fs.existsSync(candidate));
-    if (!found) {
-      throw new Error('[backend] 未找到可用的后端 Python 解释器(候选路径均不存在)');
-    }
-    return found;
+    if (found) return found;
+    // J1 期(2026-11):字面量候选全部不存在时(换机器/conda 环境已删)回退
+    // PATH 上的 `python` —— 依赖由 requirements.txt 安装,不再绑定安装位置。
+    // 仍不读取 BACKEND_PYTHON 等环境变量(spawn 可执行程序不允许环境注入)。
+    console.log('[backend] 白名单 Python 均不存在,回退使用 PATH 上的 python');
+    return 'python';
   };
 
   const scheduleRestart = () => {
@@ -90,7 +92,8 @@ function backendSupervisor(): Plugin {
     // spawn 前显式收窄(静态可见):解释器必须命中字面量白名单、主机名必须
     // 为本机回环、端口必须为纯数字——三者任一越界立即抛错,不存在不可信
     // 程序选择或命令选项注入空间。
-    const pythonAllowed = allowedPythonPaths.some(
+    // PATH 回退值('python')是受控字面量,与白名单候选同级放行
+    const pythonAllowed = python === 'python' || allowedPythonPaths.some(
       (candidate) => path.normalize(candidate).toLowerCase() === path.normalize(python).toLowerCase(),
     );
     if (!pythonAllowed) {

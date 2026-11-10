@@ -110,3 +110,6 @@ frontend/vite.config.ts.timestamp-*.mjs
 backend/lib/**/*.md
 backend/lib/**/.github/
 backend/tests/crawler/TEST_REPORT.md
+
+# 本地启动日志(npm run dev 输出重定向)
+_dev_server.log
