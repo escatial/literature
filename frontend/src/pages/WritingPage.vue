@@ -24,6 +24,7 @@ import { useTopicStore } from '@/stores/topic';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { usePapersStore } from '@/stores/papers';
 import { useWritingStore } from '@/stores/writing';
+import LiveStreamPanel from '@/components/LiveStreamPanel.vue';
 import type { Paper } from '@/api/types';
 
 const topicStore = useTopicStore();
@@ -70,26 +71,9 @@ watch(() => stream.value.activityLog.length, async () => {
 
 // ============ Agent 执行过程:思考流 + 工具调用步骤 ============
 
-const thinkingOpen = ref(true);
-const thinkingEl = ref<HTMLElement | null>(null);
 
 // 思考增量到达时贴底滚动;用户手动上翻后不打扰(距底 >40px 视为在回看)
-watch(() => stream.value.currentReasoning.length, async () => {
-  if (!thinkingOpen.value || !thinkingEl.value) return;
-  const el = thinkingEl.value;
-  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-  if (nearBottom || el.scrollHeight - el.clientHeight < 200) {
-    await nextTick();
-    el.scrollTop = el.scrollHeight;
-  }
-});
 
-watch(thinkingOpen, async (open) => {
-  if (open && thinkingEl.value) {
-    await nextTick();
-    thinkingEl.value.scrollTop = thinkingEl.value.scrollHeight;
-  }
-});
 
 const stepDotClass = (status: 'running' | 'ok' | 'fail') =>
   status === 'running' ? 'dot-run' : status === 'ok' ? 'dot-ok' : 'dot-bad';
@@ -250,7 +234,6 @@ const primaryActionDisabled = computed(() =>
 );
 
 const liveChars = computed(() => stream.value.currentSection?.content.length ?? 0);
-const livePreview = computed(() => stream.value.currentSection?.content ?? '');
 
 // ============ QA 软门禁报告展示(v9.7:FAIL 不再终止流,报告在此汇总) ============
 
@@ -591,15 +574,6 @@ const downloadMd = () => {
           </div>
         </div>
         <!-- 思考过程:模型 reasoning 流式增量,只上屏不入正文 -->
-        <div v-if="stream.currentReasoning" class="thinking">
-          <button type="button" class="thinking-head" @click="thinkingOpen = !thinkingOpen">
-            <span class="thinking-title">思考过程</span>
-            <span class="thinking-meta">
-              {{ thinkingOpen ? '收起' : '展开' }} · 约 {{ stream.currentReasoning.length }} 字
-            </span>
-          </button>
-          <div v-show="thinkingOpen" ref="thinkingEl" class="thinking-body">{{ stream.currentReasoning }}</div>
-        </div>
         <el-alert
           v-if="stream.phase === 'error'"
           type="error"
@@ -620,15 +594,8 @@ const downloadMd = () => {
             </div>
           </el-collapse-item>
         </el-collapse>
-        <div
-          v-if="stream.phase === 'writing' && livePreview"
-          class="live"
-        >
-          <div class="live-title">
-            正文流式输出<template v-if="stream.currentSection?.title"> · {{ stream.currentSection.title }}</template>
-          </div>
-          <div class="live-paper">{{ livePreview }}</div>
-        </div>
+        <!-- LLM 实时流:思考 + 正文逐字直播(非流式阶段显示阶段走带) -->
+        <LiveStreamPanel />
       </div>
     </el-card>
 
