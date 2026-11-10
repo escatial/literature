@@ -129,6 +129,8 @@ const fillTopicFromTask = async () => {
 
 onMounted(() => {
   void loadPapers();
+  // J1 任务化:刷新/重开页面后恢复活跃写作任务的界面(全量重放,状态无损)
+  void writingStore.resumeActive();
 });
 
 onBeforeUnmount(() => {

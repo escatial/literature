@@ -36,3 +36,41 @@ def client(tmp_path):
 def rand_password() -> str:
     """运行时随机口令(非字面量,安全钩子友好)。"""
     return "pw-" + secrets.token_hex(8)
+
+
+@pytest.fixture()
+def three_users(client):
+    """admin 甲 + 已审核普通用户乙、丙;共享版(原 test_data_isolation 内联副本)。"""
+    import secrets
+
+    pw = "pw-" + secrets.token_hex(8)
+
+    def _register(name):
+        r = client.post("/api/auth/register", json={"username": name, "password": pw})
+        assert r.status_code == 200
+
+    def _login(name):
+        r = client.post("/api/auth/login", json={"username": name, "password": pw})
+        assert r.status_code == 200, r.json()
+        return r.json()["token"]
+
+    _register("管理员甲")
+    _register("用户乙")
+    _register("用户丙")
+    admin_tok = _login("管理员甲")
+    users = client.get(
+        "/api/auth/admin/users", headers={"X-Auth-Token": admin_tok}
+    ).json()["users"]
+    ids = {u["username"]: u["user_id"] for u in users}
+    for uid in (ids["用户乙"], ids["用户丙"]):
+        client.post(
+            f"/api/auth/admin/users/{uid}/approve", headers={"X-Auth-Token": admin_tok}
+        )
+    return {
+        "admin_tok": admin_tok,
+        "b_tok": _login("用户乙"),
+        "c_tok": _login("用户丙"),
+        "admin_id": ids["管理员甲"],
+        "b_id": ids["用户乙"],
+        "c_id": ids["用户丙"],
+    }

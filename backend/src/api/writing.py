@@ -47,7 +47,7 @@ def _validate_writing_request(req: WritingRequest) -> None:
             raise HTTPException(
                 400,
                 "阶段2写作传入 confirmed_groups 时不可再筛选"
-                "(文献已在主题规划阶段 /writing/plan-stream 完成筛选)",
+                "(文献已在主题规划阶段 /writing/jobs 完成筛选)",
             )
         if not req.confirmed_groups:
             raise HTTPException(400, "confirmed_groups 不能为空")
@@ -60,187 +60,145 @@ def _to_domain_groups(groups: list[GroupOut]) -> list[Group]:
     return [Group(name=g.name, lit_ids=list(g.lit_ids)) for g in groups]
 
 
-def _inject_seq(chunk: str, seq: int) -> str:
-    """D1:向 SSE data 帧注入流内单调序号(帧 JSON 顶层 `seq` 字段)。
-
-    前端据此检测丢帧 —— 此前 sections_finalized(全流最大单帧)静默丢失
-    时,前端无任何感知,直接保存锚点中间态(2026-11-01 交付事故根因之一)。
-    非 data 帧(心跳注释等)原样返回。
-    """
-    prefix = "data: "
-    if not (isinstance(chunk, str) and chunk.startswith(prefix)):
-        return chunk
-    try:
-        obj = json.loads(chunk[len(prefix):].strip())
-        if isinstance(obj, dict):
-            obj["seq"] = seq
-            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
-    except Exception:  # noqa: BLE001  非JSON帧不动,保底直通
-        pass
-    return chunk
-
-
-class _RunEventLogger:
-    """D1:run 级 JSONL 事件日志(backend/.runs/writing_*.jsonl)。
-
-    2026-11-01 交付事故无法复盘,因为运行只存在于内存与控制台 —— 本日志
-    把每个 SSE 事件落盘,事故后可回放事件序列定位丢帧/中断点。
-    写日志失败只降级不影响交付;目录仅保留最近 N 份。
-    """
-
-    _KEEP = 30
-
-    def __init__(self, task_id: str | None) -> None:
-        self._fh = None
-        try:
-            run_dir = Path(__file__).resolve().parents[2] / ".runs"
-            run_dir.mkdir(parents=True, exist_ok=True)
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            safe_task = re.sub(r"[^A-Za-z0-9_-]+", "-", (task_id or "anon"))[:40]
-            self._fh = (run_dir / f"writing_{safe_task}_{ts}.jsonl").open(
-                "a", encoding="utf-8"
-            )
-            self._cleanup_old()
-        except Exception:  # noqa: BLE001
-            self._fh = None
-
-    def log(self, kind: str, payload: Any) -> None:
-        if self._fh is None:
+def publish_writing_progress(stop_event, publish):
+    """J1:带外进度发布工厂(模块级,SSE 端点与任务 worker 共用)。"""
+    # 生成器挂起在同步函数(润色/重写闭环)内部时,section_step 等事件
+    # 经此带外发布,与 yield 事件走同一队列、同一线程,顺序不乱。
+    def emit(event: str, data: dict) -> None:
+        if stop_event.is_set():
             return
-        try:
-            record: dict[str, Any] = {"ts": round(time.time(), 3), "kind": kind}
-            if isinstance(payload, str):
-                record["chunk"] = payload[:2000]
-            elif payload is not None:
-                record["detail"] = str(payload)[:500]
-            self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self._fh.flush()
-        except Exception:  # noqa: BLE001
-            pass
-
-    def close(self) -> None:
-        if self._fh is not None:
-            try:
-                self._fh.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._fh = None
-
-    def _cleanup_old(self) -> None:
-        try:
-            run_dir = self._fh.name and Path(self._fh.name).parent
-            if not run_dir:
-                return
-            files = sorted(run_dir.glob("writing_*.jsonl"))
-            for stale in files[: -self._KEEP]:
-                stale.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def _sse_stream_response(stream_fn, bind=None, stop_key=None) -> StreamingResponse:
-    """SSE 通用封装:后台线程跑同步生成器,主事件循环转发并保活心跳。
-
-    C1:bind 为可调用 —— 在 produce() worker 线程内首行执行(返回 reset
-    句柄),finally 恢复。worker 线程一次性创建销毁,ContextVar 按请求
-    天然隔离;线程池复用场景下 finally reset 防泄漏是硬要求。
-    C2:stop_key=(user_id, task_id) 注册停止键;None 时退化为匿名键
-    (无用户上下文,如测试直挂)。
-    """
-
-    async def event_gen():
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
-        started_at = time.monotonic()
-        stop_event = threading.Event()
-        reg_key = stop_key if stop_key is not None else ("__anon__", f"__{id(stop_event):x}__")
-        with _WRITING_STOP_LOCK:
-            _WRITING_STOP_EVENTS[reg_key] = stop_event
-        # D1:流内事件序号 + run 级落盘日志
-        seq_counter = 0
-        run_logger = _RunEventLogger(reg_key[1] if reg_key else None)
-
-        def publish(kind: str, payload: Any) -> None:
-            nonlocal seq_counter
-            # 停止后丢弃尚未入队的进度，避免前端在点击停止后又收到旧事件。
-            if stop_event.is_set() and kind == "chunk":
-                return
-            if kind == "chunk":
-                seq_counter += 1
-                payload = _inject_seq(payload, seq_counter)
-            run_logger.log(kind, payload)
-            loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
-
-        def produce() -> None:
-            llm_reset = None
-            try:
-                if bind is not None:
-                    # worker 线程内绑定用户 LLM 上下文(ContextVar 按线程隔离)
-                    llm_reset = bind()
-                for chunk in stream_fn(stop_event, publish):
-                    if stop_event.is_set():
-                        break
-                    publish("chunk", chunk)
-            except BaseException as exc:
-                publish("failure", exc)
-            finally:
-                if llm_reset is not None:
-                    try:
-                        llm_reset()
-                    except Exception:  # noqa: BLE001  恢复失败不影响收尾
-                        pass
-                # C2:流结束只清除自己的键
-                with _WRITING_STOP_LOCK:
-                    _WRITING_STOP_EVENTS.pop(reg_key, None)
-                publish("done", None)
-
-        worker = threading.Thread(
-            target=produce,
-            name="writing-stream-worker",
-            daemon=True,
+        publish(
+            "chunk",
+            f"data: {json.dumps({'event': event, 'data': data}, ensure_ascii=False)}\n\n",
         )
-        worker.start()
+    return emit
 
-        while True:
-            try:
-                kind, payload = await asyncio.wait_for(
-                    queue.get(), timeout=_SSE_HEARTBEAT_SECONDS
-                )
-            except asyncio.TimeoutError:
-                heartbeat = {
-                    "event": "heartbeat",
-                    "data": {"elapsed_seconds": int(time.monotonic() - started_at)},
-                }
-                # 注释行 + padding 促使开发代理立即 flush，避免长时间无正文时浏览器收不到心跳。
-                yield f": heartbeat\n: {' ' * 1024}\n\ndata: {json.dumps(heartbeat, ensure_ascii=False)}\n\n"
+
+def _parse_sse_chunk(chunk: Any) -> tuple[str, dict]:
+    """J1:解析 SSE data 帧为 (event, data),供任务事件落库。坏帧返回 ("unknown", {})。"""
+    try:
+        if isinstance(chunk, str) and chunk.startswith("data: "):
+            obj = json.loads(chunk[len("data:"):].strip())
+            data = obj.get("data")
+            return (
+                str(obj.get("event") or "unknown"),
+                data if isinstance(data, dict) else {},
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return "unknown", {}
+
+
+def persist_review_payload(uid: str | None, payload: dict) -> None:
+    """J1:服务端权威落库的模块级实现(worker 线程调用;独立短会话)。
+
+    编号+QA修复+摘要齐备的定稿由后端直接持久化;同 (task_id, owner) 幂等
+    upsert。前端随后的 POST /reviews 是同一键的冗余副本,残品会被本副本调和。
+    """
+    from db.models import ReviewModel
+    from db.session import SessionLocal
+
+    with SessionLocal() as pdb:
+        row = None
+        if payload.get("task_id"):
+            q = pdb.query(ReviewModel).filter_by(task_id=payload["task_id"])
+            if uid:
+                q = q.filter(ReviewModel.owner_user_id == uid)
+            row = q.order_by(ReviewModel.id.desc()).first()
+        if row is None:
+            row = ReviewModel(
+                topic=payload["topic"],
+                classify_mode=payload["classify_mode"],
+                owner_user_id=uid,
+            )
+            pdb.add(row)
+        row.task_id = payload.get("task_id")
+        row.sections = payload["sections"]
+        row.reference_list = payload["reference_list"]
+        row.screened_out_ids = payload["screened_out_ids"]
+        row.dropped_citations = payload["dropped_citations"]
+        row.qa_report = payload.get("qa_report")
+        row.abstract = payload.get("abstract")
+        row.keywords = payload.get("keywords")
+        pdb.commit()
+
+
+def make_plan_stream_fn(
+    *,
+    task_id: str,
+    user_id: str | None,
+    topic: str,
+    papers: list,
+    classify_mode: str,
+    progress_factory,
+    research_questions: list[str] | None = None,
+    review_goal: str | None = None,
+):
+    """J1:阶段1 plan 流的模块级工厂(捕获 plan_complete UPSERT 规划快照)。
+
+    与 writing_plan_stream 端点内原先的闭包同逻辑,抽为模块级供
+    /writing/jobs(阶段1)与旧 SSE 端点共用。
+    """
+    plan_ctx = {
+        "task_id": task_id,
+        "user_id": user_id,
+        "topic": topic,
+        "papers": papers,
+        "classify_mode": classify_mode,
+        "progress_factory": progress_factory,
+        "research_questions": research_questions,
+        "review_goal": review_goal,
+    }
+
+    def _stream(stop_event, publish):
+        inner = plan_review_stream(
+            topic=plan_ctx["topic"],
+            papers=plan_ctx["papers"],
+            classify_mode=plan_ctx["classify_mode"],
+            stop_event=stop_event,
+            progress=plan_ctx["progress_factory"](stop_event, publish),
+            research_questions=plan_ctx["research_questions"],
+            review_goal=plan_ctx["review_goal"],
+            task_id=plan_ctx["task_id"],
+        )
+        for chunk in inner:
+            yield chunk
+            if '"plan_complete"' not in chunk:
                 continue
+            try:
+                envelope = json.loads(chunk[len("data:"):].strip())
+                data = envelope.get("data") or {}
+                from writing.plan_store import upsert_plan
 
-            if kind == "chunk":
-                yield payload
-            elif kind == "failure":
-                run_logger.log("failure", str(payload))
-                error_event = {
-                    "event": "error",
-                    "data": {"message": str(payload)},
-                }
-                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
-                break
-            else:
-                break
-        run_logger.close()
+                upsert_plan(
+                    task_id=plan_ctx["task_id"],
+                    user_id=plan_ctx["user_id"],
+                    payload={
+                        "topic": plan_ctx["topic"],
+                        "classify_mode": plan_ctx["classify_mode"],
+                        "groups": data.get("groups") or [],
+                        "section_titles": data.get("section_titles") or [],
+                        # lit_ids 只存引用:papers 表是唯一真源(C6 按此回表取全字段)
+                        "screened_lit_ids": [
+                            str(p.get("lit_id") or "")
+                            for p in (data.get("papers") or []) if p.get("lit_id")
+                        ],
+                        "relevance_report": data.get("relevance_report"),
+                        "blueprint": data.get("blueprint"),
+                        "research_questions": plan_ctx["research_questions"],
+                        "review_goal": plan_ctx["review_goal"],
+                        # R1 通读笔记摘要(可追溯):lit_id → 研究问题/主题线索
+                        "readthrough_notes": data.get("readthrough_notes") or [],
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                # 快照失败不阻断流(断点恢复是增量能力,主流程不受影响)
+                import logging
+                logging.getLogger(__name__).debug("规划快照 UPSERT 失败(忽略)")
 
-    return StreamingResponse(
-        event_gen(),
-        media_type="text/event-stream; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )
+    return _stream
 
 
-@router.post("/writing/corpus-preview")
 def writing_corpus_preview(req: WritingRequest):
     """预览"文献拼接大文档"(主题轴规划的真实输入,先拼接、再划分)。"""
     from writing.classifier import _build_corpus_document
@@ -252,29 +210,6 @@ def writing_corpus_preview(req: WritingRequest):
         "chars": len(document),
         "document": document,
     }
-
-
-@router.post("/writing/stop")
-def writing_stop(request: Request = None) -> dict:
-    """请求停止当前用户名下的写作流;循环会在当前 LLM/网络调用返回后退出。
-
-    C2:非 admin 只置位自己 (user_id, *) 的键;admin 全量。
-    返回体 {"stopped": n} 格式不变(n = 置位的流数)。
-    """
-    user = getattr(request.state, "user", None) if request is not None else None
-    uid = getattr(user, "user_id", None)
-    is_admin = getattr(user, "role", "") == "admin"
-    with _WRITING_STOP_LOCK:
-        if uid is None or is_admin:
-            events = list(_WRITING_STOP_EVENTS.values())
-        else:
-            events = [
-                ev for (key_uid, _tid), ev in _WRITING_STOP_EVENTS.items()
-                if key_uid == uid
-            ]
-    for event in events:
-        event.set()
-    return {"stopped": len(events)}
 
 
 class PaperIn(BaseModel):
@@ -547,107 +482,6 @@ def _resolve_stage2_papers(
     return papers
 
 
-@router.post("/writing/generate-stream")
-async def writing_generate_stream(
-    req: WritingRequest,
-    request: Request,
-    x_task_id: str | None = Header(None, alias="X-Task-Id"),
-    db: Session = Depends(get_db),
-):
-    """SSE 流式端点:后台线程执行同步生成,主事件循环持续发送进度心跳。
-
-    两阶段模式:confirmed_groups 非 None 时为阶段2(主题确认后的正文写作)。
-    C3:X-Task-Id 作为状态机 task_id(缺省每次生成新 UUID,任务互不串档)。
-    C6:confirmed 模式 papers 为空时按规划快照引用取数(_resolve_stage2_papers)。
-    """
-    import uuid as _uuid
-
-    _validate_writing_request(req)
-    header_task = (x_task_id or "").strip()
-    if req.confirmed_groups is not None:
-        papers = _resolve_stage2_papers(req, header_task, request, db)
-    else:
-        papers = [p.to_paper() for p in req.papers]
-    confirmed = (
-        _to_domain_groups(req.confirmed_groups)
-        if req.confirmed_groups is not None else None
-    )
-    task_id = header_task or str(_uuid.uuid4())
-
-    def publish_writing_progress(stop_event, publish):
-        # 生成器挂起在同步函数(润色/重写闭环)内部时,section_step 等事件
-        # 经此带外发布,与 yield 事件走同一队列、同一线程,顺序不乱。
-        def emit(event: str, data: dict) -> None:
-            if stop_event.is_set():
-                return
-            publish(
-                "chunk",
-                f"data: {json.dumps({'event': event, 'data': data}, ensure_ascii=False)}\n\n",
-            )
-        return emit
-
-    # C1:LLM 上下文绑定移入 worker 线程(首行 set/finally reset),替代
-    # 请求线程的全局 set —— 并发流不再互相覆盖配置。
-    # C2:停止键 (user_id, task_id) —— 用户 A 停不掉用户 B 的流。
-    from security.auth import apply_user_llm
-
-    _bound_user = getattr(request.state, "user", None)
-
-    def persist_final(payload: dict) -> None:
-        """D1:服务端权威落库(worker 线程调用)。
-
-        编号+QA修复+摘要齐备的定稿由后端直接持久化(独立短会话,不占用
-        请求作用域会话);同 (task_id, owner) 幂等 upsert。前端随后的
-        POST /reviews 是同一键的冗余副本,残品会被本副本调和覆盖。
-        """
-        from db.models import ReviewModel
-        from db.session import SessionLocal
-
-        uid = getattr(_bound_user, "user_id", None)
-        with SessionLocal() as pdb:
-            row = None
-            if payload.get("task_id"):
-                q = pdb.query(ReviewModel).filter_by(task_id=payload["task_id"])
-                if uid:
-                    q = q.filter(ReviewModel.owner_user_id == uid)
-                row = q.order_by(ReviewModel.id.desc()).first()
-            if row is None:
-                row = ReviewModel(
-                    topic=payload["topic"],
-                    classify_mode=payload["classify_mode"],
-                    owner_user_id=uid,
-                )
-                pdb.add(row)
-            row.task_id = payload.get("task_id")
-            row.sections = payload["sections"]
-            row.reference_list = payload["reference_list"]
-            row.screened_out_ids = payload["screened_out_ids"]
-            row.dropped_citations = payload["dropped_citations"]
-            row.qa_report = payload.get("qa_report")
-            row.abstract = payload.get("abstract")
-            row.keywords = payload.get("keywords")
-            pdb.commit()
-
-    return _sse_stream_response(
-        lambda stop_event, publish: generate_review_stream(
-            topic=req.topic,
-            papers=papers,
-            classify_mode=req.classify_mode,
-            do_screening=req.do_screening,
-            confirmed_groups=confirmed,
-            relevance_report=req.relevance_report,
-            stop_event=stop_event,
-            research_questions=req.research_questions,
-            review_goal=req.review_goal,
-            progress=publish_writing_progress(stop_event, publish),
-            task_id=task_id,
-            persist=persist_final,
-        ),
-        bind=lambda: apply_user_llm(_bound_user),
-        stop_key=(getattr(_bound_user, "user_id", None) or "__anon__", task_id),
-    )
-
-
 class PlanRequest(BaseModel):
     """两阶段·阶段1 主题规划请求:只做筛选+分类,不接受确认字段。"""
 
@@ -682,102 +516,6 @@ def _classify_emit(stop_event, publish):
     return emit
 
 
-@router.post("/writing/plan-stream")
-async def writing_plan_stream(
-    req: PlanRequest,
-    request: Request,
-    x_task_id: str | None = Header(None, alias="X-Task-Id"),
-):
-    """两阶段·阶段1 SSE:筛选 + 相关性分级 + 分类,停在主题确认点。
-
-    前端在 plan_complete 事件拿到 groups(可编辑)、筛选后 papers(暂存)、
-    section_titles、relevance_report;用户确认后调 /writing/generate-stream
-    传 confirmed_groups 进入阶段2正文写作。
-    C3:X-Task-Id 作为状态机 task_id,与阶段2共享同一任务档案。
-    """
-    import uuid as _uuid
-
-    papers = [p.to_paper() for p in req.papers]
-    task_id = (x_task_id or "").strip() or str(_uuid.uuid4())
-    _user = getattr(request.state, "user", None)
-
-    def publish_classify_progress(stop_event, publish):
-        return _classify_emit(stop_event, publish)
-
-    # C5:规划上下文由闭包捕获(worker 线程内只读),供快照 UPSERT。
-    plan_ctx = {
-        "task_id": task_id,
-        "user_id": getattr(_user, "user_id", None),
-        "topic": req.topic,
-        "papers": papers,
-        "classify_mode": req.classify_mode,
-        "progress": publish_classify_progress,
-        "research_questions": req.research_questions,
-        "review_goal": req.review_goal,
-    }
-
-    def _plan_stream_with_capture(stop_event, publish):
-        """C5:plan-stream 包装器 —— 逐 chunk 透传,捕获 plan_complete 事件
-        UPSERT 规划快照(断点恢复)。纯消费端解析,不改事件字节序。"""
-        inner = plan_review_stream(
-            topic=plan_ctx["topic"],
-            papers=plan_ctx["papers"],
-            classify_mode=plan_ctx["classify_mode"],
-            stop_event=stop_event,
-            progress=plan_ctx["progress"](stop_event, publish),
-            research_questions=plan_ctx["research_questions"],
-            review_goal=plan_ctx["review_goal"],
-            task_id=plan_ctx["task_id"],
-        )
-        for chunk in inner:
-            yield chunk
-            if '"plan_complete"' not in chunk:
-                continue
-            try:
-                envelope = json.loads(chunk[len("data:"):].strip())
-                data = envelope.get("data") or {}
-                from writing.plan_store import upsert_plan
-
-                upsert_plan(
-                    task_id=plan_ctx["task_id"],
-                    user_id=plan_ctx["user_id"],
-                    payload={
-                        "topic": plan_ctx["topic"],
-                        "classify_mode": plan_ctx["classify_mode"],
-                        "groups": data.get("groups") or [],
-                        "section_titles": data.get("section_titles") or [],
-                        # lit_ids 只存引用:papers 表是唯一真源(C6 按此回表取全字段)
-                        "screened_lit_ids": [
-                            str(p.get("lit_id") or "")
-                            for p in (data.get("papers") or []) if p.get("lit_id")
-                        ],
-                        "relevance_report": data.get("relevance_report"),
-                        "blueprint": data.get("blueprint"),
-                        "research_questions": plan_ctx["research_questions"],
-                        "review_goal": plan_ctx["review_goal"],
-                        # R1 通读笔记摘要(可追溯):lit_id → 研究问题/主题线索
-                        "readthrough_notes": data.get("readthrough_notes") or [],
-                    },
-                )
-            except Exception:  # noqa: BLE001
-                # 快照失败不阻断流(断点恢复是增量能力,主流程不受影响)
-                import logging
-
-                logging.getLogger(__name__).warning(
-                    "plan 快照 UPSERT 失败(task_id=%s)", plan_ctx["task_id"], exc_info=True,
-                )
-
-    # C1:LLM 上下文绑定移入 worker 线程(首行 set/finally reset)
-    # C2:停止键 (user_id, task_id)
-    from security.auth import apply_user_llm
-
-    return _sse_stream_response(
-        _plan_stream_with_capture,
-        bind=lambda: apply_user_llm(_user),
-        stop_key=(getattr(_user, "user_id", None) or "__anon__", task_id),
-    )
-
-
 @router.get("/writing/plan")
 def get_writing_plan(
     request: Request,
@@ -803,3 +541,333 @@ def get_writing_plan(
     out["created_at"] = row.created_at.isoformat() if row.created_at else None
     out["updated_at"] = row.updated_at.isoformat() if row.updated_at else None
     return {"plan": out}
+# ============================================================================
+# J1(2026-11) 任务化改造:写作任务 + 可重放事件流
+# ----------------------------------------------------------------------------
+# 「一次 SSE 连接扛 60 分钟」的脆弱性根治:任务在服务端独立生存,事件逐条
+# 落库(writing_job_events),连接只是读取视图 —— 断线重连按 since_seq 续传,
+# 刷新页面凭 job_id 恢复全部进度,服务重启后任务状态可查可停。
+# ============================================================================
+
+class ConfirmGroupsBody(BaseModel):
+    """阶段2确认请求体:用户确认(可编辑)后的主题分组。"""
+    confirmed_groups: list[GroupOut]
+
+
+def _run_writing_job_worker(
+    job_id: str,
+    user_id: str | None,
+    stream_fn,
+    bind=None,
+    start_seq: int = 0,
+) -> None:
+    """J1:无头任务 worker —— 后台线程跑生成器,事件逐条落库。
+
+    与 SSE 投递层同一套协作式取消(注册表)(stop_event 注册表)与 LLM
+    ContextVar 绑定,但不面向连接:事件是事实来源,前端随时凭 seq 接入。
+    """
+    import logging
+
+    from writing import job_store
+
+    log = logging.getLogger(__name__)
+    seq = int(start_seq)
+    stop_event = threading.Event()
+    reg_key = (user_id or "__anon__", job_id)
+    with _WRITING_STOP_LOCK:
+        _WRITING_STOP_EVENTS[reg_key] = stop_event
+    job_store.set_job_status(job_id, "running")
+    llm_reset = None
+    terminal: tuple[str, str | None] | None = None
+
+    def mark_terminal(name: str, data: dict) -> None:
+        nonlocal terminal
+        if name == "plan_complete":
+            job_store.set_job_status(job_id, "awaiting_confirm", phase="await_confirm")
+        elif name == "complete":
+            terminal = ("done", None)
+        elif name == "stopped":
+            terminal = ("stopped", None)
+        elif name == "error":
+            terminal = ("failed", str((data or {}).get("message") or "生成失败"))
+
+    def publish(kind: str, payload: Any) -> None:
+        # 带外进度(section_step/润色闭环):与生成器 yield 同线程,顺序安全
+        nonlocal seq
+        if stop_event.is_set() or kind != "chunk":
+            return
+        seq += 1
+        name, data = _parse_sse_chunk(payload)
+        job_store.append_event(job_id, seq, name, data)
+        mark_terminal(name, data)
+
+    try:
+        if bind is not None:
+            llm_reset = bind()
+        for chunk in stream_fn(stop_event, publish):
+            if stop_event.is_set():
+                break
+            seq += 1
+            name, data = _parse_sse_chunk(chunk)
+            job_store.append_event(job_id, seq, name, data)
+            mark_terminal(name, data)
+        if stop_event.is_set():
+            job_store.set_job_status(job_id, "stopped")
+        elif terminal is not None:
+            job_store.set_job_status(job_id, terminal[0], error=terminal[1])
+        else:
+            # 阶段1 正常出口:生成器在 plan_complete 后结束,状态已是
+            # awaiting_confirm —— 兜底只对仍卡在 running 的任务生效,
+            # 不覆盖已迁移的状态(J1 测试实证的覆盖 bug)。
+            cur = job_store.get_job(job_id)
+            if cur is not None and cur["status"] == "running":
+                job_store.set_job_status(job_id, "failed", error="生成流提前终止(未到达终态事件)")
+    except BaseException as exc:  # noqa: BLE001  worker 兜底:失败必须落库可查
+        log.warning("写作任务 %s 异常终止: %s", job_id, exc)
+        try:
+            job_store.append_event(job_id, seq + 1, "error", {"message": str(exc)})
+            job_store.set_job_status(job_id, "failed", error=str(exc)[:500])
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        if llm_reset is not None:
+            try:
+                llm_reset()
+            except Exception:  # noqa: BLE001
+                pass
+        with _WRITING_STOP_LOCK:
+            _WRITING_STOP_EVENTS.pop(reg_key, None)
+
+
+@router.post("/writing/jobs", status_code=202)
+async def create_writing_job(
+    req: WritingRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """J1:启动写作任务,立即返回 job_id(任务在服务端独立运行)。
+
+    - 请求体 = WritingRequest;confirmed_groups 非 None 即为阶段2(刷新恢复
+      场景直接续跑写作,需配合 X-Task-Id = job_id 的规划快照);
+    - 事件逐条落库,GET /writing/jobs/{id}/stream 随时接入。
+    """
+    import uuid as _uuid
+
+    from security.auth import apply_user_llm
+    from writing import job_store
+
+    _validate_writing_request(req)
+    _user = getattr(request.state, "user", None)
+    uid = getattr(_user, "user_id", None)
+    job_id = str(_uuid.uuid4())
+
+    if req.confirmed_groups is not None:
+        papers = _resolve_stage2_papers(req, job_id, request, db)
+        confirmed = _to_domain_groups(req.confirmed_groups)
+    else:
+        papers = [p.to_paper() for p in req.papers]
+        confirmed = None
+
+    snapshot = req.model_dump(exclude={"papers"})  # papers 可能上千篇,快照只留引用语境
+    job_store.create_job(job_id, uid, req.topic, req.classify_mode, snapshot)
+
+    if confirmed is not None:
+        start_seq = job_store.max_seq(job_id)
+
+        def persist_final(payload: dict) -> None:
+            persist_review_payload(uid, payload)
+
+        def stream_fn(stop_event, publish):
+            return generate_review_stream(
+                topic=req.topic,
+                papers=papers,
+                classify_mode=req.classify_mode,
+                do_screening=False,
+                confirmed_groups=confirmed,
+                relevance_report=req.relevance_report,
+                stop_event=stop_event,
+                research_questions=req.research_questions,
+                review_goal=req.review_goal,
+                progress=publish_writing_progress(stop_event, publish),
+                task_id=job_id,
+                persist=persist_final,
+            )
+    else:
+        start_seq = 0
+
+        def stream_fn(stop_event, publish):
+            return make_plan_stream_fn(
+                task_id=job_id,
+                user_id=uid,
+                topic=req.topic,
+                papers=papers,
+                classify_mode=req.classify_mode,
+                progress_factory=_classify_emit,
+                research_questions=req.research_questions,
+                review_goal=req.review_goal,
+            )(stop_event, publish)
+
+    threading.Thread(
+        target=_run_writing_job_worker,
+        kwargs={
+            "job_id": job_id, "user_id": uid, "stream_fn": stream_fn,
+            "bind": lambda: apply_user_llm(_user), "start_seq": start_seq,
+        },
+        name=f"writing-job-{job_id[:12]}",
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.post("/writing/jobs/{job_id}/confirm", status_code=202)
+async def confirm_writing_job(
+    job_id: str,
+    body: ConfirmGroupsBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """J1:阶段2确认 —— 同一 job 内从确认点继续写正文(事件 seq 连续)。"""
+    from security.auth import apply_user_llm
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    uid = getattr(_user, "user_id", None)
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        raise HTTPException(404, f"writing job {job_id} not found")
+    if job["status"] != "awaiting_confirm":
+        raise HTTPException(
+            409,
+            f"任务当前状态为 {job['status']},只有 awaiting_confirm 可确认",
+        )
+    if not body.confirmed_groups:
+        raise HTTPException(400, "confirmed_groups 不能为空")
+
+    req = WritingRequest(
+        topic=job["topic"],
+        classify_mode=job["classify_mode"],
+        do_screening=False,
+        papers=[],
+        confirmed_groups=body.confirmed_groups,
+        relevance_report=(job.get("req_snapshot") or {}).get("relevance_report"),
+        research_questions=(job.get("req_snapshot") or {}).get("research_questions"),
+        review_goal=(job.get("req_snapshot") or {}).get("review_goal"),
+    )
+    papers = _resolve_stage2_papers(req, job_id, request, db)
+    confirmed = _to_domain_groups(body.confirmed_groups)
+    start_seq = job_store.max_seq(job_id)
+    job_store.set_job_status(job_id, "running", phase="writing", error=None)
+
+    def persist_final(payload: dict) -> None:
+        persist_review_payload(uid, payload)
+
+    def stream_fn(stop_event, publish):
+        return generate_review_stream(
+            topic=req.topic,
+            papers=papers,
+            classify_mode=req.classify_mode,
+            do_screening=False,
+            confirmed_groups=confirmed,
+            relevance_report=req.relevance_report,
+            stop_event=stop_event,
+            research_questions=req.research_questions,
+            review_goal=req.review_goal,
+            progress=publish_writing_progress(stop_event, publish),
+            task_id=job_id,
+            persist=persist_final,
+        )
+
+    threading.Thread(
+        target=_run_writing_job_worker,
+        kwargs={
+            "job_id": job_id, "user_id": uid, "stream_fn": stream_fn,
+            "bind": lambda: apply_user_llm(_user), "start_seq": start_seq,
+        },
+        name=f"writing-job-{job_id[:12]}",
+        daemon=True,
+    ).start()
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/writing/jobs/{job_id}")
+def get_writing_job(job_id: str, request: Request):
+    """J1:任务快照(status/phase/error);前端刷新恢复与重连前预检用。"""
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        raise HTTPException(404, f"writing job {job_id} not found")
+    return job
+
+
+@router.get("/writing/jobs/{job_id}/stream")
+async def stream_writing_job(
+    job_id: str,
+    request: Request,
+    since_seq: int = 0,
+):
+    """J1:可续传事件流 —— 先重放 since_seq 之后的事件,再实时 tail。
+
+    语义:
+    - 每帧带单调 seq(与 D1 协议一致),前端凭 since_seq 续传;
+    - 任务到达终态(done/failed/stopped)后流结束;awaiting_confirm 保持
+      连接(确认后事件在同一连接上继续到达);
+    - 15s 无事件发注释心跳,防中间代理掐空闲连接。
+    """
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        raise HTTPException(404, f"writing job {job_id} not found")
+
+    async def gen():
+        cursor = int(since_seq)
+        loop = asyncio.get_event_loop()
+        last_yield = loop.time()
+        while True:
+            rows = job_store.events_after(job_id, cursor, limit=200)
+            for r in rows:
+                envelope = {"event": r["event"], "data": r["payload"] or {}, "seq": r["seq"]}
+                yield f"data: {json.dumps(envelope, ensure_ascii=False)}\n\n"
+                cursor = r["seq"]
+                last_yield = loop.time()
+            status = job_store.get_job(job_id)["status"]
+            # awaiting_confirm 同样结束流:确认窗口可能持续数分钟,不占空闲
+            # 连接;前端确认后带 since_seq 重连接续(事件表是事实来源)
+            if status in ("done", "failed", "stopped", "awaiting_confirm"):
+                return
+            now = loop.time()
+            if now - last_yield > 15.0:
+                yield ": heartbeat\n\n"
+                last_yield = now
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream; charset=utf-8",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/writing/jobs/{job_id}/stop")
+def stop_writing_job(job_id: str, request: Request):
+    """J1:停止任务 —— 进程内 Event 即时置位 + 落库(重启后仍可停/可查)。"""
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        raise HTTPException(404, f"writing job {job_id} not found")
+    owner_key = job["user_id"] or "__anon__"
+    with _WRITING_STOP_LOCK:
+        ev = _WRITING_STOP_EVENTS.get((owner_key, job_id))
+    if ev is not None:
+        ev.set()
+    job_store.stop_job(job_id)
+    return {"job_id": job_id, "status": "stopped"}

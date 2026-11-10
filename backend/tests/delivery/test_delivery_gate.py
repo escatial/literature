@@ -21,7 +21,6 @@ for p in (str(BACKEND_ROOT / "src"), str(BACKEND_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from api.writing import _inject_seq  # noqa: E402
 from delivery.render_checker import (  # noqa: E402
     check_sections_delivery,
     strip_internal_anchors,
@@ -97,16 +96,6 @@ def test_manifest_clean_delivery():
     assert manifest["has_abstract"] is True
 
 
-# ── SSE seq 注入 ──────────────────────────────────────────────
-
-def test_inject_seq_adds_monotonic_number():
-    frame = 'data: {"event":"section_done","data":{"key":"theme_1"}}\n\n'
-    out = _inject_seq(frame, 7)
-    assert '"seq": 7' in out or '"seq":7' in out
-    # 非 data 帧原样返回
-    assert _inject_seq(": heartbeat\n\n", 8) == ": heartbeat\n\n"
-    # 坏 JSON 帧保底直通
-    assert _inject_seq("data: not-json\n\n", 9) == "data: not-json\n\n"
 
 
 # ── render_checker 章节级门禁 ─────────────────────────────────

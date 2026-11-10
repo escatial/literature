@@ -1,10 +1,10 @@
 /** SSE 流式写作客户端:逐章实时回填;两阶段模式(主题划分→用户确认→正文写作)。
  *  C7:事件解析收敛到 api/sseTypes.parseSSELine(类型化判别联合),
  *  阶段判断以事件 phase 字段为准(替代界面文案匹配)。 */
-import { getWritingStreamURL, getWritingPlanStreamURL, getWritingStopURL } from '@/config/api';
+import { getWritingJobStreamURL } from '@/config/api';
 import { AUTH_TOKEN_KEY } from './auth';
 import { parseSSELine, phaseCanRegressTo } from './sseTypes';
-import type { DeliveryManifest, Paper, QaReport, WritingRequest, WritingResponse } from './types';
+import type { DeliveryManifest, Paper, QaReport, WritingGroup, WritingRequest, WritingResponse } from './types';
 
 export type StreamPhase =
   | 'idle'
@@ -17,13 +17,6 @@ export type StreamPhase =
   | 'qa'
   | 'complete'
   | 'error';
-
-export async function stopWritingRequest(): Promise<void> {
-  await fetch(getWritingStopURL(), {
-    method: 'POST',
-    headers: { 'X-Auth-Token': localStorage.getItem(AUTH_TOKEN_KEY) ?? '' },
-  });
-}
 
 /** 《文献相关性分级清单》的一行 */
 export interface RelevanceRow {
@@ -225,31 +218,15 @@ function createInitialState(): StreamState {
   };
 }
 
-/** 公共 SSE 消费循环:两个阶段共用同一套事件处理与心跳计时 */
-async function consumeWritingSSE(
-  url: string,
-  req: WritingRequest,
+/** SSE 读取循环(J1):消费一个已建立的 fetch Response,把事件按序灌入 state。
+ * 连接只是「读取视图」;建流/重连/重放由 consumeWritingJobStream 编排。
+ * 断言式收窄/文案拼接与旧实现逐行为保持一致(仅投递层改造)。 */
+async function runSSELoop(
+  resp: Response,
+  state: StreamState,
   onUpdate: (s: StreamState) => void,
-  signal?: AbortSignal,
-): Promise<StreamState> {
-  // v9.8:5xx 自动重试一次 —— 路由级 5xx 意味着服务端什么都没执行(未进流),
-  // 重试幂等零成本;吸收开发态热重载/进程重启的瞬时窗口,避免用户看到
-  // 凭空出现的"HTTP 500:服务器内部错误"还得手点重试
-  const doFetch = () => fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Auth-Token': localStorage.getItem(AUTH_TOKEN_KEY) ?? '',
-    },
-    body: JSON.stringify(req),
-    signal,
-  });
-  let resp = await doFetch();
-  if (resp.status >= 500 && !signal?.aborted) {
-    await new Promise((r) => setTimeout(r, 2000));
-    resp = await doFetch();
-  }
-
+  onFrame?: () => void,
+): Promise<void> {
   if (!resp.ok || !resp.body) {
     // v9.7:读出响应体里的错误详情(后端全局异常处理器返回 {"detail": "..."}),
     // 此前只显示"HTTP 500",真实原因对用户完全不可见
@@ -273,9 +250,7 @@ async function consumeWritingSSE(
   let buffer = '';
   // D1:丢帧检测 —— 服务端为每个事件注入流内单调 seq,跳号即告警
   let lastSeq = 0;
-  let state: StreamState = createInitialState();
-  const startedAt = Date.now();
-  let lastProgressAt = startedAt;
+  let lastProgressAt = Date.now();
   let activitySeq = 0;
   const addActivity = (message: string) => {
     const item = { id: ++activitySeq, at: new Date().toLocaleTimeString(), message };
@@ -317,23 +292,11 @@ async function consumeWritingSSE(
     state.currentReasoning = '';
     state.sectionSteps = [];
   };
-  const ticker = window.setInterval(() => {
-    if (state.phase === 'complete' || state.phase === 'error') return;
-    const now = Date.now();
-    state = {
-      ...state,
-      elapsedSeconds: Math.floor((now - startedAt) / 1000),
-      waitingSeconds: Math.floor((now - lastProgressAt) / 1000),
-    };
-    onUpdate({ ...state });
-  }, 1000);
-
   while (true) {
     let readResult: ReadableStreamReadResult<Uint8Array>;
     try {
       readResult = await reader.read();
     } catch (error) {
-      window.clearInterval(ticker);
       throw error;
     }
     const { value, done } = readResult;
@@ -361,6 +324,7 @@ async function consumeWritingSSE(
 
         if (evt.event !== 'heartbeat') {
           lastProgressAt = Date.now();
+          onFrame?.();
           state.waitingSeconds = 0;
         }
         const evtData = evt.data as Record<string, unknown>;
@@ -755,53 +719,146 @@ async function consumeWritingSSE(
       }
     }
   }
-  window.clearInterval(ticker);
-  return state;
 }
 
-/** 阶段1:主题划分(筛选+相关性分级+分类)。跑到确认点即停,不写正文。 */
-export async function planWritingStream(
-  req: WritingRequest,
-  onUpdate: (s: StreamState) => void,
-  signal?: AbortSignal,
-): Promise<StreamState> {
-  onUpdate(createInitialState());
+// ============================================================================
+// J1(2026-11) 任务化消费:任务事件流 + 断线重连 + 完整性门禁
+// ============================================================================
 
-  const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefined;
-  const state = await consumeWritingSSE(getWritingPlanStreamURL(backendOrigin), req, onUpdate, signal);
-
-  if (state.phase === 'error') {
-    throw new Error(state.error ?? '主题划分失败');
-  }
-  if (state.phase !== 'await_confirm') {
-    throw new Error('主题划分流意外终止,未到达确认点');
-  }
-  return state;
+/** 任务快照(GET /writing/jobs/{id})。 */
+export interface WritingJobInfo {
+  job_id: string;
+  status: 'running' | 'awaiting_confirm' | 'done' | 'failed' | 'stopped';
+  phase: string | null;
+  topic: string;
+  classify_mode: string;
+  error: string | null;
+  req_snapshot?: Record<string, unknown> | null;
 }
 
-/** 阶段2:按用户确认的主题分组生成正文(confirmed_groups 模式,后端跳过筛选分类)。 */
-export async function generateWritingStream(
-  req: WritingRequest,
-  onUpdate: (s: StreamState) => void,
-  signal?: AbortSignal,
-): Promise<WritingResponse> {
-  onUpdate(createInitialState());
+export interface JobStreamOptions {
+  jobId: string;
+  onUpdate: (s: StreamState) => void;
+  signal?: AbortSignal;
+  /** 重放起点(默认 0 = 全量重放,经同一 reducer 重建全部界面状态) */
+  sinceSeq?: number;
+  /** 初始状态(默认全新;阶段2确认后可传当前 state 连续续写) */
+  initialState?: StreamState;
+}
+
+const JOB_STREAM_MAX_CONSECUTIVE_FAILURES = 8;
+const JOB_STREAM_RETRY_BASE_MS = 800;
+
+/**
+ * 任务事件流消费者(J1):GET /writing/jobs/{id}/stream。
+ *
+ * - 服务端先重放 since_seq 之后的事件,再实时 tail;连接只是读取视图;
+ * - 连接在任务终态(done/failed/stopped/awaiting_confirm)由服务端收尾;
+ * - 非终态提前断开(网络抖动/代理掐连接)= 退避重连,状态经重放无损重建;
+ * - 返回时 phase ∈ complete | error | idle(stopped) | await_confirm。
+ */
+export async function consumeWritingJobStream(opts: JobStreamOptions): Promise<StreamState> {
+  const state = opts.initialState ?? createInitialState();
+  let lastSeq = opts.sinceSeq ?? 0;
+  let lastFrameAt = Date.now();
+  let consecutiveFailures = 0;
+  const startedAt = Date.now();
+
+  // 心跳/耗时计时:任何业务帧都重置 waiting;terminal 相位不再跳动
+  const ticker = window.setInterval(() => {
+    if (state.phase === 'complete' || state.phase === 'error' || state.phase === 'idle') return;
+    state.elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+    state.waitingSeconds = Math.floor((Date.now() - lastFrameAt) / 1000);
+    opts.onUpdate({ ...state });
+  }, 1000);
+
+  const onFrame = () => {
+    lastFrameAt = Date.now();
+  };
 
   const backendOrigin = (import.meta as any).env?.VITE_API_BASE as string | undefined;
-  const state = await consumeWritingSSE(getWritingStreamURL(backendOrigin), req, onUpdate, signal);
 
-  if (state.phase === 'error') {
-    throw new Error(state.error ?? '流式生成失败');
+  try {
+    while (true) {
+      if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      let resp: Response;
+      try {
+        resp = await fetch(getWritingJobStreamURL(backendOrigin, opts.jobId, lastSeq), {
+          headers: { 'X-Auth-Token': localStorage.getItem(AUTH_TOKEN_KEY) ?? '' },
+          signal: opts.signal,
+        });
+      } catch (e: any) {
+        if (opts.signal?.aborted || e?.name === 'AbortError') throw e;
+        consecutiveFailures += 1;
+        if (consecutiveFailures > JOB_STREAM_MAX_CONSECUTIVE_FAILURES) {
+          throw new Error('无法连接写作任务事件流(已重试多次),请检查后端服务');
+        }
+        await new Promise((r) => setTimeout(r, JOB_STREAM_RETRY_BASE_MS * consecutiveFailures));
+        continue;
+      }
+      if (resp.status === 404) {
+        throw new Error('写作任务不存在或无权访问(可能已被清理)');
+      }
+      if (!resp.ok || !resp.body) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures > JOB_STREAM_MAX_CONSECUTIVE_FAILURES) {
+          let detail = '';
+          try {
+            const text = await resp.text();
+            detail = String(JSON.parse(text)?.detail ?? text).slice(0, 300);
+          } catch {
+            /* body 不可读时保持空 */
+          }
+          throw new Error(`HTTP ${resp.status}${detail ? `：${detail}` : ''}`);
+        }
+        await new Promise((r) => setTimeout(r, JOB_STREAM_RETRY_BASE_MS * consecutiveFailures));
+        continue;
+      }
+
+      consecutiveFailures = 0;
+      const seqBefore = lastSeq;
+      await runSSELoop(resp, state, (s) => opts.onUpdate(s), () => {
+        lastFrameAt = Date.now();
+      });
+
+      // 连接收尾后的判定:终态直接返回;非终态断开 → 退避重连(状态无损)
+      if (
+        state.phase === 'complete' || state.phase === 'error' ||
+        state.phase === 'idle' || state.phase === 'await_confirm'
+      ) {
+        return state;
+      }
+      if (lastSeq === seqBefore) {
+        // 一帧都没收到就被掐断:按网络故障退避
+        consecutiveFailures += 1;
+        if (consecutiveFailures > JOB_STREAM_MAX_CONSECUTIVE_FAILURES) {
+          throw new Error('任务事件流反复中断且无新事件,请稍后刷新页面重新接入');
+        }
+        await new Promise((r) => setTimeout(r, JOB_STREAM_RETRY_BASE_MS * consecutiveFailures));
+      } else {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+  } finally {
+    window.clearInterval(ticker);
   }
-  // D1 完成性门禁(2026-11-01 交付事故修复):此前只拦截 error —— 流半路
-  // 断掉(网络抖动/代理超时/心跳停摆)会把残缺中间态当成功返回并入库,
-  // 产出「缺章 + 锚点泄漏 + 乱序」的残次综述。现在未收到 complete 或
-  // manifest 校验不过,一律显式失败,绝不静默保存残品。
+}
+
+/**
+ * D1 完成性门禁 + 响应构建(2026-11-01 交付事故修复):
+ * 未收到 complete 或 manifest 校验不过,一律显式失败,绝不静默保存残品。
+ */
+export function buildWritingResponse(
+  state: StreamState,
+  topic: string,
+  classifyMode: string,
+  groups: WritingGroup[],
+): WritingResponse {
   if (state.phase !== 'complete') {
     const done = state.sections.length;
     throw new Error(
       `生成流意外终止(未收到完成事件),已完成 ${done} 章未被保存。` +
-      '请点击「开始生成」重试;已完成的阶段1规划不受影响。',
+      '请点击「开始生成」重试;已完成的主题划分不受影响。',
     );
   }
   const manifest = state.manifest;
@@ -810,8 +867,7 @@ export async function generateWritingStream(
   }
   if (manifest.missing_sections?.length) {
     throw new Error(
-      `交付不完整:以下章节生成失败未恢复(${manifest.missing_sections.join(', ')})。` +
-      '请重新生成。',
+      `交付不完整:以下章节生成失败未恢复(${manifest.missing_sections.join(', ')})。请重新生成。`,
     );
   }
   if (manifest.anchor_leaks > 0) {
@@ -825,9 +881,9 @@ export async function generateWritingStream(
     );
   }
   return {
-    topic: req.topic,
-    classify_mode: req.classify_mode,
-    groups: state.groups,
+    topic,
+    classify_mode: classifyMode,
+    groups,
     sections: state.sections,
     reference_list: state.referenceList,
     screened_out_ids: state.screenedOutIds,

@@ -364,3 +364,41 @@ class WritingPlanModel(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class WritingJobModel(Base):
+    """写作任务档案(J1 任务化改造,2026-11)。
+
+    任务化把「一次 SSE 连接扛 60 分钟」改为「服务端任务 + 可重放事件流」:
+    - job_id 复用 X-Task-Id 体系(与 writing_plans.task_id、reviews.task_id 同键);
+    - status: running / awaiting_confirm / done / failed / stopped;
+    - req_snapshot: 发起时的 WritingRequest 原文(刷新恢复/重启后可见上下文);
+    - 停止语义: 进程内 Event(即时)+ 本行 status=stopped(重启后仍可停/可查)。
+    """
+    __tablename__ = "writing_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    topic: Mapped[str] = mapped_column(String(500), default="")
+    classify_mode: Mapped[str] = mapped_column(String(20), default="theme")
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    phase: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    req_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+class WritingJobEventModel(Base):
+    """写作任务事件日志(J1)—— append-only,可重放的事实来源。
+
+    每个事件一行(job_id, seq) 主键;seq 流内单调(D1 协议),断线重连按
+    since_seq 续传。替代 .runs/*.jsonl 的数据库形态(文件日志保留用于排查)。
+    """
+    __tablename__ = "writing_job_events"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

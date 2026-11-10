@@ -10,15 +10,8 @@ export function getApiBaseURL(origin?: string): string {
     return origin ? `${origin}/api` : '/api';
 }
 
-export function getWritingStreamURL(origin?: string): string {
-    return `${getApiBaseURL(origin)}/writing/generate-stream`;
-}
 
-/** 阶段1:主题划分(筛选+分级+分类),停在确认点 */
-export function getWritingPlanStreamURL(origin?: string): string {
-  return `${getApiBaseURL(origin)}/writing/plan-stream`;
-}
-
-export function getWritingStopURL(origin?: string): string {
-  return `${getApiBaseURL(origin)}/writing/stop`;
+/** J1:写作任务事件流(可续传;since_seq 重放起点) */
+export function getWritingJobStreamURL(origin: string | undefined, jobId: string, sinceSeq = 0): string {
+  return `${getApiBaseURL(origin)}/writing/jobs/${jobId}/stream?since_seq=${sinceSeq}`;
 }

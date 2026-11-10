@@ -12,8 +12,12 @@
 
 ## 1. 写作主链路（7 节点 + 交付保障层）
 
-写作流程是一个 **7 节点** 的线性链路，节点间通过 SSE 事件推进
-（事件名契约单一事实来源：`frontend/src/api/sseTypes.ts`）：
+写作流程是一个 **7 节点** 的线性链路，节点间通过事件推进
+（事件名契约单一事实来源：`frontend/src/api/sseTypes.ts`）。
+自 J1 任务化改造起，事件**逐条落库**（`writing_job_events` 表），前端通过
+**可续传事件流**（`GET /writing/jobs/{id}/stream`）重放+实时接入 —— 连接只是
+「读取视图」，断线/刷新页面凭 job_id 全量重放恢复界面，不再有「一次连接扛
+60 分钟」的脆弱性：
 
 ```
 planning(start)                      开始：接收文献、准备筛选
@@ -48,6 +52,25 @@ planning(start)                      开始：接收文献、准备筛选
 | 定稿序号重排 | `_renumber_section_titles` 按交付位置连续编号 | 用户删组/重排后乱序 |
 | 摘要/关键词节点 | 写作完成后 LLM 蒸馏 200-300 字摘要 + 4-6 关键词（`abstract_done` 事件 + docx 渲染 + 落库） | 综述缺摘要的体裁缺失 |
 | run 级事件日志 | 每次写作流落盘 `backend/.runs/writing_*.jsonl`（保留 30 份） | 事故无法复盘 |
+
+### 1.1.1 任务化改造（J1，2026-11）
+
+长 SSE 连接的固有脆弱性（代理掐连接、网络抖动、机器休眠）由**任务化**根治：
+
+- **任务模型**：`writing_jobs`（状态机 running → awaiting_confirm → running →
+  done/failed/stopped）+ `writing_job_events`（append-only 事件日志，seq 连续）；
+- **API**：`POST /writing/jobs`（启动，立即返回 job_id）、
+  `POST /writing/jobs/{id}/confirm`（阶段2确认，同一 job 内 seq 连续续写）、
+  `GET /writing/jobs/{id}`（快照）、
+  `GET /writing/jobs/{id}/stream?since_seq=N`（重放+实时 tail，终态即收尾）、
+  `POST /writing/jobs/{id}/stop`（进程内 Event 即停 + 落库）；
+- **前端**：`consumeWritingJobStream` 退避重连（非终态断开按 since_seq 续传），
+  WritingPage 挂载时 `resumeActive()` 经 sessionStorage 恢复活跃任务界面；
+- **重启语义**：启动时把仍处 running 的任务标记 failed（规划快照保留，
+  确认主题后可直接重试阶段2）；awaiting_confirm 是合法持久状态不受影响；
+- **保留策略**：仅最近 100 个任务及其事件；
+- LLM 正在生成中的章节不可跨进程续写（模型调用本身不可恢复）——这是任务化
+  唯一无法覆盖的场景，服务重启后该任务按 failed 处理。
 
 ### 1.2 断点恢复（两阶段模式）
 
@@ -117,8 +140,11 @@ manifest/seq）与 `tests/auth/test_review_delivery_gate.py`（POST 门禁/副�
 ### 5.2 存量库迁移
 
 后端启动 `init_db()` 幂等补列：reviews 表新增 `task_id / qa_report / abstract /
-keywords`（D1）。存量 reviews 行这些字段为空属预期；导出时历史行的残留锚点
-会被导出门禁自动剥离。
+keywords`（D1），并自动建 `writing_jobs / writing_job_events` 表（J1）。
+存量 reviews 行这些字段为空属预期；导出时历史行的残留锚点
+会被导出门禁自动剥离。旧 SSE 端点（`/writing/generate-stream`、
+`/writing/plan-stream`、`/writing/stop`）已随 J1 下线，前端已全部切换到
+`/writing/jobs` 体系。
 
 ### 5.3 关键环境变量（`.env` 或系统环境）
 
@@ -155,8 +181,7 @@ keywords`（D1）。存量 reviews 行这些字段为空属预期；导出时历
 6. 前后端类型仍手工镜像（D1 已同步 qa_report/abstract/keywords/pubmed source，
    治本待 OpenAPI codegen）；
 7. LLM SSRF 防护未在 transport 层 pin 解析后 IP（DNS rebinding 窗口仍在）；
-8. 前端 e2e（Playwright）尚未建立；写作 SSE 断线后尚无自动续传（当前为显式失败
-   + 重试，不静默保存残品）。
+8. 前端 e2e（Playwright）尚未建立（写作流断线已由 J1 任务化 + 重放式重连解决）。
 
 ## 8. 相关文档
 
