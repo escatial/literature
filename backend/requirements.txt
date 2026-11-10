@@ -1,4 +1,7 @@
-fastapi>=0.110
+# 上界 pin(2026-11-10):starlette 1.x 的懒加载路由(_IncludedRouter)下,
+# 部分 include_router 前缀组合 404(实测 /api/retrieval/history 带有效令牌
+# 仍 Not Found)。项目开发基线为 fastapi 0.115 + starlette 0.4x。
+fastapi>=0.110,<0.116
 uvicorn[standard]>=0.27
 # uvicorn[standard] 0.52+ imports ServerProtocol, which is unavailable in
 # websockets 10.x and otherwise makes the backend subprocess crash on startup.
