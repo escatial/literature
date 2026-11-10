@@ -377,6 +377,22 @@ def _mig_owner_backfill(conn: _Connection) -> None:
     conn.commit()
 
 
+def _mig_reviews_delivery_columns(conn: _Connection) -> None:
+    """D1(2026-11 交付链加固):reviews 补 task_id/qa_report/abstract/keywords。
+
+    - task_id:服务端权威落库的写作任务档案键,与前端保存共用 upsert;
+    - qa_report/abstract/keywords:QA 报告与摘要节点的持久化载体
+      (此前 qa_report 只存在于 complete 事件,前端类型缺失导致 100% 丢失)。
+    """
+    _ensure_columns(conn, "reviews", {
+        "task_id": "task_id VARCHAR(64)",
+        "qa_report": "qa_report JSON",
+        "abstract": "abstract TEXT",
+        "keywords": "keywords JSON",
+    })
+    conn.commit()
+
+
 def _mig_purge_dirty_papers(conn: _Connection) -> None:
     """v6.x 清理历史脏数据(title 空 / year<=0 / 双摘要都空)。
 
@@ -426,6 +442,7 @@ _MIGRATIONS: list[tuple[str, "callable"]] = [
     ("v8.1_papers_legacy_task_backfill", _mig_papers_legacy_task_backfill),
     ("v9.x_users_auth_columns", _mig_users_auth_columns),
     ("b6_owner_backfill", _mig_owner_backfill),
+    ("d1_reviews_delivery_columns", _mig_reviews_delivery_columns),
     ("v7.0_repair_identity_index", _mig_repair_identity_index),
     ("v6.0_history_run_id", _mig_history_run_id),
     ("v6.x_core_journals", _mig_core_journals),

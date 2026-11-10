@@ -44,6 +44,10 @@ function initialState(): StreamState {
     error: null,
     activityLog: [],
     harness: null,
+    abstract: null,
+    keywords: null,
+    manifest: null,
+    finalized: false,
   };
 }
 

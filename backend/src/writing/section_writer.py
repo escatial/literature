@@ -52,6 +52,49 @@ class SectionResult:
     density_warning: bool = False
 
 
+def _citation_hint(p: Paper) -> str:
+    """D1:预格式化的正文夹注形态,LLM 必须照抄。
+
+    修复两类实测缺陷:
+    - 英文全名直书(「Rambabu Lavuri et al. (2022)」→ 应为「Lavuri et al. (2022)」);
+    - 无作者文献被当作者名(「通威鱼(2013)」实为广告策划案例)→ 用短题名。
+    """
+    authors = [a.strip() for a in (p.authors or []) if a and a.strip()]
+    year = str(p.year) if p.year else "无年份"
+    if not authors:
+        title = (p.title or "").strip().rstrip(".")
+        short = title[:16] + ("…" if len(title) > 16 else "")
+        return f"《{short}》({year})"
+    ascii_names = all(a.isascii() for a in authors)
+    if ascii_names:
+        first = authors[0]
+        if "," in first:
+            first = first.split(",", 1)[0].strip()
+        surname = first.split()[-1].rstrip(".") if first.split() else first
+        return f"{surname} et al. ({year})" if len(authors) > 1 else f"{surname} ({year})"
+    return f"{authors[0]}等 ({year})" if len(authors) > 1 else f"{authors[0]} ({year})"
+
+
+_CORE_LEVEL_MARKS = ("核心", "CSSCI", "北大核心", "CSCD", "SCI", "SSCI", "EI", "Q1", "Q2")
+
+
+def _is_core_journal(p: Paper) -> bool:
+    """期刊分层:journal_level 命中核心标识视为核心期刊(缺失视为非核心)。"""
+    level = (p.journal_level or "").strip()
+    return any(mark.lower() in level.lower() for mark in _CORE_LEVEL_MARKS)
+
+
+def _order_for_writing(papers: list[Paper], grades: dict[str, str] | None) -> list[Paper]:
+    """写作清单排序:核心期刊优先、高相关次之(此前中文池被低层次对策文主导)。"""
+    grade_order = {"high": 0, "medium": 1, "low": 2}
+
+    def sort_key(p: Paper):
+        grade = grade_order.get((grades or {}).get(p.lit_id, "medium"), 1)
+        return (0 if _is_core_journal(p) else 1, grade)
+
+    return sorted(papers, key=sort_key)
+
+
 def _build_papers_catalog(papers: list[Paper]) -> str:
     """论文清单(标题/作者/年份/期刊)。"""
     lines = []
@@ -101,6 +144,7 @@ def _build_papers_catalog_alias(
         lines.append(
             f"- {alias} | {p.title} | {', '.join(p.authors)} | "
             f"{p.journal or 'N/A'} | {p.year or 'N/A'}"
+            f" | 夹注: {_citation_hint(p)}"
             f"{_grade_suffix(p.lit_id, grades)}"
         )
     return "\n".join(lines) if lines else "(本章无可引用文献)"
@@ -120,6 +164,7 @@ def _build_abstract_catalog(
         meta = (
             f"{alias} | {p.title} | {', '.join(p.authors)} | "
             f"{p.journal or 'N/A'} | {p.year or 'N/A'}"
+            f" | 夹注: {_citation_hint(p)}"
             f"{_grade_suffix(p.lit_id, grades)}"
         )
         if p.abstract:
@@ -426,6 +471,9 @@ def _prepare_section_context(
     alias_map: dict[str, str] = {}
     short_list: list[Paper] = []
     if not is_comment and papers:
+        # D1:写作清单核心期刊优先、高相关次之 —— 别名/锚点仍按原列表分配,
+        # 只影响清单展示顺序(引导 LLM 优先取用高质量文献)。
+        papers = _order_for_writing(list(papers), grades)
         for idx, p in enumerate(papers, start=1):
             prefix = {
                 "openalex": "oa",
@@ -470,6 +518,10 @@ def _prepare_section_context(
             "请围绕这些文献进行比较、归纳和评述，不要只反复引用少数文献。"
             "每个正文段落至少应比较或并置3位不同学者及其文献；不足3篇时必须扩展该段的文献对话，"
             "不能用同一篇文献重复凑数。"
+            "\n段落密度与结构(硬要求):每个自然段不少于 250 字;每段须完成"
+            "「共识——分歧(机制/情境差异)——证据局限」三元推进,不得只罗列各文献做法;"
+            "相邻段落不得使用相同句式开头(如连续以「X认为」「Y则」起段),须变换论述结构;"
+            "正文夹注必须照抄文献清单中的「夹注」形态(英文作者只用第一作者姓氏+et al.)。"
         )
     # v9.9: 主题综合素材(theme 章 = 本主题条目;comment 章 = 跨主题空白/争议)
     if synthesis_map:

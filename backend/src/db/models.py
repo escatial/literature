@@ -144,6 +144,14 @@ class ReviewModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # B6 数据归属:发起写作的登录用户;NULL = 存量行(启动回填)
     owner_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # D1(2026-11 交付链加固):写作任务档案键 —— 服务端权威落库与前端
+    # 保存(upsert)共用,同一 (task_id, owner) 只保留一条最新记录。
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # 全流程核查报告(complete 事件 qa_report 的持久化副本;历史行为空)
+    qa_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 摘要与关键词(WRITING_ABSTRACT 节点产物;历史行为空)
+    abstract: Mapped[str | None] = mapped_column(Text, nullable=True)
+    keywords: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class RetrievalHistoryModel(Base):

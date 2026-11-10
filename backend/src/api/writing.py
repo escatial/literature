@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -58,6 +60,84 @@ def _to_domain_groups(groups: list[GroupOut]) -> list[Group]:
     return [Group(name=g.name, lit_ids=list(g.lit_ids)) for g in groups]
 
 
+def _inject_seq(chunk: str, seq: int) -> str:
+    """D1:向 SSE data 帧注入流内单调序号(帧 JSON 顶层 `seq` 字段)。
+
+    前端据此检测丢帧 —— 此前 sections_finalized(全流最大单帧)静默丢失
+    时,前端无任何感知,直接保存锚点中间态(2026-11-01 交付事故根因之一)。
+    非 data 帧(心跳注释等)原样返回。
+    """
+    prefix = "data: "
+    if not (isinstance(chunk, str) and chunk.startswith(prefix)):
+        return chunk
+    try:
+        obj = json.loads(chunk[len(prefix):].strip())
+        if isinstance(obj, dict):
+            obj["seq"] = seq
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+    except Exception:  # noqa: BLE001  非JSON帧不动,保底直通
+        pass
+    return chunk
+
+
+class _RunEventLogger:
+    """D1:run 级 JSONL 事件日志(backend/.runs/writing_*.jsonl)。
+
+    2026-11-01 交付事故无法复盘,因为运行只存在于内存与控制台 —— 本日志
+    把每个 SSE 事件落盘,事故后可回放事件序列定位丢帧/中断点。
+    写日志失败只降级不影响交付;目录仅保留最近 N 份。
+    """
+
+    _KEEP = 30
+
+    def __init__(self, task_id: str | None) -> None:
+        self._fh = None
+        try:
+            run_dir = Path(__file__).resolve().parents[2] / ".runs"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            safe_task = re.sub(r"[^A-Za-z0-9_-]+", "-", (task_id or "anon"))[:40]
+            self._fh = (run_dir / f"writing_{safe_task}_{ts}.jsonl").open(
+                "a", encoding="utf-8"
+            )
+            self._cleanup_old()
+        except Exception:  # noqa: BLE001
+            self._fh = None
+
+    def log(self, kind: str, payload: Any) -> None:
+        if self._fh is None:
+            return
+        try:
+            record: dict[str, Any] = {"ts": round(time.time(), 3), "kind": kind}
+            if isinstance(payload, str):
+                record["chunk"] = payload[:2000]
+            elif payload is not None:
+                record["detail"] = str(payload)[:500]
+            self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            self._fh.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def close(self) -> None:
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._fh = None
+
+    def _cleanup_old(self) -> None:
+        try:
+            run_dir = self._fh.name and Path(self._fh.name).parent
+            if not run_dir:
+                return
+            files = sorted(run_dir.glob("writing_*.jsonl"))
+            for stale in files[: -self._KEEP]:
+                stale.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _sse_stream_response(stream_fn, bind=None, stop_key=None) -> StreamingResponse:
     """SSE 通用封装:后台线程跑同步生成器,主事件循环转发并保活心跳。
 
@@ -76,11 +156,19 @@ def _sse_stream_response(stream_fn, bind=None, stop_key=None) -> StreamingRespon
         reg_key = stop_key if stop_key is not None else ("__anon__", f"__{id(stop_event):x}__")
         with _WRITING_STOP_LOCK:
             _WRITING_STOP_EVENTS[reg_key] = stop_event
+        # D1:流内事件序号 + run 级落盘日志
+        seq_counter = 0
+        run_logger = _RunEventLogger(reg_key[1] if reg_key else None)
 
         def publish(kind: str, payload: Any) -> None:
+            nonlocal seq_counter
             # 停止后丢弃尚未入队的进度，避免前端在点击停止后又收到旧事件。
             if stop_event.is_set() and kind == "chunk":
                 return
+            if kind == "chunk":
+                seq_counter += 1
+                payload = _inject_seq(payload, seq_counter)
+            run_logger.log(kind, payload)
             loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
 
         def produce() -> None:
@@ -130,6 +218,7 @@ def _sse_stream_response(stream_fn, bind=None, stop_key=None) -> StreamingRespon
             if kind == "chunk":
                 yield payload
             elif kind == "failure":
+                run_logger.log("failure", str(payload))
                 error_event = {
                     "event": "error",
                     "data": {"message": str(payload)},
@@ -138,6 +227,7 @@ def _sse_stream_response(stream_fn, bind=None, stop_key=None) -> StreamingRespon
                 break
             else:
                 break
+        run_logger.close()
 
     return StreamingResponse(
         event_gen(),
@@ -503,6 +593,41 @@ async def writing_generate_stream(
 
     _bound_user = getattr(request.state, "user", None)
 
+    def persist_final(payload: dict) -> None:
+        """D1:服务端权威落库(worker 线程调用)。
+
+        编号+QA修复+摘要齐备的定稿由后端直接持久化(独立短会话,不占用
+        请求作用域会话);同 (task_id, owner) 幂等 upsert。前端随后的
+        POST /reviews 是同一键的冗余副本,残品会被本副本调和覆盖。
+        """
+        from db.models import ReviewModel
+        from db.session import SessionLocal
+
+        uid = getattr(_bound_user, "user_id", None)
+        with SessionLocal() as pdb:
+            row = None
+            if payload.get("task_id"):
+                q = pdb.query(ReviewModel).filter_by(task_id=payload["task_id"])
+                if uid:
+                    q = q.filter(ReviewModel.owner_user_id == uid)
+                row = q.order_by(ReviewModel.id.desc()).first()
+            if row is None:
+                row = ReviewModel(
+                    topic=payload["topic"],
+                    classify_mode=payload["classify_mode"],
+                    owner_user_id=uid,
+                )
+                pdb.add(row)
+            row.task_id = payload.get("task_id")
+            row.sections = payload["sections"]
+            row.reference_list = payload["reference_list"]
+            row.screened_out_ids = payload["screened_out_ids"]
+            row.dropped_citations = payload["dropped_citations"]
+            row.qa_report = payload.get("qa_report")
+            row.abstract = payload.get("abstract")
+            row.keywords = payload.get("keywords")
+            pdb.commit()
+
     return _sse_stream_response(
         lambda stop_event, publish: generate_review_stream(
             topic=req.topic,
@@ -516,6 +641,7 @@ async def writing_generate_stream(
             review_goal=req.review_goal,
             progress=publish_writing_progress(stop_event, publish),
             task_id=task_id,
+            persist=persist_final,
         ),
         bind=lambda: apply_user_llm(_bound_user),
         stop_key=(getattr(_bound_user, "user_id", None) or "__anon__", task_id),

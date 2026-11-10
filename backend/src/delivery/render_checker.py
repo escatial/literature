@@ -27,6 +27,75 @@ PLACEHOLDER_PATTERNS = [
     re.compile(r"\[此处.{0,10}内容\]"),
 ]
 
+# D1(2026-11 交付链加固):内部引用锚点 —— 编号替换的漏网之鱼。
+# 2026-11-01 交付事故:41 处 [lit_xxx] 直接暴露在交付 docx 正文里。
+_INTERNAL_ANCHOR_RE = re.compile(r"\[(?:lit_[a-zA-Z0-9_]+|hash:[a-zA-Z0-9_]+)\]")
+
+
+def strip_internal_anchors(text: str) -> tuple[str, int]:
+    """剥离正文残留的内部引用锚点([lit_xxx]/[hash:xxx]),返回 (净化文本, 剥离数)。
+
+    历史数据兜底用:新链路在 apply_citation_numbering 已把可映射锚点换成
+    [N]、不可映射锚点直接剥除;本函数只处理存量库里的旧行。
+    """
+    if not text:
+        return "", 0
+    cleaned, n = _INTERNAL_ANCHOR_RE.subn("", text)
+    return cleaned, n
+
+
+def check_sections_delivery(sections: list[dict], reference_list: str = "") -> list[dict]:
+    """入库/导出前的章节级交付门禁,返回问题清单(空 = 通过)。
+
+    五条硬校验(对应 2026-11-01 交付事故的每一类缺陷):
+    1. 章节非空;
+    2. 正文零内部锚点残留;
+    3. 正文零占位符;
+    4. 每条参考文献至少被正文引用一次([N] 在正文出现);
+    5. 章节序号连续(一、二、三…,乱序即报)。
+    """
+    issues: list[dict[str, str]] = []
+    if not sections:
+        issues.append({"code": "NO_SECTIONS", "detail": "没有可交付的章节"})
+        return issues
+
+    body_all = "\n".join(str(s.get("content") or "") for s in sections)
+    cited_nums = set(re.findall(r"\[(\d{1,3})\]", body_all))
+
+    for s in sections:
+        key = str(s.get("key") or "?")
+        content = str(s.get("content") or "")
+        if not content.strip():
+            issues.append({"code": "EMPTY_SECTION", "detail": f"章节 {key} 正文为空"})
+        anchors = _INTERNAL_ANCHOR_RE.findall(content)
+        if anchors:
+            issues.append({
+                "code": "ANCHOR_LEAK",
+                "detail": f"章节 {key} 残留内部锚点 {len(anchors)} 处: {anchors[:3]}",
+            })
+        for pat in PLACEHOLDER_PATTERNS:
+            m = pat.search(content)
+            if m:
+                issues.append({
+                    "code": "PLACEHOLDER_FOUND",
+                    "detail": f"章节 {key} 含占位符: {m.group(0)}",
+                })
+        title = str(s.get("title") or "")
+        if title and not re.match(r"^[一二三四五六七八九十百\d]+、", title.strip()):
+            issues.append({
+                "code": "TITLE_NOT_NUMBERED",
+                "detail": f"章节 {key} 标题缺序号: {title[:30]}",
+            })
+
+    ref_nums = re.findall(r"^\[(\d{1,3})\]", reference_list or "", flags=re.M)
+    uncited = [n for n in ref_nums if n not in cited_nums]
+    if uncited:
+        issues.append({
+            "code": "REFS_UNCITED",
+            "detail": f"{len(uncited)} 条参考文献未被正文引用: [{'], ['.join(uncited[:8])}]",
+        })
+    return issues
+
 
 @dataclass
 class RenderCheckResult:
@@ -154,4 +223,9 @@ def check_render(docx_path: str | Path) -> RenderCheckResult:
     )
 
 
-__all__ = ["check_render", "RenderCheckResult"]
+__all__ = [
+    "check_render",
+    "check_sections_delivery",
+    "strip_internal_anchors",
+    "RenderCheckResult",
+]

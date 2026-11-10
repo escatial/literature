@@ -59,11 +59,8 @@ debug_*.html
 # User resources (don't commit)
 humanizer-zh.zip
 literature-review.zip
-*.md
-!backend/README.md
-!backend/ADVANCED_MODULES_README.md
-!backend/src/**/*.md
-!docs/**/*.md
+# D1(2026-11):删除全局 *.md 忽略 —— 反模式曾把根 README/代码地图排除在
+# 版本控制外(clone 下来没有文档)。文档应入库;生成的 md 按需显式忽略。
 
 # IDE
 .idea/
@@ -88,6 +85,12 @@ backend/_kept_pool_cache.json
 backend/_real_pool_naming_test.py
 # 导出的综述/大文档产物按需下载,不入库
 backend/outputs/*.docx
+# D1:机器生成结果快照(run_real_review.py 等每次运行都会覆盖)不入库
+backend/outputs/*.json
+backend/outputs/*.md
+backend/outputs/*.txt
+# 工具会话残留
+frontend/src/.mimosa/
 
 # 安全扫描工具(Mimosa)运行时目录,不入库(2026-10-27)
 .mimosa/
@@ -99,3 +102,11 @@ backend/outputs/llm_traces/
 
 # vite 运行时临时文件
 frontend/vite.config.ts.timestamp-*.mjs
+
+# 工具运行数据不入库
+.out-of-code-insights/
+
+# vendored citeproc(第三方库拷贝)的文档/元数据不入库
+backend/lib/**/*.md
+backend/lib/**/.github/
+backend/tests/crawler/TEST_REPORT.md

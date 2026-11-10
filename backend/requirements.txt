@@ -30,3 +30,7 @@ citeproc-py>=0.10,<0.11
 
 # ⑨主题边界诊断的中文分词(延迟导入:缺失时自动回退 bigram,不阻塞主流程)
 jieba>=0.42
+
+# Word 导出(delivery/docx_renderer;此前只在 pyproject 声明,按 requirements
+# 装环境会缺 Word 导出依赖 —— 2026-11 修复两份清单漂移)
+python-docx>=1.1

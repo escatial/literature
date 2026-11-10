@@ -2,7 +2,7 @@
 
 export interface Paper {
   lit_id: string;
-  source: 'openalex' | 'crossref' | 'user_imported' | 'cnki';
+  source: 'openalex' | 'crossref' | 'user_imported' | 'cnki' | 'pubmed' | 'google_scholar';
   title: string;
   authors: string[];
   journal: string;
@@ -107,6 +107,39 @@ export interface WritingRequest {
   confirmed_groups?: WritingGroup[];
   /** 阶段1产出的相关性分级报告,阶段2回传用于归档 */
   relevance_report?: Record<string, unknown> | null;
+  /** v9.9:研究问题与综述目标(论证主线;后端已支持,前端此前漏镜像) */
+  research_questions?: string[] | null;
+  review_goal?: string | null;
+}
+
+/** D1:QA 核查结果摘要(complete 事件 qa_report;此前类型缺失导致 100% 丢失) */
+export interface QaCheckResult {
+  check_id: string;
+  name: string;
+  status: string;
+  fail_count?: number;
+  warn_count?: number;
+}
+
+export interface QaReport {
+  summary?: {
+    overall?: string;
+    pass_rate?: number;
+    auto_repairs?: unknown[];
+    results?: QaCheckResult[];
+    issues?: unknown[];
+  };
+  [key: string]: unknown;
+}
+
+/** D1:交付清单(complete 事件 manifest;前端保存前据此校验流完整性) */
+export interface DeliveryManifest {
+  sections: { key: string; title: string; chars: number; citations: number }[];
+  expected_sections: number;
+  missing_sections: string[];
+  reference_count: number;
+  anchor_leaks: number;
+  has_abstract: boolean;
 }
 
 export interface WritingResponse {
@@ -117,6 +150,10 @@ export interface WritingResponse {
   reference_list: string;
   screened_out_ids: string[];
   dropped_citations: string[];
+  qa_report?: QaReport | null;
+  abstract?: string | null;
+  keywords?: string[] | null;
+  task_id?: string | null;
 }
 
 export interface ReviewRecord extends WritingResponse {

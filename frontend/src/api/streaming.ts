@@ -4,7 +4,7 @@
 import { getWritingStreamURL, getWritingPlanStreamURL, getWritingStopURL } from '@/config/api';
 import { AUTH_TOKEN_KEY } from './auth';
 import { parseSSELine, phaseCanRegressTo } from './sseTypes';
-import type { Paper, WritingRequest, WritingResponse } from './types';
+import type { DeliveryManifest, Paper, QaReport, WritingRequest, WritingResponse } from './types';
 
 export type StreamPhase =
   | 'idle'
@@ -183,6 +183,13 @@ export interface StreamState {
     error?: string | null;
     trace?: unknown[];
   } | null;
+  /** D1:摘要/关键词(abstract_done 事件) */
+  abstract: string | null;
+  keywords: string[] | null;
+  /** D1:交付清单(complete 事件 manifest;保存前据此校验完整性) */
+  manifest: DeliveryManifest | null;
+  /** D1:最近一次 sections_finalized 是否到达(true = 正文已编号定稿) */
+  finalized: boolean;
 }
 
 // v9.6:改为工厂函数——此前模块级单例 + {...initialState} 浅拷贝,sections/
@@ -211,6 +218,10 @@ function createInitialState(): StreamState {
     error: null,
     activityLog: [],
     harness: null,
+    abstract: null,
+    keywords: null,
+    manifest: null,
+    finalized: false,
   };
 }
 
@@ -260,6 +271,8 @@ async function consumeWritingSSE(
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // D1:丢帧检测 —— 服务端为每个事件注入流内单调 seq,跳号即告警
+  let lastSeq = 0;
   let state: StreamState = createInitialState();
   const startedAt = Date.now();
   let lastProgressAt = startedAt;
@@ -336,6 +349,15 @@ async function consumeWritingSSE(
         // C7:单一解析入口(纯函数,类型化判别联合);坏帧静默跳过(与旧一致)
         const evt = parseSSELine(line);
         if (!evt) continue;
+        if (typeof evt.seq === 'number' && evt.seq > 0) {
+          if (lastSeq > 0 && evt.seq > lastSeq + 1) {
+            console.warn(
+              `[SSE] 检测到丢帧:期望 seq=${lastSeq + 1},收到 seq=${evt.seq}` +
+              `(事件 ${evt.event})——交付完整性可能受损`,
+            );
+          }
+          lastSeq = evt.seq;
+        }
 
         if (evt.event !== 'heartbeat') {
           lastProgressAt = Date.now();
@@ -670,8 +692,20 @@ async function consumeWritingSSE(
             state.detail = `正在整理参考文献，共 ${evt.data.count ?? 0} 篇...`;
             break;
           case 'sections_finalized':
-            // 正文锚点 [lit_xxx] 已替换为数字编号 [N],覆盖显示内容
+            // 正文锚点 [lit_xxx] 已替换为数字编号 [N],覆盖显示内容。
+            // D1:QA 修复后会重发一次(final:true),以最后一次为准 ——
+            // 此前 QA 修复结果从未送达前端(修了等于白修)。
             state.sections = evt.data.sections ?? state.sections;
+            state.finalized = true;
+            break;
+          case 'delivery_warning':
+            state.detail = String(evt.data.message ?? '交付不完整警告');
+            break;
+          case 'abstract_done':
+            state.abstract = typeof evt.data.abstract === 'string' ? evt.data.abstract : null;
+            state.keywords = Array.isArray(evt.data.keywords)
+              ? evt.data.keywords.map(String)
+              : null;
             break;
           case 'reference_list':
             state.phase = 'reference';
@@ -699,6 +733,13 @@ async function consumeWritingSSE(
             break;
           case 'complete':
             state.phase = 'complete';
+            state.manifest = (evt.data.manifest ?? null) as DeliveryManifest | null;
+            if (evt.data.abstract && !state.abstract) {
+              state.abstract = String(evt.data.abstract);
+            }
+            if (Array.isArray(evt.data.keywords) && !state.keywords) {
+              state.keywords = evt.data.keywords.map(String);
+            }
             state.detail = '综述生成完成。';
             break;
           case 'error':
@@ -752,6 +793,37 @@ export async function generateWritingStream(
   if (state.phase === 'error') {
     throw new Error(state.error ?? '流式生成失败');
   }
+  // D1 完成性门禁(2026-11-01 交付事故修复):此前只拦截 error —— 流半路
+  // 断掉(网络抖动/代理超时/心跳停摆)会把残缺中间态当成功返回并入库,
+  // 产出「缺章 + 锚点泄漏 + 乱序」的残次综述。现在未收到 complete 或
+  // manifest 校验不过,一律显式失败,绝不静默保存残品。
+  if (state.phase !== 'complete') {
+    const done = state.sections.length;
+    throw new Error(
+      `生成流意外终止(未收到完成事件),已完成 ${done} 章未被保存。` +
+      '请点击「开始生成」重试;已完成的阶段1规划不受影响。',
+    );
+  }
+  const manifest = state.manifest;
+  if (!manifest) {
+    throw new Error('完成事件缺少交付清单(manifest),无法校验完整性,已拒绝保存。');
+  }
+  if (manifest.missing_sections?.length) {
+    throw new Error(
+      `交付不完整:以下章节生成失败未恢复(${manifest.missing_sections.join(', ')})。` +
+      '请重新生成。',
+    );
+  }
+  if (manifest.anchor_leaks > 0) {
+    throw new Error(
+      `交付异常:正文残留 ${manifest.anchor_leaks} 处未编号引用,已拒绝保存。请重新生成。`,
+    );
+  }
+  if (state.sections.length !== manifest.sections.length) {
+    throw new Error(
+      `交付异常:实际收到 ${state.sections.length} 章,交付清单记录 ${manifest.sections.length} 章,已拒绝保存。`,
+    );
+  }
   return {
     topic: req.topic,
     classify_mode: req.classify_mode,
@@ -760,5 +832,8 @@ export async function generateWritingStream(
     reference_list: state.referenceList,
     screened_out_ids: state.screenedOutIds,
     dropped_citations: state.droppedCitations,
+    qa_report: (state.qaResult ?? null) as WritingResponse['qa_report'],
+    abstract: state.abstract,
+    keywords: state.keywords,
   } satisfies WritingResponse;
 }

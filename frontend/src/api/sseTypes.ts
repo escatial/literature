@@ -70,6 +70,8 @@ export const SSE_EVENT_NAMES = [
   'reference_started',
   'sections_finalized',
   'reference_list',
+  'delivery_warning',
+  'abstract_done',
   'qa_started',
   'qa_done',
   'qa_failed',
@@ -114,10 +116,12 @@ export function phaseCanRegressTo(current: string, target: string): boolean {
   return (PHASE_RANK[target] ?? 0) >= (PHASE_RANK[current] ?? 0);
 }
 
-/** 类型化事件帧:event 收窄到枚举,data 由消费分支自行收窄。 */
+/** 类型化事件帧:event 收窄到枚举,data 由消费分支自行收窄。
+ * D1:seq 为服务端注入的流内单调序号,缺失序号提示丢帧。 */
 export interface SseEventFrame {
   event: SseEventName;
   data: Record<string, any>;
+  seq?: number;
 }
 
 /**
@@ -141,12 +145,13 @@ export function parseSSELine(line: string): SseEventFrame | null {
   ) {
     return null;
   }
-  const evt = parsed as { event: string; data: unknown };
+  const evt = parsed as { event: string; data: unknown; seq?: unknown };
   if (!(SSE_EVENT_NAMES as readonly string[]).includes(evt.event)) {
     return null;
   }
   return {
     event: evt.event as SseEventName,
     data: (typeof evt.data === 'object' && evt.data !== null ? evt.data : {}) as Record<string, any>,
+    seq: typeof evt.seq === 'number' ? evt.seq : undefined,
   };
 }

@@ -2133,6 +2133,7 @@ def generate_review_stream(
     review_goal: str | None = None,
     progress=None,
     task_id: str | None = None,
+    persist=None,
 ) -> Generator[str, None, None]:
     """流式生成综述,按事件 yield SSE 字符串。
 
@@ -2426,8 +2427,23 @@ def generate_review_stream(
                 "文献池与主题划分不受影响，请稍后重试写作。"
             )
 
+        # D1:缺章检查 —— spec 全部尝试过但 sections 缺失说明该章写作
+        # 失败且未恢复,必须显式告知(manifest/前端门禁),不允许静默缺章。
+        delivered_keys = {s.key for s in sections}
+        missing_sections = [
+            spec.key for spec in section_specs if spec.key not in delivered_keys
+        ]
+        if missing_sections:
+            log.warning("章节写作失败且未恢复,交付清单将标记缺失: %s", missing_sections)
+            yield _sse_event("delivery_warning", {
+                "missing_sections": missing_sections,
+                "message": f"以下章节生成失败,本次交付不完整: {missing_sections}",
+            })
+
         # 打通正文锚点与参考文献编号:分配全局编号、替换正文 [lit_xxx] -> [N]
         ref, _number_map = apply_citation_numbering(sections, papers)
+        # D1:定稿序号重排(此前沿用规划期编号,用户确认删组/重排后出现乱序)
+        _renumber_section_titles(sections)
         finalized_sections = [
             {
                 "key": s.key,
@@ -2517,12 +2533,81 @@ def generate_review_stream(
             # QA_VERIFIED 语义为"核查已执行",非"零问题",故按执行成功记 pass)
             _qa_span.exit_ok()
 
+        # D1(2026-11 交付事故修复):QA 自动修复发生在首次 sections_finalized
+        # 已下发之后 —— 修复结果此前从未送达前端(修了等于白修)。重新编号
+        # 并重发定稿,前端以最后一次 sections_finalized 为准。
+        try:
+            ref, _number_map = apply_citation_numbering(sections, papers)
+            _renumber_section_titles(sections)
+            yield _sse_event("sections_finalized", {
+                "sections": [
+                    {
+                        "key": s.key,
+                        "title": s.title,
+                        "content": s.content,
+                        "citations": s.citations,
+                        "density_warning": s.density_warning,
+                    }
+                    for s in sections
+                ],
+                "final": True,
+            })
+            yield _sse_event("reference_list", {"reference_list": ref})
+        except Exception as exc:  # noqa: BLE001  重发失败不销毁已成稿,首次定稿仍有效
+            log.warning("QA 后定稿重发失败(沿用首次定稿): %s", exc)
+
+        # D1:摘要/关键词节点(正规综述必备件;失败降级不阻塞交付)
+        abstract_text: str = ""
+        keywords: list[str] = []
+        if _abstract_enabled():
+            try:
+                abstract_text, keywords = _generate_abstract(
+                    topic, sections, review_goal, research_questions,
+                )
+                yield _sse_event("abstract_done", {
+                    "abstract": abstract_text,
+                    "keywords": keywords,
+                })
+            except Exception as exc:  # noqa: BLE001
+                log.warning("摘要生成失败(不阻塞交付): %s", exc)
+
+        # D1:服务端权威落库 —— 编号+QA修复+摘要齐备的定稿由后端直接持久化;
+        # 前端随后的保存是同 task_id 的 upsert(残品被服务端副本覆盖)。
+        if persist is not None:
+            try:
+                persist({
+                    "task_id": task_id,
+                    "topic": topic,
+                    "classify_mode": classify_mode,
+                    "sections": [
+                        {
+                            "key": s.key,
+                            "title": s.title,
+                            "content": s.content,
+                            "citations": list(s.citations or []),
+                        }
+                        for s in sections
+                    ],
+                    "reference_list": ref,
+                    "screened_out_ids": list(screened_out),
+                    "dropped_citations": list(all_dropped),
+                    "qa_report": qa_payload,
+                    "abstract": abstract_text or None,
+                    "keywords": keywords or None,
+                })
+            except Exception as exc:  # noqa: BLE001
+                log.error("服务端权威落库失败(交付继续,以前端保存为准): %s", exc)
+
+        manifest = _build_delivery_manifest(sections, section_specs, ref, abstract_text)
         yield _sse_event("complete", {
             "phase": "complete",
             "screened_out_ids": screened_out,
             "dropped_citations": all_dropped,
             "qa_report": qa_payload,
             "qa_error": qa_failure,
+            "abstract": abstract_text or None,
+            "keywords": keywords or None,
+            "manifest": manifest,
             # v9.9: PRISMA 式流程统计(识别→筛选→纳入→主题→章节→综合)
             "flow_stats": {
                 "input_papers": input_count,
@@ -2813,11 +2898,15 @@ def collect_cited_ids(sections: list[SectionResult]) -> list[str]:
 def replace_anchors_with_numbers(content: str, number_map: dict[str, int]) -> str:
     """把正文中的 [lit_xxx] 锚点替换为参考文献数字编号 [N]。
 
-    number_map 之外的未知锚点(理论上已被幻觉剥离逻辑过滤)原样保留。
+    D1(2026-11 交付事故修复):number_map 之外的未知锚点**剥除**而非原样
+    保留 —— 2026-11-01 交付的综述正文里 41 处 [lit_xxx] 直接暴露给用户,
+    根因即此处的 `number_map.get(token, token)` 兜底把无法映射的内部 ID
+    原样带进了交付物。剥除并计数,供 manifest/告警。
     """
     def _repl(m: _re.Match) -> str:
         token = m.group(1)
-        return f"[{number_map.get(token, token)}]"
+        n = number_map.get(token)
+        return f"[{n}]" if n is not None else ""
     return _CITE_ANCHOR_RE.sub(_repl, content or "")
 
 
@@ -2996,6 +3085,114 @@ def render_reference_list(papers: list[Paper]) -> str:
     for idx, p in enumerate(papers, start=1):
         lines.append(f"[{idx}] {_format_one_gbt(p)}")
     return "\n".join(lines)
+
+
+# ============================================================================
+# D1(2026-11 交付链加固):定稿重排 / 摘要节点 / 交付清单
+# 背景:2026-11-01 交付事故 —— 正文锚点泄漏 41 处、章节「一三五二」乱序、
+# 整章缺失、QA 报告从未送达。修复原则:服务端持有权威定稿,交付前自检,
+# complete 事件携带 manifest 供前端校验,残品绝不静默入库。
+# ============================================================================
+
+_CN_TITLE_INDEX_RE = _re.compile(r"^[一二三四五六七八九十百]+、\s*")
+
+
+def _renumber_section_titles(sections: list) -> None:
+    """定稿序号重排:剥掉标题自带中文章节号,按交付顺序重排(一、二、三…)。
+
+    规划期标题按当时分组顺序编号;用户确认(可删组/重排)后写作时,
+    交付顺序与规划编号可能不再一致(实证:「一、三、二、五」)。定稿时
+    按当前位置连续编号,述评一并编号。就地修改,幂等。
+    """
+    for i, s in enumerate(sections):
+        title = (getattr(s, "title", "") or "").strip()
+        stripped = _CN_TITLE_INDEX_RE.sub("", title)
+        s.title = f"{_format_chinese_index(i + 1)}、{stripped}"
+
+
+def _build_delivery_manifest(
+    sections: list,
+    section_specs: list,
+    reference_list: str,
+    abstract_text: str,
+) -> dict:
+    """complete 事件携带的交付清单:前端据此校验流完整性(缺章/泄漏即拒绝保存)。"""
+    delivered_keys = {s.key for s in sections}
+    return {
+        "sections": [
+            {
+                "key": s.key,
+                "title": s.title,
+                "chars": len(s.content or ""),
+                "citations": len(getattr(s, "citations", None) or []),
+            }
+            for s in sections
+        ],
+        "expected_sections": len(section_specs),
+        "missing_sections": [
+            spec.key for spec in section_specs if spec.key not in delivered_keys
+        ],
+        "reference_count": len(
+            _re.findall(r"^\[\d+\]", reference_list or "", flags=_re.M)
+        ),
+        "anchor_leaks": sum(
+            len(_CITE_ANCHOR_RE.findall(s.content or "")) for s in sections
+        ),
+        "has_abstract": bool(abstract_text),
+    }
+
+
+def _abstract_enabled() -> bool:
+    """摘要/关键词节点总开关(WRITING_ABSTRACT,默认开;0 为紧急逃生口)。"""
+    return os.environ.get("WRITING_ABSTRACT", "1").strip().lower() not in {
+        "0", "false", "no", "off",
+    }
+
+
+def _generate_abstract(
+    topic: str,
+    sections: list,
+    review_goal: str | None = None,
+    research_questions: list[str] | None = None,
+) -> tuple[str, list[str]]:
+    """摘要/关键词节点:基于各章首末段蒸馏 200-300 字摘要 + 4-6 个关键词。
+
+    正规综述的必备件(此前 7 节点链路缺失,导出直接从「一、」开始)。
+    失败抛异常,由调用方降级 —— 摘要缺失不阻塞交付。
+    """
+    from llm.client import messages_create
+
+    blocks: list[str] = []
+    for s in sections:
+        paras = [p.strip() for p in (s.content or "").splitlines() if p.strip()]
+        if not paras:
+            continue
+        blocks.append(
+            f"《{getattr(s, 'title', '')}》首段:{paras[0][:200]}……末段:{paras[-1][:200]}"
+        )
+    rq = "；".join(research_questions or [])
+    goal = (review_goal or "").strip()
+    system = (
+        "你是学术文献综述编辑。基于各章节首末段概要,为整篇综述撰写中文摘要与关键词。"
+        '只输出一个 JSON 对象:{"abstract": "...", "keywords": ["..."]},不要输出任何其他文字。'
+    )
+    user = (
+        f"综述主题:{topic}\n"
+        + (f"综述目标:{goal}\n" if goal else "")
+        + (f"研究问题:{rq}\n" if rq else "")
+        + "章节概要:\n" + "\n".join(blocks)
+        + "\n\n要求:摘要 200-300 字,须覆盖综述目的、纳入的主题范围、主要共识"
+        "与识别的研究空白;关键词 4-6 个,按重要性排序。"
+    )
+    raw = messages_create(system=system, user=user, max_tokens=800, temperature=0.3)
+    text = (raw or "").strip()
+    m = _re.search(r"\{.*\}", text, flags=_re.S)
+    payload = json.loads(m.group(0)) if m else {}
+    abstract = str(payload.get("abstract") or "").strip()
+    keywords = [str(k).strip() for k in (payload.get("keywords") or []) if str(k).strip()]
+    if not abstract:
+        raise ValueError("摘要模型返回为空")
+    return abstract, keywords[:6]
 
 
 

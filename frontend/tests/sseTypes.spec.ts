@@ -75,8 +75,8 @@ describe('parseSSELine', () => {
     }
   });
 
-  it('SSE_EVENT_NAMES 枚举:33 个事件名,parseSSELine 全部可解析', () => {
-    expect(SSE_EVENT_NAMES).toHaveLength(33);
+  it('SSE_EVENT_NAMES 枚举:35 个事件名,parseSSELine 全部可解析', () => {
+    expect(SSE_EVENT_NAMES).toHaveLength(35);
     for (const name of SSE_EVENT_NAMES) {
       const frame = parseSSELine(`data: {"event":"${name}","data":{}}`);
       expect(frame, name).not.toBeNull();

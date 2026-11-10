@@ -246,6 +246,9 @@ def render_docx_with_footnotes(
     papers: list,
     title: str = "文献综述",
     refs_text: str | None = None,
+    abstract: str | None = None,
+    keywords: list[str] | None = None,
+    qa_summary: dict | None = None,
 ) -> DocxBuildResult:
     """主入口:把 Markdown 综述 + 论文元数据渲染为带 Word 原生脚注的 .docx。
 
@@ -254,6 +257,9 @@ def render_docx_with_footnotes(
         out_path:  输出 .docx 路径
         papers:    Paper 列表(必须与正文中 [lit_xxx] / [N] 一一对应)
         title:     文档主标题
+        abstract:  摘要(D1 摘要节点产物;None 跳过)
+        keywords:  关键词列表(D1 摘要节点产物;None 跳过)
+        qa_summary: QA 报告摘要(D1;非 None 时在参考文献后追加核查附录)
         style_id:  citeproc CSL 样式 ID
 
     Returns:
@@ -300,6 +306,23 @@ def render_docx_with_footnotes(
 
     # 6. 写入正文(按 Markdown 简单解析:# / ## / ### / 普通段落)
     doc.add_heading(title, level=0)
+
+    # D1:摘要 + 关键词(正规综述必备件,紧跟主标题)
+    if abstract:
+        h = doc.add_heading("摘要", level=1)
+        p = doc.add_paragraph()
+        run = p.add_run(abstract.strip())
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+        run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+        if keywords:
+            p = doc.add_paragraph()
+            run = p.add_run("关键词:" + ";".join(keywords))
+            run.font.name = "Times New Roman"
+            run.font.size = Pt(12)
+            run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+            run.bold = True
+
     fn_index = 0
     in_code = False
     body_paragraphs = 0
@@ -334,6 +357,34 @@ def render_docx_with_footnotes(
         run.font.name = "Times New Roman"
         run.font.size = Pt(12)  # 小四
         run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+
+    # D1:QA 核查附录(如实上报,不伪造通过)
+    if qa_summary:
+        summary = qa_summary.get("summary") or {}
+        overall = str(summary.get("overall") or "unknown")
+        pass_rate = summary.get("pass_rate")
+        results = summary.get("results") or []
+        issues = summary.get("issues") or []
+        doc.add_heading("质量核查附录", level=1)
+        line = f"核查结论:{overall}"
+        if isinstance(pass_rate, (int, float)):
+            line += f"(通过率 {pass_rate:.0%})"
+        p = doc.add_paragraph()
+        run = p.add_run(line + ";自动修复 "
+                         f"{len(summary.get('auto_repairs') or [])} 项"
+                         f";未决问题 {len(issues)} 项")
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(12)
+        run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+        for r_item in results:
+            name = str(r_item.get("name") or r_item.get("check_id") or "")
+            status = str(r_item.get("status") or "")
+            metrics = r_item.get("metrics") or {}
+            p = doc.add_paragraph()
+            run = p.add_run(f"- {name}:{status}(fail={metrics.get('fail_count', 0)}, warn={metrics.get('warn_count', 0)})")
+            run.font.name = "Times New Roman"
+            run.font.size = Pt(12)
+            run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
 
     # 8. 排版兜底:全部非标题段落 1.5 倍行距;所有 run 中文宋体/西文 Times
     _apply_thesis_typography(doc)

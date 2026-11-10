@@ -161,6 +161,13 @@ class ReviewCreate(BaseModel):
     reference_list: str = ""
     screened_out_ids: list[str] = Field(default_factory=list)
     dropped_citations: list[str] = Field(default_factory=list)
+    # D1(2026-11 交付链加固):写作任务档案键与交付附加物。
+    # task_id 使前端保存与服务端权威落库共用同一 upsert 键;qa_report/
+    # abstract/keywords 随 complete 事件回传后在此持久化(此前 100% 丢失)。
+    task_id: str | None = None
+    qa_report: dict | None = None
+    abstract: str | None = None
+    keywords: list[str] | None = None
 
 
 class ReviewOut(ReviewCreate):
