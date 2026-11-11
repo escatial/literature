@@ -153,6 +153,7 @@ keywords`（D1），并自动建 `writing_jobs / writing_job_events` 表（J1）
 | `ALLOWED_ORIGINS` | `*` | CORS 允许来源，逗号分隔。生产建议收紧为前端 origin |
 | `AUTH_TOKEN_TTL_SECONDS` | `604800` | 登录令牌 TTL（7 天），剩余寿命过半自动滑动续期 |
 | `WRITING_ABSTRACT` | `1` | 摘要/关键词节点开关（D1）。`0` 关闭摘要生成 |
+| `WRITING_THEME_MIN_PAPERS` | `15` | 单主题最低文献数（J1 用户规则）：定轴轴数上限 = 池子规模 ÷ 此值；归组后不足额主题确定性并入最相似主题（合并不跌破最少组数，小池交确认面板人工裁决） |
 | `WRITING_READING_NOTES` | `1` | 通读笔记总开关（先通读→笔记→定轴；写作先读后写）。`0` 回到旧链路 |
 | `READTHROUGH_CHUNK_PAPERS` | `12` | 通读分块每块最多篇数 |
 | `READTHROUGH_CHUNK_CHARS` | `30000` | 通读分块每块最多字符数 |

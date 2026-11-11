@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import difflib
 import math
+import os
 import re as _re
 import time
 from dataclasses import dataclass, field
@@ -468,6 +470,11 @@ def _finalize_theme_groups(
     _reassign_orphans(papers, [p.lit_id for p in papers if p.lit_id not in seen_ids], normalized)
 
     normalized = [g for g in normalized if g.lit_ids]
+    # J1 用户规则(2026-11-11):每主题至少 N 篇(默认 15)才立得住,
+    # 不足额主题先并入最相似主题,再做巨型主题均衡拆分。
+    normalized = _merge_underfilled_groups(
+        papers, normalized, min_size=_theme_min_papers(),
+    )
     return _balance_oversize_groups(papers, normalized, topic)
 
 
@@ -938,6 +945,18 @@ def _pool_dominant_language(papers) -> str:
     return "zh" if cjk_titles / titled >= 0.5 else "en"
 
 
+def _theme_min_papers() -> int:
+    """单个主题的最低文献数(用户规则:15 篇才足以支撑一个可写主题)。
+
+    WRITING_THEME_MIN_PAPERS 可覆盖;不足额的主题在 finalize 阶段确定性
+    并入最相似主题 —— 比让模型自己"合并"可靠,合并后确认面板仍可人工调整。
+    """
+    try:
+        return max(1, int(os.environ.get("WRITING_THEME_MIN_PAPERS", "15")))
+    except ValueError:
+        return 15
+
+
 def _min_groups(n_papers: int) -> int:
     """主题组数只设防退化下限，不预设领域必须拆成几类。
 
@@ -1079,6 +1098,66 @@ def _split_group_balanced(
         used_names.add(name)
         parts.append(payload)
     return parts
+
+
+def _merge_underfilled_groups(
+    papers: list[Paper], groups: list[Group], min_size: int,
+) -> list[Group]:
+    """合并不足额主题(用户规则 2026-11-11:每主题至少 N 篇才立得住)。
+
+    与 _balance_oversize_groups 对称:后者拆"过大",前者并"过小"。
+    - 每轮取最小的不足额组,并入相似度最高的其他组(名称 bigram 为主、
+      research_question 序列为辅、偏好更大的目标组),循环到全部达标
+      或组数触及 _min_groups 下限;
+    - 池子小到无法同时满足「每主题 ≥N 篇」与「至少 M 组」时停止合并,
+      保留现状交确认面板人工裁决(硬合到 1 组会误杀小池多主题划分);
+    - 目标组保留原名称与研究问题;lit_ids 去重保序。
+    """
+    if not groups:
+        return groups
+    floor = max(1, _min_groups(len(papers)))
+    merged_log: list[str] = []
+
+    def _sim(a: Group, b: Group) -> float:
+        score = _title_similarity(a.name, b.name)
+        if a.research_question and b.research_question:
+            score += 0.5 * difflib.SequenceMatcher(
+                None, a.research_question, b.research_question,
+            ).ratio()
+        return score
+
+    work = [
+        Group(name=g.name, lit_ids=list(dict.fromkeys(g.lit_ids)),
+              research_question=g.research_question)
+        for g in groups
+    ]
+    while True:
+        work.sort(key=lambda g: len(g.lit_ids))
+        if len(work) <= floor:
+            break
+        small = work[0]
+        if len(small.lit_ids) >= min_size:
+            break
+        best_i, best_score = -1, -1.0
+        for i, other in enumerate(work[1:], start=1):
+            score = _sim(small, other)
+            if len(other.lit_ids) > len(work[1].lit_ids):
+                score += 0.05
+            if score > best_score:
+                best_i, best_score = i, score
+        target = work[best_i]
+        target.lit_ids = list(dict.fromkeys(
+            target.lit_ids + [x for x in small.lit_ids if x not in target.lit_ids]
+        ))
+        merged_log.append(f"{small.name}({len(small.lit_ids)})→{target.name}")
+        work.pop(0)
+
+    if merged_log:
+        logger.info(
+            "不足额主题已并入最相似主题(阈值 %d 篇): %s",
+            min_size, ";".join(merged_log),
+        )
+    return work
 
 
 def _balance_oversize_groups(
@@ -2113,19 +2192,23 @@ def _plan_theme_axes(
     )
     lang_name = "中文" if (language or "zh") == "zh" else "English"
     axis_floor = max(2, _min_groups(len(papers)))
+    lazy_floor = 3 if len(papers) >= 18 else max(2, _min_groups(len(papers)))
+    floor = max(2, _min_groups(len(papers)))
+    axis_cap = max(floor, min(8, len(papers) // max(1, _theme_min_papers())))
+
     user = (
         f"研究主题:{topic}\n请通读以上 {len(papers)} 篇文献,输出主题划分方案。"
         f"轴名与 research_question 必须使用{lang_name}。"
         "输出协议(机器逐行解析,格式错误整个任务作废):每行一个主题轴,"
         "严格为 #序号|轴名|研究问题;轴名 3-12 字、不得含与/和/及;"
-        f"共 {axis_floor}-8 行;除此之外一个字都不要输出,"
+        f"共 {axis_floor}-{axis_cap} 行(每个主题轴需要有充足文献支撑,"
+        f"约 {_theme_min_papers()} 篇以上,轴数不得超过 {axis_cap},宁可轴少而文献足);"
+        "除此之外一个字都不要输出,"
         "严禁思考过程、严禁解释、严禁 JSON。"
     )
     # 防偷懒下限:18 篇以上的异质文献池通常不止 2 个研究问题簇,
     # 前两次尝试少于 3 个主题轴按"未完成"返工;最后一次仍偷懒则接受,
     # 交给确认面板人工调整,不无限重试。
-    lazy_floor = 3 if len(papers) >= 18 else max(2, _min_groups(len(papers)))
-    floor = max(2, _min_groups(len(papers)))
     last_error: Exception | None = None
     last_raw = ""
     for attempt, temperature in ((1, 0.2), (2, 0.4), (3, 0.6)):
@@ -2452,6 +2535,7 @@ def _assign_papers_to_axes(
         "编号. 主题名\n"
         f"其中编号是文献清单的 #N 行号(不是主题的序号!),主题名逐字取自允许清单。\n"
         f"必须输出恰好 {len(papers)} 行(编号 1 到 {len(papers)} 各出现一次)。\n"
+        "平衡要求:每个主题都应有充足文献支撑,避免形成只适合零星文献的小主题,某主题按摘要判断文献很少时,把这些文献并入最贴近的其他主题。\n"
         "现在立即开始输出第 1 行;严禁输出思考过程、解释、主题清单本身或 JSON。"
     )
     axis_names_block = "\n".join(f"- {a.name}" for a in axes)
