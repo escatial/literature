@@ -307,7 +307,28 @@ def build_review_sections(
             if attempts:
                 tried = "、".join(a for a in attempts if a)
                 detail += f"(证据改名尝试:{tried or '无可提取证据'},仍不合规)"
-            raise ValueError(f"第 {idx} 个主题名称不可靠，请重新划分主题：{detail}")
+            # J1 软化(2026-11-11「智能超短链」事故):一场 90/90 全覆盖的
+            # 划分不该死在一个名字上。改名链收敛失败时,按「LLM 改名 →
+            # 证据改名 → 原名」顺序取第一个通过基础格式(长度/语言/不撞名)
+            # 的候选降级放行 —— 两阶段流程的 ② 确认面板是人工质量门,
+            # 不满意的名字用户可就地改;全部候选连基础格式都不过才硬拦截。
+            soft_ok = None
+            for cand in [*reversed([a for a in attempts if a]), clean_name]:
+                if (
+                    cand and cand not in used_names
+                    and 3 <= len(cand) <= 12
+                    and not _zh_theme_name_too_short(cand, pool_language=pool_language)
+                ):
+                    soft_ok = cand
+                    break
+            if soft_ok is None:
+                raise ValueError(f"第 {idx} 个主题名称不可靠，请重新划分主题：{detail}")
+            import logging as _log_mod
+            _log_mod.getLogger(__name__).warning(
+                "主题名终检未完全收敛,降级放行 %r(候选尝试:%s)——确认面板可人工修改",
+                soft_ok, detail,
+            )
+            clean_name = soft_ok
         used_names.add(clean_name)
         sections.append(
             SectionSpec(

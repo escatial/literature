@@ -1706,6 +1706,30 @@ def _abstract_limit_for(papers: list[Paper], *, minimal: bool) -> int:
     return 320
 
 
+def _notes_assign_catalog(papers: list[Paper], notes: list) -> str:
+    """归组目录(蒸馏版):通读笔记一行一条,替代原始摘要。
+
+    编号必须与归组的 index_of(enumerate(papers))完全一致 —— 这是模型
+    回显编号到 lit_id 的映射契约;笔记缺失的文献退回标题行。
+    M3.1-Flash 实测(2026-11-11):90 篇摘要目录下模型在正文通道做元推理
+    三连败(覆盖 2/10/4 篇),蒸馏目录体积缩一个数量级,注意力回到协议上。
+    """
+    by_lit = {n.lit_id: n for n in notes or []}
+    lines: list[str] = []
+    for i, p in enumerate(papers, start=1):
+        n = by_lit.get(p.lit_id)
+        if n is not None and (getattr(n, "question", "") or "").strip():
+            clue = (getattr(n, "clue", "") or "").strip()
+            lines.append(
+                f"- #{i} | {p.title} | {getattr(n, 'author_year', '')} | "
+                f"研究问题:{(n.question or '').strip()}"
+                + (f" | 主题线索:{clue}" if clue else "")
+            )
+        else:
+            lines.append(f"- #{i} | {p.title} | {p.year or 'N/A'}")
+    return "\n".join(lines)
+
+
 def _catalog_lines(papers: list[Paper], abstract_limit: int) -> str:
     """编号目录:行首短编号供模型回显,lit_id 原文绝不出现在输出协议里。"""
     return "\n".join(
@@ -2037,7 +2061,7 @@ def _parse_prose_axes(raw: str) -> list[dict]:
 
 def _plan_theme_axes(
     papers: list[Paper], topic: str, language: str, *,
-    abstract_limit: int, progress=None,
+    abstract_limit: int, progress=None, notes_out: dict | None = None,
 ) -> list[Group]:
     """第一遍:先通读全文做笔记(R1),再以笔记目录定轴(R2)。
 
@@ -2057,12 +2081,14 @@ def _plan_theme_axes(
     # R1 通读笔记:确定性乱序分块逐块读,治「两批轴」语料分段;
     # 乱序只发生在分块内部,池顺序与 relevance_report 口径不动。
     catalog: str | None = None
+    r1_notes: list = []
     if _readthrough_enabled():
         try:
             ordered, notes = _plan_readthrough_notes(
                 candidates, topic, language, progress=progress,
             )
             if notes:
+                r1_notes = notes
                 catalog = _build_axis_catalog_with_notes(
                     ordered, {n.lit_id: n for n in notes},
                 )
@@ -2071,6 +2097,13 @@ def _plan_theme_axes(
             catalog = None
     if catalog is None:
         catalog = _build_corpus_document(candidates)
+    # J1(2026-11-11「智能超短链」事故):把 R1 蒸馏笔记目录按归组编号
+    # (enumerate(papers))导出,供 _assign_papers_to_axes 替代原始摘要目录。
+    if notes_out is not None and r1_notes:
+        try:
+            notes_out["catalog"] = _notes_assign_catalog(papers, r1_notes)
+        except Exception:  # noqa: BLE001  目录构造失败不影响主链,归组回退摘要目录
+            pass
     system = render(
         "literature-review:classify-plan",
         topic=topic,
@@ -2394,7 +2427,7 @@ def _salvage_assign_from_reasoning(
 
 def _assign_papers_to_axes(
     papers: list[Paper], axes: list[Group], topic: str, *,
-    abstract_limit: int, progress=None,
+    abstract_limit: int, progress=None, notes_catalog: str | None = None,
 ) -> list[Group]:
     """第二遍:把每篇文献归入固定主题轴,输出与轴一一对应。
 
@@ -2403,15 +2436,24 @@ def _assign_papers_to_axes(
     """
     index_of = {str(i + 1): p.lit_id for i, p in enumerate(papers)}
     valid_ids = {p.lit_id for p in papers}
-    system = render(
-        "literature-review:classify-assign",
-        topic=topic,
-        theme_axes=_axis_catalog(axes),
-        axis_count=len(axes),
-        papers_catalog=_catalog_lines(papers, abstract_limit),
-        papers_count=len(papers),
-    )
+    # 目录选型(2026-11-11「智能超短链」事故):优先 R1 蒸馏笔记目录
+    # (一行一条,体积缩一个数量级);缺失时退回原始摘要目录。目录从
+    # system 挪到 user 末尾 —— MiniMax 对 system 长目录末尾遵循度差是
+    # 既有结论;协议主体留在 system,数据放 user 注意力高位。
+    catalog = notes_catalog or _catalog_lines(papers, abstract_limit)
     token_budget = _output_token_budget(papers)
+    axis_names_block = "\n".join(f"- {a.name}" for a in axes)
+    example_no = max(2, len(papers) // 2)
+    example_line = f"{example_no}. {axes[len(axes) // 2].name}"
+    example_line2 = f"{len(papers)}. {axes[-1].name}"
+    system = (
+        "你是学术文献主题归组器。把文献清单的每篇文献归入给定主题轴,只做归属,不发明新主题。\n"
+        "输出协议(机器逐行解析,格式错误整个任务作废):每篇文献一行,严格为\n"
+        "编号. 主题名\n"
+        f"其中编号是文献清单的 #N 行号(不是主题的序号!),主题名逐字取自允许清单。\n"
+        f"必须输出恰好 {len(papers)} 行(编号 1 到 {len(papers)} 各出现一次)。\n"
+        "现在立即开始输出第 1 行;严禁输出思考过程、解释、主题清单本身或 JSON。"
+    )
     axis_names_block = "\n".join(f"- {a.name}" for a in axes)
     best: list[Group] = []
     best_covered = -1
@@ -2427,13 +2469,14 @@ def _assign_papers_to_axes(
         attempt_user = (
             f"研究主题:{topic}\n"
             f"唯一允许输出的主题名(逐字使用,共 {len(axes)} 个):\n{axis_names_block}\n\n"
-            f"任务:把文献清单的 {len(papers)} 篇文献逐篇归入上述主题轴,每篇恰属一组。\n"
-            "输出协议(机器逐行解析,格式错误整个任务作废):每篇文献一行,严格为\n"
-            "编号. 主题名\n"
-            "示例:\n3. 水产品电商营销策略\n7. 区域水产品营销策略\n"
-            f"编号用文献清单的行首数字;主题名逐字取自上面清单;"
-            f"除这 {len(papers)} 行外不得输出任何其他文字,"
-            "严禁逐篇分析、严禁解释、严禁输出 JSON。"
+            f"任务:把下面文献清单的 {len(papers)} 篇文献逐篇归入上述主题轴,每篇恰属一组。\n"
+            "输出协议:每篇文献一行,严格为「编号. 主题名」。\n"
+            "格式示例(编号用文献清单的行首数字,主题名逐字来自上面清单):\n"
+            f"{example_line}\n{example_line2}\n"
+            "常见错误(严禁):把主题轴编号后输出「1. 主题名」式清单;"
+            "先输出分析或思考再给结论;输出 JSON;输出英文。\n"
+            f"文献清单(共 {len(papers)} 篇,编号 #1..#{len(papers)}):\n{catalog}\n\n"
+            f"现在立即输出 {len(papers)} 行归属,第一行是编号 1 的归属。"
         )
         if attempt >= 2:
             attempt_user += (
@@ -2467,6 +2510,9 @@ def _assign_papers_to_axes(
                     "error_type": type(exc).__name__, "message": str(exc)[:500],
                 })
             continue
+        # trace 落盘(2026-11-11「智能超短链」事故盲区:归组此前无 trace,
+        # 三连败只能靠日志预览倒推)
+        _trace_llm("assign", f"attempt{attempt}", f"{system}\n\n{attempt_user}", raw)
         items = _parse_group_response(raw)
         logger.info(
             "主题归组响应(attempt=%d, papers=%d, 解析=%d, 原文预览=%s)",
@@ -2704,13 +2750,16 @@ def classify_by_theme(
                 "kind": "axis_plan_started", "count": len(papers),
                 "message": f"正在通读 {len(papers)} 篇文献的标题与摘要,归纳全局主题轴...",
             })
+        notes_box: dict = {}
         axes = _plan_theme_axes(
             papers, topic, _language,
             abstract_limit=abstract_limit, progress=progress,
+            notes_out=notes_box,
         )
         groups = _assign_papers_to_axes(
             papers, axes, topic,
             abstract_limit=abstract_limit, progress=progress,
+            notes_catalog=notes_box.get("catalog"),
         )
         min_groups = _min_groups(len(papers))
         if len(groups) < min_groups:
