@@ -22,9 +22,17 @@ export const confirmWritingJob = (jobId: string, groups: WritingGroup[]) =>
     )
     .then((r) => r.data);
 
-/** 任务快照(status/phase/error);刷新恢复与重连前预检用。 */
+/** 任务快照(status/phase/error/plan_groups/plan_papers);刷新恢复与重连前预检用。 */
 export const getWritingJob = (jobId: string) =>
   http.get<WritingJobInfo>(`/writing/jobs/${jobId}`).then((r) => r.data);
+
+/** 当前用户最新未完结任务(新标签页/浏览器重启后恢复用;sessionStorage 之外的第二恢复通道) */
+export const getActiveWritingJob = () =>
+  http
+    .get<{ job: (WritingJobInfo & { plan_groups?: { name: string; lit_ids: string[] }[] | null; plan_papers?: { lit_id: string; title: string }[] | null }) | null }>(
+      '/writing/jobs/active',
+    )
+    .then((r) => r.data.job);
 
 /** 停止任务(后端协作式取消 + 落库)。 */
 export const stopWritingJob = (jobId: string) =>

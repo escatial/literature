@@ -11,6 +11,7 @@ import { markRaw } from 'vue';
 import { saveReview } from '@/api/endpoints';
 import {
   confirmWritingJob,
+  getActiveWritingJob,
   getWritingJob,
   startWritingJob,
   stopWritingJob,
@@ -206,8 +207,18 @@ export const useWritingStore = defineStore('writing', {
      *  WritingPage 挂载时调用;running/awaiting_confirm 才恢复。 */
     async resumeActive() {
       if (this.running || this.jobId) return;
-      const jobId = sessionStorage.getItem(ACTIVE_JOB_KEY);
-      if (!jobId) return;
+      let jobId = sessionStorage.getItem(ACTIVE_JOB_KEY);
+      if (!jobId) {
+        // 新标签页/浏览器重启:sessionStorage 为空 → 问后端要属主名下
+        // 最新未完结任务(换设备/换标签页也能接上)
+        try {
+          const active = await getActiveWritingJob();
+          if (!active) return;
+          jobId = active.job_id;
+        } catch {
+          return;
+        }
+      }
       let job;
       try {
         job = await getWritingJob(jobId);
@@ -217,6 +228,7 @@ export const useWritingStore = defineStore('writing', {
         return;
       }
       this.jobId = job.job_id;
+      sessionStorage.setItem(ACTIVE_JOB_KEY, job.job_id);
       this.topic = job.topic;
       if (job.status === 'done') {
         // 任务已完成且综述已保存:不留活跃态

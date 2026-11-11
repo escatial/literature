@@ -652,6 +652,41 @@ def _run_writing_job_worker(
             _WRITING_STOP_EVENTS.pop(reg_key, None)
 
 
+@router.get("/writing/jobs/active")
+def get_active_writing_job(request: Request):
+    """当前用户最新的未完结写作任务(新标签页/浏览器重启后恢复用)。
+
+    sessionStorage 只在单标签页内存活 —— 换标签页/重启浏览器后前端
+    无法凭它恢复,改问后端:该属主名下 status ∈ (running, awaiting_confirm)
+    的最新任务。admin 亦只取本人名下(避免误接他人任务)。
+    """
+    from db.models import WritingJobModel
+    from db.session import SessionLocal
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    uid = getattr(_user, "user_id", None)
+    if not uid:
+        return {"job": None}
+    with SessionLocal() as db:
+        row = (
+            db.query(WritingJobModel)
+            .filter(
+                WritingJobModel.user_id == uid,
+                WritingJobModel.status.in_(("running", "awaiting_confirm")),
+            )
+            .order_by(WritingJobModel.updated_at.desc())
+            .first()
+        )
+        if row is None:
+            return {"job": None}
+        job_id = row.job_id
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        return {"job": None}
+    return {"job": _enrich_job_with_plan(job, _user)}
+
+
 @router.post("/writing/jobs", status_code=202)
 async def create_writing_job(
     req: WritingRequest,
@@ -805,24 +840,18 @@ custom_theme_names=req.custom_theme_names,
     return {"job_id": job_id, "status": "running"}
 
 
-@router.get("/writing/jobs/{job_id}")
-def get_writing_job(job_id: str, request: Request):
-    """J1:任务快照(status/phase/error/plan_groups);刷新恢复用。
+def _enrich_job_with_plan(job: dict, user) -> dict:
+    """快照附规划数据:groups(确认面板分组)+ papers(标题映射源)。
 
-    plan_groups:规划快照中的主题分组(名称+lit_ids) —— 阶段2失败后恢复
-    到确认面板时,面板分组数据从这里重建(事件重放在失败分支不执行)。
+    阶段2失败恢复到确认面板时,面板分组/预览从这里重建(事件重放
+    在失败分支不执行)。
     """
-    from writing import job_store
     from writing.plan_store import get_plan
 
-    _user = getattr(request.state, "user", None)
-    job = job_store.get_job_scoped(job_id, _user)
-    if job is None:
-        raise HTTPException(404, f"writing job {job_id} not found")
     plan_groups: list = []
     plan_papers: list = []
     try:
-        plan = get_plan(job_id, _user)
+        plan = get_plan(job["job_id"], user)
         if plan is not None:
             payload = plan.payload or {}
             plan_groups = payload.get("groups") or []
@@ -834,7 +863,7 @@ def get_writing_job(job_id: str, request: Request):
             lit_ids = payload.get("screened_lit_ids") or []
             if lit_ids:
                 with _SL() as pdb:
-                    rows = read_pool_papers_by_ids(pdb, job_id, lit_ids, _user)
+                    rows = read_pool_papers_by_ids(pdb, job["job_id"], lit_ids, user)
                 plan_papers = [
                     {"lit_id": r.lit_id, "title": r.title}
                     for r in rows
@@ -844,6 +873,18 @@ def get_writing_job(job_id: str, request: Request):
     job["plan_groups"] = plan_groups
     job["plan_papers"] = plan_papers
     return job
+
+
+@router.get("/writing/jobs/{job_id}")
+def get_writing_job(job_id: str, request: Request):
+    """J1:任务快照(status/phase/error/plan_groups);刷新恢复用。"""
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        raise HTTPException(404, f"writing job {job_id} not found")
+    return _enrich_job_with_plan(job, _user)
 
 
 @router.get("/writing/jobs/{job_id}/stream")
