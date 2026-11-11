@@ -225,11 +225,24 @@ export const useWritingStore = defineStore('writing', {
         return;
       }
       if (job.status === 'failed') {
+        // J1 恢复语义:规划快照存在 → 阶段1成果有效,回到确认面板让用户
+        // 直接重新确认(阶段2失败常见于池读取/瞬时错误,不应作废阶段1)
+        if (job.req_snapshot && Object.keys(job.req_snapshot).length) {
+          this._planReq = job.req_snapshot as unknown as WritingRequest;
+          this.stream = {
+            ...initialState(),
+            phase: 'await_confirm',
+            detail: `阶段2失败:${job.error ?? '未知原因'}。主题方案已保留,可修改后重新确认。`,
+          };
+          this.awaitingConfirm = true;
+          this.running = false;
+          return;
+        }
         this.stream = {
           ...initialState(),
           phase: 'error',
           error: job.error ?? '任务已失败',
-          detail: job.error ?? '任务已失败(规划快照已保留,可确认主题后重试)',
+          detail: job.error ?? '任务已失败',
         };
         sessionStorage.removeItem(ACTIVE_JOB_KEY);
         this.jobId = null;

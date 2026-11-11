@@ -93,6 +93,24 @@ def read_pool_papers_by_ids(
         .scalars()
         .all()
     )
+    if not rows:
+        # J1(2026-11-11):同属主回退 —— 论文池挂在发起检索的「会话任务
+        # ID」下,而阶段2确认由写作 job(job uuid)发起,task_id 不同导致
+        # 90 篇 screened 文献一篇都读不到(「任务文献池为空」假故障)。
+        # lit_id 是内容指纹全局唯一 + 归属不变,回退到「仅属主 + lit_id」
+        # 语义安全;多个历史池含同一 lit_id 时取最新一条。
+        rows = (
+            db.execute(
+                apply_owner_scope(
+                    select(PaperModel).where(
+                        PaperModel.lit_id.in_(unique_ids),
+                    ).order_by(PaperModel.created_at.desc()),
+                    user,
+                )
+            )
+            .scalars()
+            .all()
+        )
     by_id = {r.lit_id: r for r in rows}
     return [_row_to_paper(by_id[i]) for i in unique_ids if i in by_id]
 
