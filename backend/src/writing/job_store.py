@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -155,6 +156,75 @@ def stop_job(job_id: str) -> bool:
         return False
     set_job_status(job_id, "stopped", error=None)
     return True
+
+
+def _confirm_ttl_minutes() -> int:
+    """确认窗口 TTL(分钟):awaiting_confirm 超过此时长即过期。
+
+    无限期的确认窗口会让旧方案被恢复机制反复端给用户(2026-11-11:
+    10 小时前的 8 主题旧方案被端回,用户困惑"规则去哪了")。
+    """
+    try:
+        return max(5, int(os.environ.get("WRITING_CONFIRM_TTL_MINUTES", "120")))
+    except ValueError:
+        return 120
+
+
+def expire_stale_awaiting() -> int:
+    """过期滞留的确认任务:awaiting_confirm 超过 TTL 即置 failed 并清快照。
+
+    在服务启动与活跃任务查询时调用(自清理);过期任务不再被恢复机制
+    端给用户,规划快照一并清空(过期方案不作恢复)。
+    """
+    from db.models import _utcnow, WritingJobModel
+    from db.session import SessionLocal
+    from datetime import timedelta
+
+    ttl = timedelta(minutes=_confirm_ttl_minutes())
+    cutoff = _utcnow() - ttl
+    with SessionLocal() as db:
+        rows = (
+            db.query(WritingJobModel)
+            .filter(
+                WritingJobModel.status == "awaiting_confirm",
+                WritingJobModel.updated_at < cutoff,
+            )
+            .all()
+        )
+        for r in rows:
+            r.status = "failed"
+            r.error = (
+                f"主题确认已超时过期(超过 {_confirm_ttl_minutes()} 分钟未确认),"
+                "请重新划分主题。"
+            )
+            r.req_snapshot = {}
+        db.commit()
+        return len(rows)
+
+
+def supersede_awaiting_except(user_id: str | None, keep_job_id: str) -> int:
+    """新划分任务创建时,同属主旧的 awaiting_confirm 任务一并取代(置 stopped)。
+
+    用户重新划分意味着旧方案作废 —— 旧任务不该继续滞留在确认态,
+    也不该再被恢复机制端出来。
+    """
+    from db.models import WritingJobModel
+    from db.session import SessionLocal
+
+    with SessionLocal() as db:
+        q = db.query(WritingJobModel).filter(
+            WritingJobModel.status == "awaiting_confirm",
+            WritingJobModel.job_id != keep_job_id,
+        )
+        if user_id:
+            q = q.filter(WritingJobModel.user_id == user_id)
+        rows = q.all()
+        for r in rows:
+            r.status = "stopped"
+            r.error = "已被新的主题划分任务取代"
+            r.req_snapshot = {}
+        db.commit()
+        return len(rows)
 
 
 def mark_stale_running_failed() -> int:

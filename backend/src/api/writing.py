@@ -664,6 +664,11 @@ def get_active_writing_job(request: Request):
     from db.session import SessionLocal
     from writing import job_store
 
+    # 自清理:查询前先过期滞留的确认任务(旧方案不再被端给用户)
+    try:
+        job_store.expire_stale_awaiting()
+    except Exception:  # noqa: BLE001
+        pass
     _user = getattr(request.state, "user", None)
     uid = getattr(_user, "user_id", None)
     if not uid:
@@ -718,6 +723,12 @@ async def create_writing_job(
 
     snapshot = req.model_dump(exclude={"papers"})  # papers 可能上千篇,快照只留引用语境
     job_store.create_job(job_id, uid, req.topic, req.classify_mode, snapshot)
+    # 用户重新划分 = 旧确认方案作废:同属主旧 awaiting_confirm 一并取代,
+    # 不再滞留(2026-11-11:旧任务滞留一天被恢复机制反复端给用户)
+    try:
+        job_store.supersede_awaiting_except(uid, job_id)
+    except Exception:  # noqa: BLE001
+        pass
 
     if confirmed is not None:
         start_seq = job_store.max_seq(job_id)

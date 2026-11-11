@@ -101,10 +101,13 @@ async def _lifespan(_: FastAPI):
     # J1(2026-11 任务化):服务重启时把还在 running 的写作任务标记失败
     # (规划快照仍在,用户确认主题后可直接重试阶段2;awaiting_confirm 不动)。
     try:
-        from writing.job_store import mark_stale_running_failed
+        from writing.job_store import expire_stale_awaiting, mark_stale_running_failed
         n = mark_stale_running_failed()
         if n:
             log.warning("已将 %d 个因重启中断的写作任务标记为 failed", n)
+        n2 = expire_stale_awaiting()
+        if n2:
+            log.warning("已过期 %d 个超时未确认的写作任务(确认窗口 TTL)", n2)
     except Exception as exc:
         log.warning("写作任务中断标记非致命错误: %s", exc)
     # 预置默认管理员:仅空库时创建 admin/admin;已有用户绝不覆盖。
