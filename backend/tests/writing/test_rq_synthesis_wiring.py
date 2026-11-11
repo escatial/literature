@@ -73,7 +73,7 @@ def _run_stream_with_synthesis(monkeypatch, tmp_events):
 
     captured: dict = {}
 
-    def fake_synthesis(topic, groups_, papers_, rqs):
+    def fake_synthesis(topic, groups_, papers_, rqs, progress=None):
         captured["rq_passed"] = rqs
         meta = {"succeeded": 2, "failed": 0, "failures": [],
                 "counts": {"consensus": 2, "controversies": 1, "gaps": 1},
@@ -238,7 +238,7 @@ def test_sync_generate_review_passes_synthesis(monkeypatch):
               Group(name="技术焦虑机制", lit_ids=["lit_c"])]
     seen: dict = {}
 
-    def fake_synthesis(topic, groups_, papers_, rqs):
+    def fake_synthesis(topic, groups_, papers_, rqs, progress=None):
         seen["called"] = True
         return {}, {"succeeded": 0, "failed": 0, "failures": [], "counts": {}}
     monkeypatch.setattr(orch, "_run_theme_synthesis", fake_synthesis)

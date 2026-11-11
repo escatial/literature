@@ -194,6 +194,9 @@ def _parse_synthesis_json(raw: str) -> dict:
     return data
 
 
+_SYNTHESIS_HARD_TIMEOUT_SECONDS = 240.0
+
+
 def build_theme_synthesis(
     theme_name: str,
     theme_question: str | None,
@@ -212,16 +215,40 @@ def build_theme_synthesis(
         theme_name, theme_question, topic, catalog,
         _evidence_lines(papers, evidence_map), rq_block or "(未提供研究问题)",
     )
-    from llm.client import messages_create
-    raw = messages_create(
-        system,
-        f"研究主题:{topic}\n主题:{theme_name}\n"
-        "请输出严格 JSON 对象(不要 markdown 代码块,不要解释)。",
-        max_tokens=5000,
-        max_retries=0,
-        timeout=120.0,
-        response_format={"type": "json_object"},
-    )
+    import threading as _threading
+
+    llm_error: list[Exception] = []
+
+    def _call() -> str:
+        from llm.client import messages_create
+
+        try:
+            return messages_create(
+                system,
+                f"研究主题:{topic}\n主题:{theme_name}\n"
+                "请输出严格 JSON 对象(不要 markdown 代码块,不要解释)。",
+                max_tokens=5000,
+                max_retries=0,
+                timeout=120.0,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            llm_error.append(exc)
+            return ""
+
+    # 硬时钟:守护线程跑 LLM 调用,主线程最多等 _SYNTHESIS_HARD_TIMEOUT 秒。
+    # 超时即放弃该主题(守护线程留在后台,进程退出不等待)。
+    holder: dict[str, str] = {}
+    worker = _threading.Thread(target=lambda: holder.update(raw=_call()), daemon=True)
+    worker.start()
+    worker.join(_SYNTHESIS_HARD_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        raise SynthesisError(
+            f"综合推理硬超时({_SYNTHESIS_HARD_TIMEOUT_SECONDS}s),主题降级"
+        )
+    raw = holder.get("raw", "")
+    if llm_error:
+        raise llm_error[0]
     data = _parse_synthesis_json(raw)
     sanitized = _sanitize_synthesis(data, number_map, len(papers))
     if not (sanitized["consensus"] or sanitized["controversies"]):
@@ -272,6 +299,15 @@ def build_all_syntheses(
 
     for idx, group in enumerate(groups, start=1):
         theme_papers = [p for p in papers if p.lit_id in set(group.lit_ids) & by_id]
+        if progress:
+            try:
+                progress({
+                    "kind": "synthesis_theme_started",
+                    "index": idx, "total": len(groups),
+                    "message": f"正在综合主题 {idx}/{len(groups)}:{group.name}",
+                })
+            except Exception:  # noqa: BLE001
+                pass
         try:
             result = build_theme_synthesis(
                 group.name, group.research_question, theme_papers,

@@ -449,10 +449,12 @@ async function runSSELoop(
             state.phase = 'classify';
             const kind = String(evt.data.kind ?? '');
             if (kind === 'stage_thinking') {
-              // J1:通读/定轴的思考增量(后端节流合并,~0.8s/条);stage
-              // 切换(R1→R2)自动清空重计,缓冲上限 24k 字符保护 DOM。
+              // J1:通读/定轴/筛选的思考或输出增量(后端节流合并,~0.8s/条);
+              // stage 切换(R1→R2)自动清空重计,缓冲上限 24k 字符保护 DOM。
+              // 注意:不推进 phase —— 筛选期的思考流不能把相位拉到 classify。
               const stage = String(evt.data.stage ?? 'classify');
-              const label = stage === 'readthrough' ? '通读笔记' : '主题划分';
+              const label = stage === 'readthrough' ? '通读笔记'
+                : stage === 'screening' ? '文献筛选' : '主题划分';
               const prev = state.stageThinking;
               const base = prev && prev.label === label ? prev.text : '';
               state.stageThinking = {
@@ -463,6 +465,8 @@ async function runSSELoop(
             }
             if (kind === 'chunk_started') {
               state.detail = `正在处理第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块（${evt.data.count ?? 0} 篇）...`;
+            } else if (kind === 'synthesis_theme_started') {
+              state.detail = String(evt.data.message ?? '正在综合主题...');
             } else if (kind === 'llm_attempt') {
               state.detail = `正在分析第 ${evt.data.chunk ?? 0}/${evt.data.total_chunks ?? 0} 个文献块...`;
             } else if (kind === 'llm_result') {

@@ -1750,6 +1750,7 @@ def _run_theme_synthesis(
     groups: list[Group],
     papers: list[Paper],
     research_questions: list[str] | None,
+    progress=None,
 ) -> tuple[dict[str, dict], dict]:
     """主题综合:全池证据抽取 + 按主题共识/争议/方法差异/空白综合。
 
@@ -1760,6 +1761,7 @@ def _run_theme_synthesis(
     evidence_map = extract_pool_evidence(papers, topic)
     synthesis_map, meta = build_all_syntheses(
         groups, papers, evidence_map, topic, research_questions,
+        progress=progress,
     )
     meta = dict(meta or {})
     meta["evidence_extracted"] = sum(
@@ -2301,7 +2303,7 @@ def generate_review_stream(
             })
             try:
                 synthesis_map, synthesis_meta = _run_theme_synthesis(
-                    topic, groups, papers, research_questions,
+                    topic, groups, papers, research_questions, progress=progress,
                 )
                 yield _sse_event("synthesis_done", {
                     **(synthesis_meta or {}),
