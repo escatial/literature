@@ -2330,30 +2330,23 @@ def generate_review_stream(
         )
         sections: list[SectionResult] = []
         all_dropped: list[str] = []
-        for idx, spec in enumerate(section_specs):
-            check_stop()
-            section_papers = _papers_for_section(spec, groups, papers)
-            yield _sse_event("section_preparing", {
-                "index": idx,
-                "total": len(section_specs),
-                "key": spec.key,
-                "title": spec.title,
-                "message": f"正在准备《{spec.title}》的上下文与引用约束...",
-            })
-            yield _sse_event("section_started", {
-                "index": idx,
-                "total": len(section_specs),
-                "key": spec.key,
-                "title": spec.title,
-            })
-            total_chars = 0
-            # v9.6:流式路径单章失败此前无占位兜底(非流式 L989 起有),LLM 全失败
-            # 时第 N 章异常会把前 N-1 章整体报废——对齐同步路径的占位章节语义
-            completed = False
+        all_events: dict[int, list[str]] = {}
+
+        def _run_section(idx: int, spec, section_papers) -> None:
+            """单章完整流水线(notes→write→retry→polish),在子线程运行。
+
+            事件收集到 all_events[idx],由主生成器按章节序号 yield。
+            并行写(2026-11-11 性能):5 章互相独立(述评用 synthesis_map
+            已在写作前就绪),写作期从顺序求和压到并行最大值。
+            """
+            def _check_stop():
+                if stop_event is not None and stop_event.is_set():
+                    raise RuntimeError("用户已停止写作")
+
+            _check_stop()
+            events: list[str] = []
 
             def _section_progress(event: str, data: dict) -> None:
-                # 润色/重写闭环在同步函数内部执行,生成器此时已挂起无法 yield;
-                # 经带外 progress 发布,由 SSE 网关直发同一队列(同线程,保序)。
                 if progress is None:
                     return
                 progress(event, {
@@ -2364,12 +2357,23 @@ def generate_review_stream(
                     **data,
                 })
 
-            # R1'(2026-10-27 先读后写):本节写作前通读本节文献蒸馏笔记,
-            # 作为蒸馏证据层进 section prompt;失败返回 None 无感降级,
-            # section_notes_done 事件经带外通道发布(additive)。
-            notes_block = _prepare_section_notes(
-                spec, section_papers, topic, grade_map, progress=_section_progress,
-            )
+            events.append(_sse_event("section_started", {
+                "index": idx,
+                "total": len(section_specs),
+                "key": spec.key,
+                "title": spec.title,
+            }))
+            notes_block = None
+            try:
+                notes_block = _prepare_section_notes(
+                    spec, section_papers, topic, grade_map,
+                    progress=_section_progress,
+                )
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                log.debug("通读笔记降级(section=%s): %s", spec.key, exc)
+
             try:
                 for evt in write_section_stream(
                     spec, topic, groups, section_papers, grades=grade_map,
@@ -2378,18 +2382,19 @@ def generate_review_stream(
                     review_goal=review_goal,
                     notes_block=notes_block,
                 ):
+                    _check_stop()
                     kind = evt.get("kind")
                     if kind == "reasoning":
-                        yield _sse_event("section_reasoning", {
+                        events.append(_sse_event("section_reasoning", {
                             "index": idx,
                             "total": len(section_specs),
                             "key": spec.key,
                             "title": spec.title,
                             "delta": evt["delta"],
-                        })
+                        }))
                         continue
                     if kind == "step":
-                        yield _sse_event("section_step", {
+                        events.append(_sse_event("section_step", {
                             "index": idx,
                             "total": len(section_specs),
                             "key": spec.key,
@@ -2398,25 +2403,18 @@ def generate_review_stream(
                             "status": evt["status"],
                             "message": evt.get("message", ""),
                             "seconds": evt.get("seconds"),
-                        })
+                        }))
                         continue
                     if kind == "token":
-                        piece = evt["delta"]
-                        total_chars += len(piece)
-                        yield _sse_event("section_token", {
+                        events.append(_sse_event("section_token", {
                             "index": idx,
                             "total": len(section_specs),
                             "key": spec.key,
                             "title": spec.title,
-                            "delta": piece,
-                            "chars": total_chars,
-                        })
+                            "delta": evt["delta"],
+                        }))
                         continue
                     if kind == "done":
-                        # Final deterministic post-condition shared with the
-                        # synchronous path.  The stream may have already sent
-                        # raw model tokens, but the delivered section result
-                        # must still retain real anchors/evidence after repair.
                         res = evt["result"]
                         ensure_section_evidence(res, section_papers)
                         res = _retry_section_quality(
@@ -2431,14 +2429,12 @@ def generate_review_stream(
                             review_goal=review_goal,
                             progress=_section_progress,
                         )
-                        # 润色+核查闭环(用户策略:agent 自我纠错)
                         res = _polish_and_verify_section(
                             res, section_papers, progress=_section_progress,
                         )
-                        completed = True
                         sections.append(res)
                         all_dropped.extend(res.dropped_citations)
-                        yield _sse_event("section_done", {
+                        events.append(_sse_event("section_done", {
                             "index": idx,
                             "total": len(section_specs),
                             "key": res.key,
@@ -2446,17 +2442,17 @@ def generate_review_stream(
                             "content": res.content,
                             "citations": res.citations,
                             "dropped_citations": res.dropped_citations,
-                        })
+                        }))
+            except RuntimeError:
+                raise
             except Exception as exc:
-                if completed:
-                    raise
                 log.warning(
                     "章节 %s 流式写作失败,生成占位章节: %s",
                     getattr(spec, "key", "?"), exc,
                 )
                 res = _placeholder_section_result(spec, topic, section_papers)
                 sections.append(res)
-                yield _sse_event("section_done", {
+                events.append(_sse_event("section_done", {
                     "index": idx,
                     "total": len(section_specs),
                     "key": res.key,
@@ -2464,7 +2460,50 @@ def generate_review_stream(
                     "content": res.content,
                     "citations": res.citations,
                     "dropped_citations": res.dropped_citations,
+                }))
+
+            all_events[idx] = events
+
+        # J1 并行写作:全部章节同时开写(LLM 调用并行),事件按章节序号 yield
+        from concurrent.futures import ThreadPoolExecutor
+
+        section_papers_map = {
+            spec.key: _papers_for_section(spec, groups, papers)
+            for spec in section_specs
+        }
+        max_workers = min(len(section_specs), 4)
+
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="section-write",
+        ) as executor:
+            futures = {}
+            for idx, spec in enumerate(section_specs):
+                yield _sse_event("section_preparing", {
+                    "index": idx,
+                    "total": len(section_specs),
+                    "key": spec.key,
+                    "title": spec.title,
+                    "message": f"正在准备《{spec.title}》的上下文与引用约束...",
                 })
+                futures[idx] = executor.submit(
+                    _run_section, idx, spec, section_papers_map[spec.key],
+                )
+            # 按章节序号 yield 事件(并行完成顺序不同,但用户看到有序输出)
+            for idx in sorted(futures.keys()):
+                try:
+                    futures[idx].result()
+                except RuntimeError as exc:
+                    if "用户已停止" in str(exc):
+                        raise
+                    log.warning("章节 %d 异常: %s", idx, exc)
+                    continue
+                for evt in all_events.get(idx, []):
+                    yield evt
+
+        # 并行写完成后按 spec 顺序排列,保证交付一致性
+        sections.sort(key=lambda s: next(
+            (i for i, sp in enumerate(section_specs) if sp.key == s.key), 999,
+        ))
 
         # 交付门禁:若多数主题章节只是题录恢复稿(LLM 写作连续失败的产物),
         # 明确报错让用户重试,而不是把一堵模板墙静默交付(v9.7 软门禁只
