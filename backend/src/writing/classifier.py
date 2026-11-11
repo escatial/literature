@@ -422,7 +422,8 @@ def _unique_evidence_group_name(
 
 
 def _finalize_theme_groups(
-    papers: list[Paper], groups: list[Group], topic: str,
+    papers: list[Paper], groups: list[Group], topic: str, *,
+    apply_size_rules: bool = True,
 ) -> list[Group]:
     """统一主题结果的名称、覆盖率和最低分组数。
 
@@ -472,10 +473,14 @@ def _finalize_theme_groups(
     normalized = [g for g in normalized if g.lit_ids]
     # J1 用户规则(2026-11-11):每主题至少 N 篇(默认 15)才立得住,
     # 不足额主题先并入最相似主题,再做巨型主题均衡拆分。
-    normalized = _merge_underfilled_groups(
-        papers, normalized, min_size=_theme_min_papers(),
-    )
-    return _balance_oversize_groups(papers, normalized, topic)
+    # 用户自定义主题(apply_size_rules=False)例外:结构是用户显式设计的,
+    # 15 篇规则与均衡拆分都不覆盖 —— 用户对不均衡有自己的判断权。
+    if apply_size_rules:
+        normalized = _merge_underfilled_groups(
+            papers, normalized, min_size=_theme_min_papers(),
+        )
+        return _balance_oversize_groups(papers, normalized, topic)
+    return normalized
 
 
 def _groups_acceptable(groups: list[Group], pool_language: str | None = None) -> bool:
@@ -3157,11 +3162,61 @@ def classify_by_theme(
     return _finalize_theme_groups(papers, groups, topic)
 
 
-def classify(papers: list[Paper], topic: str, mode: str, progress=None) -> list[Group]:
+def classify(papers: list[Paper], topic: str, mode: str, progress=None,
+             custom_theme_names: list[str] | None = None) -> list[Group]:
     if mode == "locale":
         return classify_by_locale(papers)
     if mode == "theme":
+        if custom_theme_names:
+            return classify_with_custom_axes(
+                papers, topic, custom_theme_names, progress=progress,
+            )
         return classify_by_theme(papers, topic, progress=progress)
     raise ValueError(f"unknown classify mode: {mode}")
+
+
+def classify_with_custom_axes(
+    papers: list[Paper], topic: str, theme_names: list[str], *,
+    progress=None,
+) -> list[Group]:
+    """用户预设主题模式(2026-11-11):跳过 AI 定轴,文献直接归入用户主题。
+
+    - 主题名经 _clean_group_name 清洗(保留用户措辞,不过度校验 —— 用户
+      显式选择的名字优先级高于命名规范);
+    - 归组复用 _assign_papers_to_axes(蒸馏/摘要目录 + 行协议 + 覆盖率
+      重试),finalize 应用主题最低文献数规则(不足并入最相似主题);
+    - 不跑 R1 通读(主题已定,通读只为定轴服务)。
+    """
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw_name in theme_names or []:
+        name = _clean_group_name(str(raw_name or ""))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        cleaned.append(name)
+    if len(cleaned) < 2:
+        raise ValueError("自定义主题至少需要 2 个不同的主题名")
+
+    if progress:
+        progress({
+            "kind": "custom_axes_started",
+            "themes": cleaned,
+            "message": f"按用户预设的 {len(cleaned)} 个主题轴归组文献...",
+        })
+    axes = [Group(name=name, lit_ids=[], research_question="")
+            for name in cleaned]
+    abstract_limit = _abstract_limit_for(papers, minimal=False)
+    groups = _assign_papers_to_axes(
+        papers, axes, topic,
+        abstract_limit=abstract_limit, progress=progress,
+    )
+    if len(groups) < _min_groups(len(papers)):
+        raise ValueError(
+            f"按预设主题归组后仅形成 {len(groups)} 个可验证主题。"
+            "请检查主题名是否与文献内容匹配后重试。"
+        )
+    # apply_size_rules=False:主题结构由用户显式设计,合并/拆分不覆盖
+    return _finalize_theme_groups(papers, groups, topic, apply_size_rules=False)
 
 

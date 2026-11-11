@@ -110,6 +110,8 @@ export interface WritingRequest {
   /** v9.9:研究问题与综述目标(论证主线;后端已支持,前端此前漏镜像) */
   research_questions?: string[] | null;
   review_goal?: string | null;
+  /** J1 用户自定义主题:非空时跳过 AI 定轴,文献直接归入预设主题 */
+  custom_theme_names?: string[] | null;
 }
 
 /** D1:QA 核查结果摘要(complete 事件 qa_report;此前类型缺失导致 100% 丢失) */

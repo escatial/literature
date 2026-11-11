@@ -1995,6 +1995,7 @@ def plan_review_stream(
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
     task_id: str | None = None,
+    custom_theme_names: list[str] | None = None,
 ) -> Generator[str, None, None]:
     """两阶段·阶段1 主题规划:筛选 + 相关性分级 + 分类,停在主题确认点,不写正文。
 
@@ -2176,6 +2177,7 @@ def generate_review_stream(
     progress=None,
     task_id: str | None = None,
     persist=None,
+    custom_theme_names: list[str] | None = None,
 ) -> Generator[str, None, None]:
     """流式生成综述,按事件 yield SSE 字符串。
 
@@ -2279,7 +2281,10 @@ def generate_review_stream(
                 "phase": "classify",
             })
             check_stop()
-            groups = classify(papers, topic, classify_mode)
+            groups = classify(
+                papers, topic, classify_mode,
+                progress=progress, custom_theme_names=custom_theme_names,
+            )
             yield _sse_event("classify_done", {
                 "phase": "classify",
                 "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
@@ -2720,7 +2725,10 @@ def generate_review(
         papers, screened_out, relevance_report = _screen_papers(topic, papers, do_screening)
         papers, _pool_dups = _dedupe_pool(papers)
         _backfill_user_raw_citation(papers)
-        groups = classify(papers, topic, classify_mode)
+        groups = classify(
+            papers, topic, classify_mode,
+            progress=progress, custom_theme_names=custom_theme_names,
+        )
 
     # 主题综合层(与流式路径一致:失败降级,不阻塞写作)
     synthesis_map: dict[str, dict] = {}

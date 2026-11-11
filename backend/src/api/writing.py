@@ -133,6 +133,7 @@ def make_plan_stream_fn(
     progress_factory,
     research_questions: list[str] | None = None,
     review_goal: str | None = None,
+    custom_theme_names: list[str] | None = None,
 ):
     """J1:阶段1 plan 流的模块级工厂(捕获 plan_complete UPSERT 规划快照)。
 
@@ -148,6 +149,7 @@ def make_plan_stream_fn(
         "progress_factory": progress_factory,
         "research_questions": research_questions,
         "review_goal": review_goal,
+        "custom_theme_names": custom_theme_names,
     }
 
     def _stream(stop_event, publish):
@@ -160,6 +162,7 @@ def make_plan_stream_fn(
             research_questions=plan_ctx["research_questions"],
             review_goal=plan_ctx["review_goal"],
             task_id=plan_ctx["task_id"],
+            custom_theme_names=plan_ctx["custom_theme_names"],
         )
         for chunk in inner:
             yield chunk
@@ -278,6 +281,8 @@ class WritingRequest(BaseModel):
     # v9.9: 研究问题(RQ1/RQ2/...)与综述目标,注入写作与述评,构成论证主线。
     research_questions: list[str] | None = None
     review_goal: str | None = None
+    # J1 用户自定义主题:非空时跳过 AI 定轴,文献直接归入预设主题
+    custom_theme_names: list[str] | None = None
 
 
 class SectionOut(BaseModel):
@@ -328,6 +333,7 @@ def writing_generate(
             relevance_report=req.relevance_report,
             research_questions=req.research_questions,
             review_goal=req.review_goal,
+custom_theme_names=req.custom_theme_names,
         )
     finally:
         llm_reset()
@@ -488,6 +494,8 @@ class PlanRequest(BaseModel):
     topic: str
     papers: list[PaperIn]
     classify_mode: str  # "locale" | "theme"
+    # J1 用户自定义主题:非空时跳过 AI 定轴,文献直接归入预设主题
+    custom_theme_names: list[str] | None = None
     # v9.9: 阶段1即采集研究问题,前端确认主题时即可回显;当前仅在
     # blueprint.research_questions 存档,阶段2写作时由请求再次传入。
     research_questions: list[str] | None = None
@@ -693,6 +701,7 @@ async def create_writing_job(
                 stop_event=stop_event,
                 research_questions=req.research_questions,
                 review_goal=req.review_goal,
+custom_theme_names=req.custom_theme_names,
                 progress=publish_writing_progress(stop_event, publish),
                 task_id=job_id,
                 persist=persist_final,
@@ -710,6 +719,7 @@ async def create_writing_job(
                 progress_factory=_classify_emit,
                 research_questions=req.research_questions,
                 review_goal=req.review_goal,
+custom_theme_names=req.custom_theme_names,
             )(stop_event, publish)
 
     threading.Thread(
@@ -777,6 +787,7 @@ async def confirm_writing_job(
             stop_event=stop_event,
             research_questions=req.research_questions,
             review_goal=req.review_goal,
+custom_theme_names=req.custom_theme_names,
             progress=publish_writing_progress(stop_event, publish),
             task_id=job_id,
             persist=persist_final,

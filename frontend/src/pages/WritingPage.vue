@@ -33,7 +33,7 @@ const papersStore = usePapersStore();
 const writingStore = useWritingStore();
 
 const form = reactive({
-  mode: 'theme' as 'theme' | 'locale',
+  mode: 'theme' as 'theme' | 'locale' | 'custom',
 });
 
 // 写作状态全局持有:切换 tab 不中断任务、不丢进度
@@ -294,11 +294,16 @@ const start = async () => {
     toast.error('文献池为空,请先添加文献');
     return;
   }
+  if (form.mode === 'custom' && customThemes.value.length < 2) {
+    toast.error('自定义主题至少需要 2 个主题名');
+    return;
+  }
   // 只跑阶段1(筛选+相关性分级+主题划分),到确认点即停,不写正文
   await writingStore.startPlan({
     topic: topicInput.value.trim(),
     papers: selectedPapers.value,
-    classify_mode: form.mode,
+    classify_mode: form.mode === 'custom' ? 'theme' : form.mode,
+    custom_theme_names: form.mode === 'custom' ? [...customThemes.value] : undefined,
     do_screening: true,
   });
 };
@@ -306,6 +311,20 @@ const start = async () => {
 // 确认面板的可编辑分组副本:确认前不改动 store 里的原始划分
 interface EditableGroup { name: string; lit_ids: string[]; }
 const editableGroups = ref<EditableGroup[]>([]);
+
+// J1 自定义主题:用户预设主题名(「自定义主题」模式下启动写作)
+const customThemeInput = ref('');
+const customThemes = ref<string[]>([]);
+const addCustomTheme = () => {
+  const name = customThemeInput.value.trim();
+  if (!name) { toast.warning('请输入主题名称'); return; }
+  if (customThemes.value.includes(name)) { toast.warning('该主题名已存在'); return; }
+  customThemes.value.push(name);
+  customThemeInput.value = '';
+};
+const removeCustomTheme = (name: string) => {
+  customThemes.value = customThemes.value.filter((t) => t !== name);
+};
 
 // 到达确认点(含刷新恢复)时,用 store 的划分方案初始化编辑副本
 watch(awaitingConfirm, (waiting) => {
@@ -477,12 +496,41 @@ const downloadMd = () => {
           <el-radio-group v-model="form.mode" :disabled="running">
             <el-radio-button value="locale">按国内外</el-radio-button>
             <el-radio-button value="theme">按主题</el-radio-button>
+            <el-radio-button value="custom">自定义主题</el-radio-button>
           </el-radio-group>
           <span class="bench-hint">
             {{ form.mode === 'theme'
               ? '依据全部文献摘要聚类归纳实际研究主题,每个主题写一节'
-              : '按中文/外文两节分述,国内一节(知网)+ 国外一节(OpenAlex/PubMed)' }}
+              : form.mode === 'custom'
+                ? '按你预设的主题直接归组文献(检索筛选后执行,主题至少 2 个)'
+                : '按中文/外文两节分述,国内一节(知网)+ 国外一节(OpenAlex/PubMed)' }}
           </span>
+        </div>
+        <div v-if="form.mode === 'custom'" class="bench-row">
+          <span class="bench-label">预设主题</span>
+          <div class="custom-themes">
+            <div class="custom-themes-chips">
+              <el-tag
+                v-for="t in customThemes"
+                :key="t"
+                closable
+                :disable-transitions="true"
+                @close="removeCustomTheme(t)"
+              >{{ t }}</el-tag>
+              <span v-if="!customThemes.length" class="custom-themes-empty">尚未添加主题</span>
+            </div>
+            <div class="custom-themes-input">
+              <el-input
+                v-model="customThemeInput"
+                size="small"
+                maxlength="20"
+                placeholder="主题名称(3-12 字为宜),回车添加"
+                :disabled="running"
+                @keyup.enter="addCustomTheme"
+              />
+              <el-button size="small" :disabled="running" @click="addCustomTheme">添加</el-button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1413,6 +1461,26 @@ const downloadMd = () => {
 }
 
 /* ── 分组条 ── */
+.custom-themes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+.custom-themes-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.custom-themes-empty {
+  font-size: 12px;
+  color: #9b8f78;
+}
+.custom-themes-input {
+  display: flex;
+  gap: 8px;
+  max-width: 420px;
+}
 .group-paper-row {
   display: flex;
   align-items: center;
