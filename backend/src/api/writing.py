@@ -839,12 +839,13 @@ async def stream_writing_job(
                 cursor = r["seq"]
                 last_yield = loop.time()
             status = job_store.get_job(job_id)["status"]
-            # awaiting_confirm 同样结束流:确认窗口可能持续数分钟,不占空闲
-            # 连接;前端确认后带 since_seq 重连接续(事件表是事实来源)
-            if status in ("done", "failed", "stopped", "awaiting_confirm"):
+            # 先追平事件日志,再判终态(2026-11-11 恢复卡死 23 分钟的根因:
+            # awaiting_confirm 休眠任务的事件数超过单批 limit=200 时,首批
+            # 发完就 return,重放永远截断在半路,前端拿不到主题方案事件)
+            if not rows and status in ("done", "failed", "stopped", "awaiting_confirm"):
                 return
             now = loop.time()
-            if now - last_yield > 15.0:
+            if not rows and now - last_yield > 15.0:
                 yield ": heartbeat\n\n"
                 last_yield = now
             await asyncio.sleep(0.5)
