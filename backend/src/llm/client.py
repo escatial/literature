@@ -709,6 +709,7 @@ def messages_stream_ex(
     temperature: float | None = None,
     provider: str | None = None,
     timeout: float | None = None,
+    response_format: dict | None = None,
 ) -> Generator[tuple[str, str], None, None]:
     """流式调用 LLM,逐块返回 (kind, text) 二元组。
 
@@ -732,7 +733,7 @@ def messages_stream_ex(
             for kind, piece in _stream_with_resolved(
                 resolved, system=system, user=user,
                 max_tokens=max_tokens, model=model, temperature=temperature,
-                timeout=timeout,
+                timeout=timeout, response_format=response_format,
             ):
                 if kind == "content":
                     yielded_any = True
@@ -786,6 +787,7 @@ def _stream_with_resolved(
     model: str | None,
     temperature: float | None,
     timeout: float | None = None,
+    response_format: dict | None = None,
 ) -> Generator[tuple[str, str], None, None]:
     """单个 provider 的流式调用,yield (kind, text): kind ∈ reasoning/content。"""
     model = model or resolved.model
@@ -849,6 +851,8 @@ def _stream_with_resolved(
         )
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if response_format:
+            kwargs["response_format"] = response_format
         if resolved.id == "minimax":
             # 官方 reasoning_split:思考内容分离到 reasoning_details,content 只留正文
             kwargs["extra_body"] = {"reasoning_split": True}

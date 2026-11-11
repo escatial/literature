@@ -8,7 +8,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Generator
 
-from llm.client import messages_create
+from llm.client import messages_create, messages_stream_ex
+
+# 守卫式流式替身的同步引用基线:测试替换本模块 messages_create 时,
+# tap 流式路径自动退回同步(存量测试零改动)。
+_ORIGINAL_CREATE = messages_create
 from retrieval.types import Paper
 
 log = logging.getLogger(__name__)
@@ -121,6 +125,7 @@ def _screen_chunk(
     papers: list[Paper],
     topic: str,
     abstract_chars: int,
+    tap=None,
 ) -> list[dict]:
     """筛选一个有界批次,避免单次 JSON 输出被模型截断。
 
@@ -143,15 +148,35 @@ def _screen_chunk(
         "每条的 no 必须逐字填输入里的编号数字,严禁编造不存在的编号。"
         "每个 reason 最多 80 个字。"
     )
-    raw = messages_create(
-        SYSTEM,
-        user,
-        # 每条输出 4 个维度分 + reason,预算相应上调,避免 JSON 被截断触发拆半重试
-        max_tokens=8000,
-        max_retries=_SCREENING_MAX_RETRIES,
-        timeout=_SCREENING_TIMEOUT_SECONDS,
-        response_format={"type": "json_object"},
-    )
+    if tap is not None and messages_create is _ORIGINAL_CREATE:
+        # 生产流式路径:模型判定结果(JSON)逐 token 直播;协议不变,
+        # 拆半重试链照常兜底。测试替换 messages_create 时走同步路径。
+        parts: list[str] = []
+        try:
+            for kind, piece in messages_stream_ex(
+                SYSTEM, user,
+                max_tokens=8000,
+                timeout=_SCREENING_TIMEOUT_SECONDS,
+                response_format={"type": "json_object"},
+            ):
+                if kind == "content":
+                    parts.append(piece)
+                    tap(piece)
+            raw = "".join(parts).strip()
+        except Exception:
+            if not parts:
+                raise  # 未产出任何内容:交由上层拆半重试
+            raw = "".join(parts)  # 流中断已有部分内容:按截断 JSON 走解析链
+    else:
+        raw = messages_create(
+            SYSTEM,
+            user,
+            # 每条输出 4 个维度分 + reason,预算相应上调,避免 JSON 被截断触发拆半重试
+            max_tokens=8000,
+            max_retries=_SCREENING_MAX_RETRIES,
+            timeout=_SCREENING_TIMEOUT_SECONDS,
+            response_format={"type": "json_object"},
+        )
     return _parse_decisions(raw)
 
 
@@ -161,6 +186,7 @@ def _screen_chunk_with_fallback(
     abstract_chars: int,
     _retried: bool = False,
     _outer_attempt: int = 0,
+    tap=None,
 ) -> list[dict]:
     """解析或覆盖不完整时缩小请求范围,绝不默认补齐结果。
 
@@ -173,7 +199,7 @@ def _screen_chunk_with_fallback(
     日志提示(复用既有日志通道,不加新事件)。
     """
     try:
-        return _screen_chunk_attempt(papers, topic, abstract_chars, _retried)
+        return _screen_chunk_attempt(papers, topic, abstract_chars, _retried, tap=tap)
     except Exception as exc:
         if _outer_attempt >= _BATCH_OUTER_RETRY_MAX:
             raise
@@ -185,7 +211,7 @@ def _screen_chunk_with_fallback(
         time.sleep(_BATCH_OUTER_RETRY_SLEEP_SECONDS)
         return _screen_chunk_with_fallback(
             papers, topic, abstract_chars,
-            _outer_attempt=_outer_attempt + 1,
+            _outer_attempt=_outer_attempt + 1, tap=tap,
         )
 
 
@@ -194,14 +220,16 @@ def _screen_chunk_attempt(
     topic: str,
     abstract_chars: int,
     _retried: bool = False,
+    tap=None,
 ) -> list[dict]:
+    # tap 透传给 _screen_chunk(流式直播),本函数只做重试编排
     """单轮批次筛选:整批重采样与二分重试(原 _screen_chunk_with_fallback 主体)。
 
     二分递归经外层包装 `_screen_chunk_with_fallback` 发起,子批自带
     完整的内层/外层重试预算。
     """
     try:
-        llm_decisions = _screen_chunk(papers, topic, abstract_chars)
+        llm_decisions = _screen_chunk(papers, topic, abstract_chars, tap=tap)
         return _normalize_chunk_decisions(llm_decisions, papers)
     except ScreeningError as exc:
         retryable = (
@@ -224,11 +252,11 @@ def _screen_chunk_attempt(
             )
             return _screen_chunk_with_fallback(
                 papers, topic, abstract_chars, _retried=True
-            )
+            , tap=tap)
         midpoint = len(papers) // 2
         return (
-            _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars)
-            + _screen_chunk_with_fallback(papers[midpoint:], topic, abstract_chars)
+            _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars, tap=tap)
+            + _screen_chunk_with_fallback(papers[midpoint:], topic, abstract_chars, tap=tap)
         )
     except Exception as exc:
         # 连接/超时/网关错误也按“当前批次失败”处理：先二分降低上下文和输出，
@@ -239,8 +267,8 @@ def _screen_chunk_attempt(
         midpoint = len(papers) // 2
         log.warning("筛选批次调用失败(size=%d)，自动二分重试: %s", len(papers), exc)
         return (
-            _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars)
-            + _screen_chunk_with_fallback(papers[midpoint:], topic, abstract_chars)
+            _screen_chunk_with_fallback(papers[:midpoint], topic, abstract_chars, tap=tap)
+            + _screen_chunk_with_fallback(papers[midpoint:], topic, abstract_chars, tap=tap)
         )
 
 
@@ -323,6 +351,7 @@ def _screen_batch_events(
     eligible: list[Paper],
     topic: str,
     abstract_chars: int,
+    tap_factory=None,
 ) -> Generator[dict, None, None]:
     """并行执行有界筛选批次并产生进度事件。"""
     batches = _screening_batches(eligible)
@@ -355,6 +384,7 @@ def _screen_batch_events(
                 batch,
                 topic,
                 abstract_chars,
+                tap=(tap_factory(batch_index) if tap_factory else None),
             ): (batch_index, batch)
             for batch_index, batch in enumerate(batches, start=1)
         }
@@ -385,6 +415,7 @@ def screen_batch_stream(
     papers: list[Paper],
     topic: str,
     max_chars: int = _SCREENING_ABSTRACT_CHARS,
+    tap_factory=None,
 ) -> Generator[dict, None, None]:
     """分批筛选并发出 started/completed/finished 事件。
 
@@ -422,6 +453,7 @@ def screen_batch_stream(
             eligible,
             topic,
             max_chars if max_chars > 0 else _SCREENING_ABSTRACT_CHARS,
+            tap_factory=tap_factory,
         ):
             if event["status"] == "completed":
                 decisions.extend(event["results"])

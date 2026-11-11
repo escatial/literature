@@ -577,6 +577,9 @@ def _run_writing_job_worker(
     with _WRITING_STOP_LOCK:
         _WRITING_STOP_EVENTS[reg_key] = stop_event
     job_store.set_job_status(job_id, "running")
+    # J1:筛选 tap 在 4 个并行批线程经 publish 发事件,与生成器主循环
+    # 并发分配 seq —— 必须互斥,否则 (job_id, seq) 主键撞车丢事件。
+    seq_lock = threading.Lock()
     llm_reset = None
     terminal: tuple[str, str | None] | None = None
 
@@ -592,13 +595,14 @@ def _run_writing_job_worker(
             terminal = ("failed", str((data or {}).get("message") or "生成失败"))
 
     def publish(kind: str, payload: Any) -> None:
-        # 带外进度(section_step/润色闭环):与生成器 yield 同线程,顺序安全
+        # 带外进度:筛选 tap 在并行批线程调用,seq 分配经 seq_lock 互斥
         nonlocal seq
         if stop_event.is_set() or kind != "chunk":
             return
-        seq += 1
-        name, data = _parse_sse_chunk(payload)
-        job_store.append_event(job_id, seq, name, data)
+        with seq_lock:
+            seq += 1
+            name, data = _parse_sse_chunk(payload)
+            job_store.append_event(job_id, seq, name, data)
         mark_terminal(name, data)
 
     try:
@@ -607,9 +611,10 @@ def _run_writing_job_worker(
         for chunk in stream_fn(stop_event, publish):
             if stop_event.is_set():
                 break
-            seq += 1
-            name, data = _parse_sse_chunk(chunk)
-            job_store.append_event(job_id, seq, name, data)
+            with seq_lock:
+                seq += 1
+                name, data = _parse_sse_chunk(chunk)
+                job_store.append_event(job_id, seq, name, data)
             mark_terminal(name, data)
         if stop_event.is_set():
             job_store.set_job_status(job_id, "stopped")

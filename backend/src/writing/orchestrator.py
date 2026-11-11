@@ -959,10 +959,27 @@ def _paper_completeness(p: Paper) -> int:
     return score
 
 
+def _screening_tap_factory(thinking_sink):
+    """筛选批思考/输出直播:按批构造 ThinkingTap,增量经 thinking_sink 外发。"""
+    if thinking_sink is None:
+        return None
+
+    def factory(batch_index: int):
+        from src.writing.readthrough import ThinkingTap
+
+        def sink(payload: dict) -> None:
+            thinking_sink({"kind": "stage_thinking", "stage": "screening", **payload})
+
+        return ThinkingTap(sink, "screening", chunk=batch_index)
+
+    return factory
+
+
 def _screen_papers_stream(
     topic: str,
     papers: list[Paper],
     do_screening: bool,
+    thinking_sink=None,
 ) -> Generator[dict, None, tuple[list[Paper], list[str], dict]]:
     """流式筛选文献,在每个批次完成后把进度交给 SSE。"""
     if not do_screening:
@@ -980,8 +997,9 @@ def _screen_papers_stream(
         )
     papers = deduped
 
+    tap_factory = _screening_tap_factory(thinking_sink)
     decisions: list[dict] | None = None
-    for event in screen_batch_stream(papers, topic):
+    for event in screen_batch_stream(papers, topic, tap_factory=tap_factory):
         if event["status"] == "finished":
             decisions = event["results"]
         else:
@@ -1009,7 +1027,7 @@ def _screen_papers_stream(
         by_id.setdefault(paper.lit_id, paper)
     merged = list(by_id.values())
     merged_decisions: list[dict] | None = None
-    for event in screen_batch_stream(merged, topic):
+    for event in screen_batch_stream(merged, topic, tap_factory=tap_factory):
         if event["status"] == "finished":
             merged_decisions = event["results"]
         else:
@@ -2009,7 +2027,8 @@ def plan_review_stream(
             "total": len(papers),
             "message": "正在进行主题相关性与摘要质量筛选,每批 36 篇,最多 4 批并行...",
         })
-        screening_iterator = iter(_screen_papers_stream(topic, papers, True))
+        screening_sink = (lambda payload: progress(payload)) if progress is not None else None
+        screening_iterator = iter(_screen_papers_stream(topic, papers, True, thinking_sink=screening_sink))
         while True:
             check_stop()
             try:
@@ -2220,7 +2239,8 @@ def generate_review_stream(
             })
             # C3:单阶段从 PLANNING 全链(阶段1已在 plan 流记录过时,record 幂等覆盖)
             _plan_span.__enter__()
-            screening_iterator = iter(_screen_papers_stream(topic, papers, do_screening))
+            screening_sink = (lambda payload: progress("stage_thinking", payload)) if progress is not None else None
+            screening_iterator = iter(_screen_papers_stream(topic, papers, do_screening, thinking_sink=screening_sink))
             while True:
                 check_stop()
                 try:

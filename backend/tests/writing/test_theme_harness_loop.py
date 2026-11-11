@@ -56,7 +56,7 @@ def test_theme_stage_advances_through_three_strategies(monkeypatch):
             return [clf.Group(name="本地主题", lit_ids=[p.lit_id for p in papers])]
         raise AssertionError(f"unexpected strategy {_strategy}")
 
-    def fake_screen(topic, candidates, do_screening):
+    def fake_screen(topic, candidates, do_screening, thinking_sink=None):
         yield {
             "status": "started", "batch": 1, "total_batches": 1,
             "processed": 0, "total": len(candidates),
@@ -91,7 +91,7 @@ def test_theme_harness_emits_partial_groups_when_inspect_fails(monkeypatch):
         covered = [p.lit_id for p in papers[: 10]]
         return [clf.Group(name="部分主题", lit_ids=covered)]
 
-    def fake_screen(topic, candidates, do_screening):
+    def fake_screen(topic, candidates, do_screening, thinking_sink=None):
         yield {
             "status": "started", "batch": 1, "total_batches": 1,
             "processed": 0, "total": len(candidates),

@@ -25,7 +25,7 @@ def test_theme_plan_screens_before_classification(monkeypatch):
     screened = papers[:6]
     classified_ids: list[str] = []
 
-    def fake_screen(topic, candidates, do_screening):
+    def fake_screen(topic, candidates, do_screening, thinking_sink=None):
         yield {
             "status": "started", "batch": 1, "total_batches": 1,
             "processed": 0, "total": len(candidates),

@@ -106,7 +106,7 @@ def test_harness_loop_emits_progress_during_axis_planning(monkeypatch):
     monkeypatch.setattr(clf, "messages_create", slow_create)
 
     # Bypass the screening step which would otherwise hit real LLM providers.
-    def fake_screen(topic, candidates, do_screening):
+    def fake_screen(topic, candidates, do_screening, thinking_sink=None):
         yield {
             "status": "started", "batch": 1, "total_batches": 1,
             "processed": 0, "total": len(candidates),

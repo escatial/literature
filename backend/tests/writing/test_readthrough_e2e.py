@@ -174,7 +174,7 @@ def test_plan_stream_carries_readthrough_notes(monkeypatch):
 
     monkeypatch.setattr(orch, "_run_theme_classification_loop", fake_loop)
 
-    def fake_screen(topic, papers_, flag):
+    def fake_screen(topic, papers_, flag, thinking_sink=None):
         result = (list(papers_), [], {"quota_cut": []})
 
         def _gen():
