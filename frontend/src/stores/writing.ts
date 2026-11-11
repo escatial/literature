@@ -229,9 +229,15 @@ export const useWritingStore = defineStore('writing', {
         // 直接重新确认(阶段2失败常见于池读取/瞬时错误,不应作废阶段1)
         if (job.req_snapshot && Object.keys(job.req_snapshot).length) {
           this._planReq = job.req_snapshot as unknown as WritingRequest;
+          // 恢复阶段1分组(规划快照),确认面板不再是 0 主题
+          const restoredGroups = (job.plan_groups ?? []).map(g => ({
+            name: g.name,
+            lit_ids: [...(g.lit_ids ?? [])],
+          }));
           this.stream = {
             ...initialState(),
             phase: 'await_confirm',
+            groups: restoredGroups,
             detail: `阶段2失败:${job.error ?? '未知原因'}。主题方案已保留,可修改后重新确认。`,
           };
           this.awaitingConfirm = true;

@@ -796,13 +796,26 @@ async def confirm_writing_job(
 
 @router.get("/writing/jobs/{job_id}")
 def get_writing_job(job_id: str, request: Request):
-    """J1:任务快照(status/phase/error);前端刷新恢复与重连前预检用。"""
+    """J1:任务快照(status/phase/error/plan_groups);刷新恢复用。
+
+    plan_groups:规划快照中的主题分组(名称+lit_ids) —— 阶段2失败后恢复
+    到确认面板时,面板分组数据从这里重建(事件重放在失败分支不执行)。
+    """
     from writing import job_store
+    from writing.plan_store import get_plan
 
     _user = getattr(request.state, "user", None)
     job = job_store.get_job_scoped(job_id, _user)
     if job is None:
         raise HTTPException(404, f"writing job {job_id} not found")
+    plan_groups: list = []
+    try:
+        plan = get_plan(job_id, _user)
+        if plan is not None:
+            plan_groups = (plan.payload or {}).get("groups") or []
+    except Exception:  # noqa: BLE001  快照缺失不阻断快照接口
+        pass
+    job["plan_groups"] = plan_groups
     return job
 
 

@@ -757,6 +757,8 @@ export interface WritingJobInfo {
   classify_mode: string;
   error: string | null;
   req_snapshot?: Record<string, unknown> | null;
+  /** J1:规划快照中的主题分组(阶段2失败恢复到确认面板用) */
+  plan_groups?: { name: string; lit_ids: string[] }[] | null;
 }
 
 export interface JobStreamOptions {
