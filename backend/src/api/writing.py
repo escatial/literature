@@ -809,13 +809,29 @@ def get_writing_job(job_id: str, request: Request):
     if job is None:
         raise HTTPException(404, f"writing job {job_id} not found")
     plan_groups: list = []
+    plan_papers: list = []
     try:
         plan = get_plan(job_id, _user)
         if plan is not None:
-            plan_groups = (plan.payload or {}).get("groups") or []
+            payload = plan.payload or {}
+            plan_groups = payload.get("groups") or []
+            # 论文标题(确认面板预览/移动 UI 用):经同属主回退读池,
+            # 只取 screened_lit_ids 的最小字段,不回传整篇
+            from src.retrieval.pool_reader import read_pool_papers_by_ids
+            from db.session import SessionLocal as _SL
+
+            lit_ids = payload.get("screened_lit_ids") or []
+            if lit_ids:
+                with _SL() as pdb:
+                    rows = read_pool_papers_by_ids(pdb, job_id, lit_ids, _user)
+                plan_papers = [
+                    {"lit_id": r.lit_id, "title": r.title}
+                    for r in rows
+                ]
     except Exception:  # noqa: BLE001  快照缺失不阻断快照接口
         pass
     job["plan_groups"] = plan_groups
+    job["plan_papers"] = plan_papers
     return job
 
 

@@ -344,6 +344,26 @@ const removeGroup = (idx: number) => {
   editableGroups.value.splice(idx, 1);
 };
 
+// J1 用户自定义主题:新增主题 + 逐篇移动文献(确认面板全功能编辑)
+const addGroup = () => {
+  editableGroups.value.push({ name: `新主题 ${editableGroups.value.length + 1}`, lit_ids: [] });
+};
+
+const movePaper = (fromIdx: number, litId: string, toTarget: string) => {
+  const groups = editableGroups.value;
+  let targetIdx = toTarget === '__new__' ? -1 : Number(toTarget);
+  if (targetIdx === -1) {
+    groups.push({ name: `新主题 ${groups.length + 1}`, lit_ids: [] });
+    targetIdx = groups.length - 1;
+  }
+  if (targetIdx === fromIdx) return;
+  const src = groups[fromIdx];
+  src.lit_ids = src.lit_ids.filter((id) => id !== litId);
+  groups[targetIdx].lit_ids.push(litId);
+};
+
+const paperTitle = (litId: string) => planPaperTitles.value.get(litId) ?? litId;
+
 // 确认主题划分:只有用户点确认才进入阶段2正文写作
 const confirmPlan = () => {
   const groups = editableGroups.value
@@ -696,8 +716,26 @@ const downloadMd = () => {
             :title="`${g.name || `主题 ${idx + 1}`} · ${g.lit_ids.length} 篇文献`"
           >
             <div class="group-titles">
-              <div v-for="title in groupTitles(g.lit_ids)" :key="title">{{ title }}</div>
-              <span v-if="g.lit_ids.length > 6" class="group-more">其余 {{ g.lit_ids.length - 6 }} 篇已折叠</span>
+              <div v-for="litId in g.lit_ids" :key="litId" class="group-paper-row">
+                <span class="group-paper-title" :title="paperTitle(litId)">{{ paperTitle(litId) }}</span>
+                <el-select
+                  size="small"
+                  class="group-paper-move"
+                  placeholder="移至其他主题…"
+                  :model-value="''"
+                  :disabled="running"
+                  @update:model-value="(v: string) => movePaper(idx, litId, v)"
+                >
+                  <el-option
+                    v-for="(other, oi) in editableGroups"
+                    :key="`mv-${idx}-${oi}`"
+                    :label="(oi === idx ? '(当前主题)' : other.name || `主题 ${oi + 1}`) + `(${other.lit_ids.length} 篇)`"
+                    :value="String(oi)"
+                    :disabled="oi === idx"
+                  />
+                  <el-option label="新建主题" value="__new__" />
+                </el-select>
+              </div>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -706,6 +744,15 @@ const downloadMd = () => {
           description="已无主题:全部删除将无法写作,请重新划分"
           :image-size="60"
         />
+        <el-button
+          v-if="editableGroups.length"
+          class="add-group-btn"
+          plain
+          :disabled="running"
+          @click="addGroup"
+        >
+          + 新增自定义主题
+        </el-button>
         <div class="confirm-row">
           <el-button type="primary" size="large" :loading="running" @click="confirmPlan">
             确认主题,开始写作
@@ -1366,6 +1413,30 @@ const downloadMd = () => {
 }
 
 /* ── 分组条 ── */
+.group-paper-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+.group-paper-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+.group-paper-move {
+  width: 190px;
+  flex: none;
+}
+.add-group-btn {
+  margin-bottom: 14px;
+  width: 100%;
+  border-style: dashed;
+}
 .group-strip {
   display: flex;
   flex-direction: column;

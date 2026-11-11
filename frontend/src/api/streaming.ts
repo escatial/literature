@@ -759,6 +759,8 @@ export interface WritingJobInfo {
   req_snapshot?: Record<string, unknown> | null;
   /** J1:规划快照中的主题分组(阶段2失败恢复到确认面板用) */
   plan_groups?: { name: string; lit_ids: string[] }[] | null;
+  /** J1:快照文献标题(lit_id → title,确认面板预览与移动 UI 用) */
+  plan_papers?: { lit_id: string; title: string }[] | null;
 }
 
 export interface JobStreamOptions {
