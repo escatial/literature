@@ -16,6 +16,19 @@ from fastapi.middleware.cors import CORSMiddleware
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR / "src"
 sys.path.insert(0, str(SRC_DIR))
+
+# J1 双树统一(2026-11-11):「llm.client」与「src.llm.client」是同一物理
+# 文件(src/llm/client.py)的两个加载名 —— 两个模块实例各自持有
+# ContextVar,导致 apply_user_llm 写入的用户 LLM 运行时配置对写作/测试
+# 链路(src.llm.client)不可见:用户配置从未真正生效,所有调用一直烧
+# .env 兜底 key(实测:换智谱后测试仍打 MiniMax 并 402)。统一为
+# llm.client 单实例,src.llm.client 别名复用同一模块对象。
+import src.llm.client as _llm_client_single  # noqa: E402
+import llm as _llm_pkg  # noqa: E402  # 同一物理包(SRC_DIR 路径解析)
+sys.modules.setdefault("llm.client", _llm_client_single)
+# 父包属性绑定:pytest monkeypatch("llm.client.xxx") 与
+# `from llm import client` 都经由包属性解析,必须指向同一实例。
+_llm_pkg.client = _llm_client_single
 # lib/ 放本地依赖(目前只有 citeproc-py,Anaconda site-packages 没写权限所以装这里)。
 LOCAL_LIB = BASE_DIR / "lib"
 if LOCAL_LIB.is_dir():

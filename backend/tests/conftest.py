@@ -58,3 +58,12 @@ for p in (str(BACKEND_ROOT / "src"), str(BACKEND_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+# J1 双树统一:与 main.py 同款别名(llm.client 单实例),保证测试进程内
+# src.llm.client 与 llm.client 同源,monkeypatch/ContextVar 不分裂。
+import src.llm.client as _llm_client_single  # noqa: E402
+import llm as _llm_pkg  # noqa: E402  # 同一物理包(SRC_DIR 路径解析)
+sys.modules.setdefault("llm.client", _llm_client_single)
+# 父包属性绑定:pytest monkeypatch("llm.client.xxx") 与
+# `from llm import client` 都经由包属性解析,必须指向同一实例。
+_llm_pkg.client = _llm_client_single
+
