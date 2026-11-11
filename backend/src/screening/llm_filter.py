@@ -108,7 +108,7 @@ _SCREENING_BATCH_SIZE = 36
 def _env_workers() -> int:
     import os
     try:
-        return max(2, min(8, int(os.environ.get("SCREENING_WORKERS", "4"))))
+        return max(2, min(8, int(os.environ.get("SCREENING_WORKERS", "6"))))
     except (TypeError, ValueError):
         return 4
 _SCREENING_ABSTRACT_CHARS = 2000

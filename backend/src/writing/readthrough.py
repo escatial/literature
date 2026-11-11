@@ -317,7 +317,18 @@ def plan_readthrough_notes(
     system = _notes_system_prompt(language)
     notes: list[ReadNote] = []
     failed_chunks = 0
-    for index, chunk in enumerate(chunks, start=1):
+    # J1(2026-11-11 性能):通读 8 块改为 4 路并行 —— 此前串行逐块调 LLM
+    # 是「划分主题 20 分钟」的最大瓶颈(8×1.5 分钟 = 12 分钟)。并行后
+    # 8÷4=2 波 ≈ 3 分钟。笔记按块序合并,与串行语义一致。
+    # ThinkingTap(progress) 经 emit → publish → queue 线程安全;
+    # 节流合并器各自独立实例,不存在跨线程共享状态。
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    max_readthrough_workers = min(4, len(chunks))
+
+    def _process_chunk(index: int, chunk: list) -> tuple[list, bool]:
+        """单块 LLM 通读,返回 (parsed_notes, failed)。LLM 失败/解析失败
+        返回空列表 + failed=True;用户停止上抛。"""
         meta_by_no = {
             str(no_of[p.lit_id]): (
                 p.lit_id,
@@ -327,13 +338,12 @@ def plan_readthrough_notes(
         }
         user = _chunk_user_prompt(chunk, no_of, abstract_limit=800, language=language)
         label = f"chunk{index}"
+        tap = ThinkingTap(progress, "readthrough", chunk=index) if progress else None
         try:
-            tap = ThinkingTap(progress, "readthrough", chunk=index) if progress else None
             raw = _create_with_thinking(
                 system=system,
                 user=user,
                 on_thinking=tap,
-                # 思考预算随块内篇数线性放大(每篇一行笔记约 60-200 token)
                 max_tokens=1500 + 250 * len(chunk),
                 temperature=0.1,
                 timeout=120.0,
@@ -342,42 +352,54 @@ def plan_readthrough_notes(
                 tap.flush()
         except RuntimeError as exc:
             if "用户已停止" in str(exc):
-                raise  # 停止哨兵:不可降级吞掉(协作式取消)
-            failed_chunks += 1
+                raise
             logger.warning("通读笔记块 %d/%d LLM 失败(该块降级原文直通): %s",
                            index, len(chunks), exc)
-            if progress:
-                progress({
-                    "kind": "readthrough_chunk_done",
-                    "done": index, "total": len(chunks),
-                    "notes": len(notes), "failed": True,
-                })
-            continue
+            return [], True
         except Exception as exc:  # noqa: BLE001
-            failed_chunks += 1
             logger.warning("通读笔记块 %d/%d LLM 失败(该块降级原文直通): %s",
                            index, len(chunks), exc)
-            if progress:
-                progress({
-                    "kind": "readthrough_chunk_done",
-                    "done": index, "total": len(chunks),
-                    "notes": len(notes), "failed": True,
-                })
-            continue
+            return [], True
         _trace_record("readthrough", label, f"{system}\n\n{user}", raw)
         parsed = parse_note_lines(raw, meta_by_no)
         if parsed is None:
-            failed_chunks += 1
             logger.warning("通读笔记块 %d/%d 解析失败(该块降级原文直通)", index, len(chunks))
-        else:
-            notes.extend(parsed)
-        if progress:
-            progress({
-                "kind": "readthrough_chunk_done",
-                "done": index, "total": len(chunks),
-                "notes": len(notes),
-                "failed": parsed is None,
-            })
+            return [], True
+        return parsed, False
+
+    chunk_results: dict[int, tuple[list, bool]] = {}
+    with ThreadPoolExecutor(
+        max_workers=max_readthrough_workers,
+        thread_name_prefix="readthrough",
+    ) as _rt_executor:
+        futures = {
+            _rt_executor.submit(_process_chunk, index, chunk): index
+            for index, chunk in enumerate(chunks, start=1)
+        }
+        done_count = 0
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                parsed, failed = future.result()
+            except RuntimeError:
+                # 用户已停止:取消剩余块,上抛
+                for f in futures:
+                    f.cancel()
+                raise
+            done_count += 1
+            chunk_results[index] = (parsed, failed)
+            notes_count_now = sum(len(chunk_results[k][0]) for k in sorted(chunk_results))
+            failed_chunks += 1 if failed else 0
+            if progress:
+                progress({
+                    "kind": "readthrough_chunk_done",
+                    "done": done_count, "total": len(chunks),
+                    "notes": notes_count_now,
+                    "failed": failed,
+                })
+    # 按块序合并笔记(与串行语义一致)
+    for index in sorted(chunk_results):
+        notes.extend(chunk_results[index][0])
     if progress:
         progress({
             "kind": "readthrough_done",
