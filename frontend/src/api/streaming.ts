@@ -3,6 +3,7 @@
  *  阶段判断以事件 phase 字段为准(替代界面文案匹配)。 */
 import { getWritingJobStreamURL } from '@/config/api';
 import { AUTH_TOKEN_KEY } from './auth';
+import { friendlyLlmError } from '@/utils/llmErrors';
 import { parseSSELine, phaseCanRegressTo } from './sseTypes';
 import type { DeliveryManifest, Paper, QaReport, WritingGroup, WritingRequest, WritingResponse } from './types';
 
@@ -725,8 +726,9 @@ async function runSSELoop(
             break;
           case 'error':
             state.phase = 'error';
-            state.error = evt.data.message;
-            state.detail = evt.data.message;
+            // D2:服务商错误(402 额度不足等)友好化,用户直接看到该做什么
+            state.error = friendlyLlmError(evt.data.message);
+            state.detail = state.error;
             // 保留可重试的业务状态，页面可以明确提示用户重新划分，
             // 不把后端异常误显示成仍在运行。
             state.waitingSeconds = 0;

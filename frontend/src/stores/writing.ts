@@ -21,6 +21,7 @@ import {
   type StreamState,
 } from '@/api/streaming';
 import type { WritingGroup, WritingRequest } from '@/api/types';
+import { friendlyLlmError } from '@/utils/llmErrors';
 
 /** 活跃任务的 sessionStorage 键(刷新恢复入口) */
 const ACTIVE_JOB_KEY = 'lit_review.writing_active_job';
@@ -131,7 +132,7 @@ export const useWritingStore = defineStore('writing', {
       } catch (e: any) {
         if (e?.name === 'AbortError') return;
         if (runToken !== this._runToken) return;
-        const msg = e?.message ?? String(e);
+        const msg = friendlyLlmError(e?.message ?? e);
         this.stream = { ...this.stream, phase: 'error', error: msg, detail: msg };
       } finally {
         if (runToken === this._runToken) {
@@ -179,7 +180,7 @@ export const useWritingStore = defineStore('writing', {
       } catch (e: any) {
         if (e?.name === 'AbortError') return;
         if (runToken !== this._runToken) return;
-        const msg = e?.message ?? String(e);
+        const msg = friendlyLlmError(e?.message ?? e);
         this.stream = { ...this.stream, phase: 'error', error: msg, detail: msg };
       } finally {
         if (runToken === this._runToken) {
@@ -270,7 +271,7 @@ export const useWritingStore = defineStore('writing', {
       } catch (e: any) {
         if (e?.name === 'AbortError') return;
         if (runToken !== this._runToken) return;
-        const msg = e?.message ?? String(e);
+        const msg = friendlyLlmError(e?.message ?? e);
         this.stream = { ...this.stream, phase: 'error', error: msg, detail: msg };
       } finally {
         if (runToken === this._runToken) {

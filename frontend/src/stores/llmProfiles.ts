@@ -6,7 +6,7 @@
  *   运行时链路零改动;激活后同步 auth.user 保持「当前配置」一致。
  */
 import { defineStore } from 'pinia';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   authApi,
   type LLMProfile,
@@ -15,6 +15,7 @@ import {
 } from '@/api/auth';
 import { useAuthStore } from '@/stores/auth';
 import { toast } from '@/utils/toast';
+import { friendlyLlmError } from '@/utils/llmErrors';
 
 /** 新增/编辑表单状态(kind 联合收窄为 string 便于 radio 绑定)。*/
 export interface LlmProfileForm {
@@ -35,7 +36,10 @@ const EMPTY_FORM: LlmProfileForm = {
 
 function errText(e: unknown, fallback: string): string {
   const err = e as { response?: { data?: { detail?: string } }; message?: string };
-  return String(err?.response?.data?.detail ?? err?.message ?? fallback);
+  return friendlyLlmError(
+    String(err?.response?.data?.detail ?? err?.message ?? ''),
+    fallback,
+  );
 }
 
 export const useLlmProfilesStore = defineStore('llmProfiles', () => {
@@ -48,6 +52,20 @@ export const useLlmProfilesStore = defineStore('llmProfiles', () => {
   // ── 表单状态:editingId = null 表示新增模式 ──
   const editingId = ref<number | null>(null);
   const form = ref<LlmProfileForm>({ ...EMPTY_FORM });
+  // D2:配置名默认跟随模型名 —— 名称留空或仍是上一次自动填充值时,
+  // 模型字段变化即同步;用户手动输入过自定义名(与自动值不同)则停止跟随。
+  const nameAuto = ref('');
+  watch(() => form.value.model, (model) => {
+    const m = model.trim();
+    if (!m) return;
+    if (!form.value.name.trim() || form.value.name.trim() === nameAuto.value) {
+      form.value.name = m;
+      nameAuto.value = m;
+    }
+  });
+  watch(() => form.value.name, (v) => {
+    if (v.trim() && v.trim() !== nameAuto.value) nameAuto.value = '';
+  });
   const saving = ref(false);
   const probing = ref(false);
   const modelOptions = ref<UpstreamModel[]>([]);
@@ -91,12 +109,14 @@ export const useLlmProfilesStore = defineStore('llmProfiles', () => {
   /** 重置为「新增」模式(清空表单)。*/
   function startCreate(): void {
     editingId.value = null;
+    nameAuto.value = '';
     form.value = { ...EMPTY_FORM };
   }
 
   /** 进入「编辑」模式:回填除 key 外的字段(key 留空 = 不修改)。*/
   function startEdit(p: LLMProfile): void {
     editingId.value = p.profile_id;
+    nameAuto.value = '';
     form.value = {
       name: p.name,
       kind: p.kind === 'anthropic' ? 'anthropic' : 'openai',
@@ -112,9 +132,9 @@ export const useLlmProfilesStore = defineStore('llmProfiles', () => {
    * @returns 是否保存成功(失败时调用方无需处理,toast 已弹)
    */
   async function save(andActivate: boolean): Promise<boolean> {
-    const name = form.value.name.trim();
+    const name = form.value.name.trim() || form.value.model.trim();
     if (!name) {
-      toast.warning('请先填写配置名');
+      toast.warning('请先填写配置名(或先选择模型,配置名将自动使用模型名)');
       return false;
     }
     saving.value = true;

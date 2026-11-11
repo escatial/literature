@@ -17,6 +17,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessageBox } from 'element-plus';
 import { toast } from '@/utils/toast';
+import { friendlyLlmError } from '@/utils/llmErrors';
 import { usePapersStore } from '@/stores/papers';
 import { useUnifiedRetrievalStore } from '@/stores/unifiedRetrieval';
 import { useLLMProvidersStore } from '@/stores/llmProviders';
@@ -57,7 +58,7 @@ const testLLMConnection = async () => {
     toast.success(`LLM 连接成功：${result.provider} / ${result.model}，${result.elapsed_ms}ms，响应：${result.response_preview || '有响应'}`);
     await llmProviders.refresh();
   } catch (e: any) {
-    toast.error(`LLM 连接失败：${e?.message ?? e}`);
+    toast.error(friendlyLlmError(e?.message ?? e, 'LLM 连接失败'));
     await llmProviders.refresh().catch(() => undefined);
   } finally {
     testingLLM.value = false;
