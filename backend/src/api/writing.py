@@ -652,6 +652,23 @@ def _run_writing_job_worker(
             _WRITING_STOP_EVENTS.pop(reg_key, None)
 
 
+@router.get("/writing/jobs/{job_id}/quality")
+def get_writing_job_quality(job_id: str, request: Request):
+    """run 质量单:从事件流合成的结构化质量数据(商业化可观测性)。
+
+    阶段耗时/筛选漏斗/通读产出/归组尝试与覆盖率/闸门触发/章节清单/
+    QA 结论/交付清单/错误 —— 客服与排查凭此单定位任意一次客户运行,
+    无需复现现场。
+    """
+    from writing import job_store
+
+    _user = getattr(request.state, "user", None)
+    job = job_store.get_job_scoped(job_id, _user)
+    if job is None:
+        raise HTTPException(404, f"writing job {job_id} not found")
+    return job_store.build_quality_report(job_id)
+
+
 @router.get("/writing/jobs/active")
 def get_active_writing_job(request: Request):
     """当前用户最新的未完结写作任务(新标签页/浏览器重启后恢复用)。

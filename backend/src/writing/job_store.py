@@ -75,7 +75,12 @@ def events_after(job_id: str, since_seq: int = 0, limit: int = 200) -> list[dict
             .all()
         )
         return [
-            {"seq": r.seq, "event": r.event, "payload": r.payload}
+            {
+                "seq": r.seq,
+                "event": r.event,
+                "payload": r.payload,
+                "created_at": str(r.created_at) if r.created_at else None,
+            }
             for r in rows
         ]
 
@@ -225,6 +230,166 @@ def supersede_awaiting_except(user_id: str | None, keep_job_id: str) -> int:
             r.req_snapshot = {}
         db.commit()
         return len(rows)
+
+
+def build_quality_report(job_id: str) -> dict:
+    """run 质量单:从事件流合成一次运行的结构化质量数据。
+
+    商业化可观测性底座:客服/排查凭此单定位任意一次客户运行的
+    阶段耗时 / 重试次数 / 闸门触发 / 覆盖率 / 交付清单,无需复现现场。
+    纯事件流合成,零 LLM 成本;字段对缺失事件容错(旧任务/半途任务)。
+    """
+    from datetime import datetime
+
+    events = events_after(job_id, 0, limit=10000)
+    by_name: dict[str, list[dict]] = {}
+    for e in events:
+        by_name.setdefault(e["event"], []).append(e)
+
+    def first(name: str) -> dict | None:
+        lst = by_name.get(name)
+        return lst[0] if lst else None
+
+    def last(name: str) -> dict | None:
+        lst = by_name.get(name)
+        return lst[-1] if lst else None
+
+    def _ts(e: dict | None):
+        if not e or not e.get("created_at"):
+            return None
+        try:
+            return datetime.fromisoformat(str(e["created_at"]))
+        except ValueError:
+            return None
+
+    def _secs(a, b):
+        if not a or not b:
+            return None
+        return round((b - a).total_seconds(), 1)
+
+    # ── 阶段时间轴 ──
+    milestones = [
+        "start", "screening_started", "screening_done", "classify_started",
+        "classify_done", "writing_started", "qa_started", "qa_done", "complete",
+    ]
+    stages: list[dict] = []
+    prev_name, prev_ts = None, None
+    for name in milestones:
+        e = first(name)
+        if not e:
+            continue
+        t = _ts(e)
+        if prev_name is not None:
+            stages.append({
+                "stage": prev_name, "until_event": name,
+                "seconds": _secs(prev_ts, t),
+            })
+        stages.append({
+            "stage": name,
+            "at": str(e.get("created_at") or ""),
+        })
+        prev_name, prev_ts = name, t
+    total_duration = _secs(_ts(first("start")), _ts(last("complete")))
+
+    # ── 筛选 ──
+    sd = last("screening_done")
+    screening = None
+    if sd:
+        p = sd["payload"] or {}
+        screening = {
+            "kept": p.get("kept"),
+            "screened_out": len(p.get("screened_out") or []),
+            "quota_cut": p.get("quota_cut", 0),
+        }
+
+    # ── 通读 ──
+    rd = last("readthrough_done")
+    readthrough = None
+    if rd:
+        p = rd["payload"] or {}
+        readthrough = {
+            "papers": p.get("papers"), "chunks": p.get("chunks"),
+            "failed_chunks": p.get("failed_chunks"), "notes": p.get("notes"),
+        }
+
+    # ── 定轴 + 归组尝试/闸门/降级 ──
+    axis_themes = None
+    gate_fired = None
+    attempts: list[dict] = []
+    fallback_used = False
+    for e in by_name.get("classify_progress", []):
+        p = e["payload"] or {}
+        kind = p.get("kind")
+        if kind == "axis_plan_done":
+            axis_themes = p.get("themes")
+        elif kind == "axis_quality_gate":
+            gate_fired = p.get("themes")
+        elif kind == "llm_result":
+            attempts.append({
+                "attempt": p.get("attempt"),
+                "parsed_groups": p.get("parsed_groups"),
+                "valid_groups": p.get("valid_groups"),
+                "covered": p.get("covered"),
+                "papers": p.get("papers"),
+                "decision": p.get("decision"),
+            })
+        elif kind == "assign_fallback_started":
+            fallback_used = True
+    grouping = {
+        "axis_themes_planned": axis_themes,
+        "axis_quality_gate": gate_fired,
+        "attempts": attempts,
+        "fallback_used": fallback_used,
+    }
+
+    # ── 写作章节 ──
+    sections = [
+        {
+            "title": (e["payload"] or {}).get("title"),
+            "chars": len((e["payload"] or {}).get("content") or ""),
+            "citations": len((e["payload"] or {}).get("citations") or []),
+        }
+        for e in by_name.get("section_done", [])
+    ]
+
+    # ── QA ──
+    qa = None
+    qd = last("qa_done")
+    if qd:
+        p = qd["payload"] or {}
+        qa = {
+            "overall": p.get("overall"),
+            "pass_rate": p.get("pass_rate"),
+            "auto_repair_count": p.get("auto_repair_count", 0),
+        }
+
+    # ── 交付清单 ──
+    cm = last("complete")
+    manifest = (cm["payload"] or {}).get("manifest") if cm else None
+
+    # ── 错误 ──
+    errors = [
+        (e["payload"] or {}).get("message", "")
+        for e in by_name.get("error", [])
+    ]
+
+    job = get_job(job_id) or {}
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "total_events": len(events),
+        "total_duration_seconds": total_duration,
+        "stages": stages,
+        "screening": screening,
+        "readthrough": readthrough,
+        "grouping": grouping,
+        "writing_sections": sections,
+        "qa": qa,
+        "manifest": manifest,
+        "errors": errors,
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+    }
 
 
 def mark_stale_running_failed() -> int:
