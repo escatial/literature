@@ -10,7 +10,19 @@ for p in (str(BACKEND_ROOT / "src"), str(BACKEND_ROOT)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import pytest
+from db.session import Base, reset_engine
 from writing import job_store  # noqa: E402
+
+
+@pytest.fixture()
+def fresh_db(tmp_path):
+    """独立临时库:测试不写真实 data/lit_review.db。"""
+    reset_engine(f"sqlite:///{tmp_path / 'qr_test.db'}")
+    import db.models  # noqa: F401
+    Base.metadata.create_all(bind=reset_engine(f"sqlite:///{tmp_path / 'qr_test.db'}"))
+    yield
+    reset_engine("sqlite:///:memory:")
 
 
 def _feed(job_id: str, seq_start: int, events: list[tuple[str, dict]]) -> None:
@@ -18,7 +30,7 @@ def _feed(job_id: str, seq_start: int, events: list[tuple[str, dict]]) -> None:
         job_store.append_event(job_id, i, name, payload)
 
 
-def test_quality_report_full_pipeline(monkeypatch):
+def test_quality_report_full_pipeline(monkeypatch, fresh_db):
     """完整流水线事件 → 质量单各节齐全、数值正确。"""
     monkeypatch.setenv("WRITING_QA_ENABLED", "0")
     job_id = "job-qr-1"
@@ -76,7 +88,7 @@ def test_quality_report_full_pipeline(monkeypatch):
     assert any(v is not None for v in secs)
 
 
-def test_quality_report_records_errors_and_fallback():
+def test_quality_report_records_errors_and_fallback(fresh_db):
     """失败运行:错误与降级路径如实入单(商业化排查依据)。"""
     job_id = "job-qr-2"
     job_store.create_job(job_id, "usr_qr", "主题", "theme", None)

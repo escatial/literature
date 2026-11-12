@@ -84,6 +84,46 @@ def _strip_preamble(text: str) -> str:
     return t.strip()
 
 
+# 草稿过程结构标签行:Paragraph N: / Paragraph 1 final: / Polish: / Potential concern: 等
+_DRAFT_DUMP_LABEL_RE = re.compile(
+    r"^\s*(?:paragraph\s*\d+(?:\s+final)?|second|third|fourth|fifth)\s*[:：]"
+    r"|^\s*(?:polish|potential\s+(?:concern|issue)|questions?)\s*[:：]",
+    re.IGNORECASE | re.MULTILINE,
+)
+# 英文元推理块(英语主导段落)
+_DRAFT_META_BLOCK_RE = re.compile(
+    r"(?:we need|let's |let me |need (?:answer|carefully|maybe)|potential (?:concern|issue)"
+    r"|polish\s*[:：]|question(?:s)?\s*[:：])",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_draft_dump(text: str) -> bool:
+    """识别『草稿过程倾倒』式输出:结构标签行满天飞或英文推理块交错。
+
+    2026-11-12 事故形态:润色轮返回里候选句推敲、英文自我分析、成稿正文
+    三层交错(评审42第3章),引用锚点全数保留使旧校验全部放行。
+    """
+    value = (text or "").strip()
+    if not value:
+        return False
+    if len(_DRAFT_DUMP_LABEL_RE.findall(value)) >= 3:
+        return True
+    zh = len(re.findall(r"[\u4e00-\u9fff]", value))
+    en = len(re.findall(r"[A-Za-z]", value))
+    # 英文超过中文 1.5 倍:中文综述润色不可能出现这种构成
+    if en > 400 and en > zh * 1.5:
+        return True
+    blocks = [b for b in re.split(r"\n\s*\n", value) if b.strip()]
+    meta_blocks = 0
+    for b in blocks:
+        b_en = len(re.findall(r"[A-Za-z]", b))
+        b_zh = len(re.findall(r"[\u4e00-\u9fff]", b))
+        if b_en > 40 and b_en > b_zh and _DRAFT_META_BLOCK_RE.search(b):
+            meta_blocks += 1
+    return meta_blocks >= 3
+
+
 def _diff_citations(before: str, after: str) -> tuple[set[str], set[str], bool]:
     """返回 (before 引用集合, after 引用集合, 是否完全一致)。"""
     b = _extract_citations(before)
@@ -131,6 +171,22 @@ def humanize_one_round(
             citations_preserved=True,
             accepted=False,
             detail=f"LLM 调用失败:{exc}",
+        )
+
+    if _looks_like_draft_dump(after):
+        # 2026-11-12 事故:模型把整段草稿过程(候选句推敲+英文自我分析)
+        # 当作润色结果返回,引用锚点全数保留导致旧校验放行,污染直接入库。
+        # 草稿过程不是正文——回滚该轮,保留上一版。
+        log.warning("humanize round %d 输出为草稿过程(结构标签/英文推理),回滚", round_no)
+        return text, HumanizeDiff(
+            round_no=round_no,
+            before_chars=before_chars,
+            after_chars=before_chars,
+            citations_before=citations_before,
+            citations_after=citations_before,
+            citations_preserved=True,
+            accepted=False,
+            detail="输出为草稿过程(含结构标签/英文推理),已回滚保留上一版",
         )
 
     citations_before, citations_after, preserved = _diff_citations(text or "", after)

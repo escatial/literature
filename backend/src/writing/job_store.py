@@ -241,7 +241,15 @@ def build_quality_report(job_id: str) -> dict:
     """
     from datetime import datetime
 
-    events = events_after(job_id, 0, limit=10000)
+    # 全量分页读取(并行写作的逐 token 事件量可能远超单批 limit)
+    events: list[dict] = []
+    cursor = 0
+    while True:
+        batch = events_after(job_id, cursor, limit=500)
+        if not batch:
+            break
+        events.extend(batch)
+        cursor = batch[-1]["seq"]
     by_name: dict[str, list[dict]] = {}
     for e in events:
         by_name.setdefault(e["event"], []).append(e)

@@ -18,6 +18,7 @@
 | 7 | 11-11 | 定轴产出垃圾轴清单(近重复/截断名/城市名轴)→ 归组再崩 | 散文抢救链无质量闸门 | `tests/writing/test_axes_quality_gate.py` |
 | 8 | 11-11 | 阶段2失败恢复后确认面板 0 主题 | failed 分支只恢复状态没恢复分组 | `tests/auth/test_writing_jobs_api.py` |
 | 9 | 11-11 | 旧 awaiting_confirm 滞留一天被反复端给用户 | 确认窗口无 TTL | `tests/writing/test_confirm_ttl.py` |
+| 10 | 11-12 | 评审42第3章 41 处英文自我分析混入正文 + 网关缓冲单块 45766 字符重复流 + 22 处 `[...]` 悬空占位 | ① 非流式重写/润色返回英文元推理与正文交错,normalize 词表漏检新词形(We need/Let's/Polish:) ② 流式首稿无异常门,废料直接进夹注回填与重写链 ③ 润色轮输出草稿过程但引用锚点全保留,旧校验放行 | `tests/writing/test_meta_reasoning_incident.py`(四层:normalize 交错剥离 / 章节非正文判据扩容 / 流式异常门+整段重试 / humanizer 草稿倾倒回滚) |
 
 ## 发布前门禁
 

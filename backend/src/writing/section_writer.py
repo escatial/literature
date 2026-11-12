@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import time
 import unicodedata
@@ -197,11 +198,25 @@ _META_REASONING_MARKERS = (
     "let me check", "let me make sure", "let me finalize", "let me revise",
     "ok final", "one more consideration", "the previous draft", "auto-check",
     "the original draft", "i should not write", "maybe the issue is",
+    # 2026-11-12 事故扩容:glm-5.3 经网关把英文自我分析写进正文通道
+    # (评审42第3章),词形集中在 We need / Let's / Potential concern 一族
+    "we need", "let's", "need answer", "pure body text",
+    "potential concern", "potential issue", "polish:", "polished final",
     "我先检查", "上一版草稿", "自动检查", "内部推理", "思考过程",
 )
 _FALLBACK_EVIDENCE_PREFIXES = (
     "补充证据显示",
     "与本节问题相邻的研究中",
+)
+# 草稿过程结构标签行(Paragraph N: / Polish: / Potential concern: 等)
+_STRUCTURAL_LABEL_RE = re.compile(
+    r"^\s*(?:paragraph\s*\d+(?:\s+final)?|second|third|fourth|fifth)\s*[:：]"
+    r"|^\s*(?:polish|potential\s+(?:concern|issue)|questions?)\s*[:：]",
+    re.MULTILINE | re.IGNORECASE,
+)
+# 流式首稿长度上限:提示词目标 1200-2000 字,超过 4 倍视为缓冲/重复流
+_SECTION_STREAM_MAX_CHARS = int(
+    os.environ.get("WRITING_SECTION_STREAM_MAX_CHARS", "8000")
 )
 
 
@@ -209,6 +224,26 @@ def _is_fallback_only(text: str) -> bool:
     """识别章节是否含有题录兜底句。"""
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
     return any(line.startswith(_FALLBACK_EVIDENCE_PREFIXES) for line in lines)
+
+
+def _section_stream_anomaly(text: str) -> bool:
+    """流式首稿是否为网关缓冲/推理回声类异常输出,不可进入夹注回填与润色链。
+
+    2026-11-12 事故:并行章节流式写入时,网关把整段响应缓冲成单块返回
+    (评审42:单块 45766 字符,内容为系统提示词英文回声+错位重复流)。
+    正常章节正文按提示词目标为 1200-2000 字,超限或英文主导即判异常。
+    """
+    value = (text or "").strip()
+    if not value:
+        return True
+    if len(value) > _SECTION_STREAM_MAX_CHARS:
+        return True
+    zh = len(re.findall(r"[\u4e00-\u9fff]", value))
+    en = len(re.findall(r"[A-Za-z]", value))
+    # 中文综述正文不可能英文超过中文 1.5 倍(引用作者名也远达不到)
+    if en > 400 and en > zh * 1.5:
+        return True
+    return _looks_like_non_article(value)
 
 
 def _looks_like_non_article(text: str) -> bool:
@@ -229,10 +264,14 @@ def _looks_like_non_article(text: str) -> bool:
     # unwrapped lit_id text after removing legitimate inline anchors.
     non_anchor_text = CITE_RE.sub("", value)
     leaked_lit_ids = len(re.findall(r"\blit_[a-z0-9_]+\b", non_anchor_text, re.IGNORECASE))
+    zh = len(re.findall(r"[\u4e00-\u9fff]", value))
+    en = len(re.findall(r"[A-Za-z]", value))
     return (
         marker_hits >= 1
         or catalog_lines >= 3
         or leaked_lit_ids >= 3
+        or len(_STRUCTURAL_LABEL_RE.findall(value)) >= 3
+        or (en > 400 and en > zh * 1.5)
         or _is_fallback_only(value)
     )
 
@@ -255,6 +294,9 @@ def _strip_obvious_meta_lines(text: str) -> str:
             kept.append(line)
             continue
         if any(marker in low for marker in _META_REASONING_MARKERS):
+            continue
+        # 草稿结构标签行(Paragraph 1 final: / Polish: 等)整行删除
+        if _STRUCTURAL_LABEL_RE.match(line.strip()):
             continue
         if re.search(r"^\s*[-*]\s+.*\blit_[a-z0-9_]+\b", line, flags=re.IGNORECASE):
             continue
@@ -1702,13 +1744,29 @@ def write_section_stream(
     yield {"kind": "step", "step": "llm_stream", "status": "start",
            "message": "模型正在思考并流式生成正文"}
     raw_parts: list[str] = []
-    for kind, piece in messages_stream_ex(system=system, user=user, max_tokens=8000, model=model):
-        if kind == "reasoning":
-            yield {"kind": "reasoning", "delta": piece}
-            continue
-        raw_parts.append(piece)
-        yield {"kind": "token", "delta": piece}
+
+    def _pump() -> Generator[dict, None, None]:
+        """单次流式拉取,正文增量累积进 raw_parts。"""
+        raw_parts.clear()
+        for kind, piece in messages_stream_ex(system=system, user=user, max_tokens=8000, model=model):
+            if kind == "reasoning":
+                yield {"kind": "reasoning", "delta": piece}
+                continue
+            raw_parts.append(piece)
+            yield {"kind": "token", "delta": piece}
+
+    for evt in _pump():
+        yield evt
     raw = "".join(raw_parts)
+    if _section_stream_anomaly(raw):
+        # 网关缓冲/推理回声类异常流(2026-11-12 事故:单块 45766 字符的
+        # 系统提示词回声+错位重复流)不可用作正文,整段重新生成一次,
+        # 而不是把废料送进夹注回填与重写链再浪费两轮调用
+        yield {"kind": "step", "step": "llm_stream", "status": "fail",
+               "message": f"检测到异常输出({len(raw)} 字),正在重新生成本章"}
+        for evt in _pump():
+            yield evt
+        raw = "".join(raw_parts)
     yield {"kind": "step", "step": "llm_stream", "status": "ok",
            "seconds": round(time.monotonic() - stream_t0, 1),
            "message": f"正文流式生成完成,共 {len(raw)} 字"}

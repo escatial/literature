@@ -1274,28 +1274,118 @@ def _strip_code_fence(text: str) -> str:
     return t
 
 
+# 英文元推理开口词表。2026-11-12 事故扩容:glm-5.3 经网关调用时把整段
+# 英文自我分析交错写进正文通道(评审42第3章 41 处),词形高度集中在
+# We need / Let's / Potential concern / Polish: 这类草稿过程用语,
+# 旧词表(The user wants me / Let me …)完全漏检。
+_META_CUE_RE = re.compile(
+    r"(?:the user wants me|let me|i need to|actually[,.]|wait [,-]"
+    r"|for citations|key instructions"
+    r"|we need|need (?:answer|maybe|possibly|carefully|perhaps|decide|think|ensure|preserve|output|mention)"
+    r"|let's |potential (?:concern|issue)|questions?\s*[:：]"
+    r"|question (?:whether|is)|the user\b|don't "
+    r"|could (?:include|say|be|maybe|mean|the)|okay[,.]|(?<![a-z])fine\."
+    r"|polish\s*[:：])",
+    re.IGNORECASE,
+)
+# 草稿过程结构标签行(Paragraph N: / Paragraph N final: / Second final: 等),
+# 单独成行或行首标签后接正文两种形态都拦。
+_META_LABEL_LINE_RE = re.compile(
+    r"^\s*(?:paragraph\s*\d+|second|third|fourth|fifth)(?:\s+final)?\s*[:：]\s*"
+    r"|^\s*polish\s*[:：]\s*",
+    re.IGNORECASE,
+)
+# 整块丢弃的标签头(纯推敲清单);Paragraph N:/Second final: 引导的是草稿块,
+# 去标签保留中文草稿体,不整块丢。
+_META_MUSING_HEAD_RE = re.compile(
+    r"^\s*(?:polish|potential\s+(?:concern|issue)|questions?)\s*[:：]",
+    re.IGNORECASE,
+)
+_META_DRAFT_LABEL_HEAD_RE = re.compile(
+    r"^\s*(?:paragraph\s*\d+|second|third|fourth|fifth)(?:\s+final)?\s*[:：]",
+    re.IGNORECASE,
+)
+
+
+def _block_is_meta_reasoning(block: str) -> bool:
+    """段落是否为英文元推理块(英语主导 + 开口词命中,或纯推敲标签开头)。"""
+    first_line = block.split("\n", 1)[0].strip()
+    if _META_MUSING_HEAD_RE.match(first_line):
+        return True
+    # 引号开头的块是候选句推敲(『"中文候选句" More precise/Maybe…』),
+    # 正文段落不会以引号开头;仅在交错剥离已触发(≥3 推理块)时被整块丢弃
+    if first_line.startswith('"'):
+        return True
+    en = len(re.findall(r"[A-Za-z]", block))
+    zh = len(re.findall(r"[\u4e00-\u9fff]", block))
+    if not _META_CUE_RE.search(block):
+        return False
+    if zh < 8 and en > 20:
+        # 纯英文推理块
+        return True
+    # 英文主导或短小的英文推敲行(如 Need perhaps mention "真实付款" vs …)
+    return en > 15 and en > zh
+
+
+def _line_is_meta_musing(line: str) -> bool:
+    """块内夹带的英文推敲行(如行尾 Fine./okay. 的分析行)。"""
+    if not line.strip():
+        return False
+    if _META_LABEL_LINE_RE.match(line):
+        return True
+    en = len(re.findall(r"[A-Za-z]", line))
+    zh = len(re.findall(r"[\u4e00-\u9fff]", line))
+    return en > 15 and en > zh and bool(_META_CUE_RE.search(line))
+
+
 def _strip_meta_reasoning_prefix(text: str) -> str:
-    """剥离模型偶发输出的英文自我分析前缀。"""
+    """剥离模型输出中的英文元推理(前缀与交错两种形态)。
+
+    2026-11-12 事故:重写/润色调用的返回里,英文推理与中文正文块交错出现
+    (评审42第3章 41 处),旧实现只处理"前缀在中文之前"一种形态,且 cue
+    词表不含 We need/Let's 一族,全部漏检。现升级:
+    - 交错形态:全文 ≥3 个英文元推理块且存在中文正文块 → 剥离全部元推理
+      块及结构标签行(Paragraph N final: 等),保留中文正文块;
+    - 前缀形态(回退):首个中文块之前的英文推理块整体剥离。
+    中文正文块是唯一可信主体;单块或无 cue 时原样返回,避免误伤正常输出。
+    """
     if not text:
         return text
-    head = text[:400]
-    if not re.search(
-        r"The user wants me|Let me|I need to|Actually,|Wait -|For citations|Key instructions",
-        head,
-        re.IGNORECASE,
-    ):
-        return text
-
     blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
     if len(blocks) < 2:
         return text
 
-    start_idx = None
-    for i, block in enumerate(blocks):
-        chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", block))
-        if chinese_chars >= 20:
-            start_idx = i
-            break
-    if start_idx is None or start_idx == 0:
+    meta_idx = {i for i, b in enumerate(blocks) if _block_is_meta_reasoning(b)}
+    zh_idx = [
+        i for i, b in enumerate(blocks)
+        if i not in meta_idx and len(re.findall(r"[\u4e00-\u9fff]", b)) >= 20
+    ]
+
+    if len(meta_idx) >= 3 and zh_idx:
+        kept = []
+        for i, b in enumerate(blocks):
+            if i in meta_idx:
+                continue
+            if _META_DRAFT_LABEL_HEAD_RE.match(b.split("\n", 1)[0].strip()):
+                # Paragraph N:/Second final: 引导的草稿块:去标签保留中文草稿体
+                b = "\n".join(
+                    _META_LABEL_LINE_RE.sub("", ln) for ln in b.split("\n")
+                )
+            b = "\n".join(
+                ln for ln in b.split("\n") if not _line_is_meta_musing(ln)
+            ).strip()
+            if not b:
+                continue
+            if b.startswith('"'):
+                # 引号开头的块体是候选句推敲,不是成稿正文
+                continue
+            kept.append(b)
+        if kept:
+            return "\n\n".join(kept)
+
+    head = text[:400]
+    if not _META_CUE_RE.search(head):
         return text
-    return "\n\n".join(blocks[start_idx:]).strip()
+    if not zh_idx or zh_idx[0] == 0:
+        return text
+    return "\n\n".join(blocks[zh_idx[0]:]).strip()
