@@ -950,6 +950,61 @@ def _pool_dominant_language(papers) -> str:
     return "zh" if cjk_titles / titled >= 0.5 else "en"
 
 
+def _sanitize_axes_quality(axes: list[Group], cap: int) -> list[Group]:
+    """定轴产物质量闸门(2026-11-11「可持续替代蛋白...」事故):
+
+    模型/散文抢救产出的轴清单常有三类缺陷,任一进入归组都会引发
+    覆盖率崩盘(模型分不清近重复轴 → 正文通道元推理 → 覆盖 9/90):
+    1. 轴名带截断符("可持续替代蛋白...");
+    2. 近重复轴(bigram 相似度 ≥0.5 的双胞胎轴);
+    3. 轴数超上限(提示说 2-6,模型给 8)。
+    确定性修复:剥截断符 → 近重复合并(保留信息量更大者) → 超上限时
+    最小轴并入最相似轴,直到 ≤ cap。纯确定性,零 LLM 成本。
+    """
+    cleaned: list[Group] = []
+    for a in axes:
+        name = (a.name or "").strip()
+        name = _re.sub(r"[.…・·]{2,}$", "", name).strip()
+        name = _re.sub(r"\.{3,}$", "", name).strip()
+        if not name:
+            continue
+        cleaned.append(Group(name=name, lit_ids=list(a.lit_ids),
+                             research_question=a.research_question))
+
+    deduped: list[Group] = []
+    for a in cleaned:
+        target = None
+        for b in deduped:
+            if _title_similarity(a.name, b.name) >= 0.5:
+                target = b
+                break
+        if target is None:
+            deduped.append(a)
+            continue
+        # 近重复:保留更长的名字,研究问题并入(供归组参考)
+        if len(a.name) > len(target.name):
+            target.name, a.name = a.name, target.name
+        if not target.research_question and a.research_question:
+            target.research_question = a.research_question
+
+    while len(deduped) > max(2, cap):
+        deduped.sort(key=lambda g: len(g.name))
+        small = deduped[0]
+        best_i, best_score = 1, -1.0
+        for i, other in enumerate(deduped[1:], start=1):
+            score = _title_similarity(small.name, other.name)
+            if score > best_score:
+                best_i, best_score = i, score
+        big = deduped[best_i]
+        if len(small.name) > len(big.name):
+            big.name, small.name = small.name, big.name
+        if not big.research_question and small.research_question:
+            big.research_question = small.research_question
+        deduped.pop(0)
+
+    return deduped
+
+
 def _theme_min_papers() -> int:
     """单个主题的最低文献数(用户规则:15 篇才足以支撑一个可写主题)。
 
@@ -2845,6 +2900,17 @@ def classify_by_theme(
             abstract_limit=abstract_limit, progress=progress,
             notes_out=notes_box,
         )
+        # J1 质量闸门(2026-11-11):散文抢救出的轴清单可能有截断名/
+        # 近重复轴/超上限轴 —— 不清洗直接归组,模型分不清轴 → 覆盖崩盘。
+        gate_cap = max(2, min(8, len(papers) // max(1, _theme_min_papers())))
+        axes = _sanitize_axes_quality(axes, gate_cap)
+        if progress:
+            progress({
+                "kind": "axis_quality_gate",
+                "themes": [a.name for a in axes],
+                "message": f"主题轴质量检查完成,共 {len(axes)} 个轴:"
+                + "、".join(a.name for a in axes),
+            })
         groups = _assign_papers_to_axes(
             papers, axes, topic,
             abstract_limit=abstract_limit, progress=progress,
