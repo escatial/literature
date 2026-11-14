@@ -136,6 +136,27 @@ npm install
 npm run dev                 # Vite 开发服务器(127.0.0.1:5174,自动托管后端进程)
 ```
 
+### 3.1 知网 Cookie 录入(中文检索必需)
+
+中文文献检索(知网)需要浏览器会话 cookie;程序无法凭空生成
+`Ecp_ClientId / KNS2COOKIE`(页面 JS 生成,匿名会话会被知网降权,
+搜索只回空页)。录入向导:
+
+```bash
+cd backend
+PYTHONPATH=src python -m automation.cnki.crawler --setup-cookies
+```
+
+向导步骤(照提示操作):
+1. 浏览器打开 https://kns.cnki.net/kns8s/AdvSearch 并登录;
+2. F12 → Network → 触发一次搜索;
+3. 找到任意请求 → 右键 Copy → Copy as cURL (bash);
+4. 从 cURL 的 `-b '...'` 里复制整段 cookie 字符串粘贴回车。
+
+须包含 `KNS2COOKIE` 与 `Ecp_ClientId` 两个核心字段;保存位置
+`backend/src/automation/cnki/data/cookies.json`,过期重跑同一命令刷新
+(爬虫运行中检测到失效也会尝试自动续期)。
+
 ## 4. 测试
 
 ```bash
