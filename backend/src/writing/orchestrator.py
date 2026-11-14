@@ -896,6 +896,11 @@ def _screen_papers(
 
     log.info("中文文献不足，自动检索补充 %d 篇", missing_chinese)
     added = _retrieve_chinese_papers(topic, missing_chinese)
+    if not added:
+        # 补充 0 篇(CNKI 降级/风控):merged 与输入完全相同,复用已有 decisions
+        # 直接进配额——零补充场景整池重筛是纯浪费(2026-11-14 实测 957 篇
+        # 白筛第二遍 ~15 分钟)。
+        return _apply_relevance_quota(topic, papers, kept_papers, decisions)
     by_id = {paper.lit_id: paper for paper in papers}
     for paper in added:
         by_id.setdefault(paper.lit_id, paper)
@@ -1023,6 +1028,10 @@ def _screen_papers_stream(
         "message": f"中文文献比例不足，正在自动补充至少 {missing_chinese} 篇中文文献...",
     }
     added = _retrieve_chinese_papers(topic, missing_chinese)
+    if not added:
+        # 补充 0 篇(CNKI 降级/风控):流式路径同样短路,复用主筛 decisions,
+        # 不对同一批文献重跑一遍筛选(2026-11-14 实测浪费 ~15 分钟)
+        return _apply_relevance_quota(topic, papers, kept_papers, decisions)
     by_id = {paper.lit_id: paper for paper in papers}
     for paper in added:
         by_id.setdefault(paper.lit_id, paper)

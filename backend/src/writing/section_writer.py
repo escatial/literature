@@ -1391,6 +1391,9 @@ def _repair_section_draft(
 
 _OUTLINE_SYSTEM = (
     "你是学术文献综述的结构规划专家。为综述章节设计段落级论证大纲。\n"
+    "【输出纪律】直接输出一个 JSON 对象,禁止复述任务说明/文献清单/要求,\n"
+    "禁止任何英文解释或开场白;第一个字符必须是 {,最后一个字符必须是 }。\n"
+    "JSON 的键名用英文(paragraphs/claim/lit_ids/relation),但所有键值内容一律中文。\n"
     "只输出严格 JSON 对象,格式:\n"
     '{"paragraphs":[{"claim":"本段论点句(一句完整中文陈述)",'
     '"lit_ids":["lit_xxx", ...],"relation":"consensus|controversy|evolution|gap"}]}\n'
@@ -1543,7 +1546,32 @@ def _write_paragraph_text(
         user="\n\n".join(parts),
         max_tokens=1500,
     )
-    return normalize_model_output(raw).strip()
+    # 2026-11-14 事故加固(job3 实测):单段输出把英文自我分析与中文正文
+    # 写进同一块,normalize 的交错剥离(≥2 块才触发)拦不住 → 拼装后被
+    # _looks_like_non_article 整章误拦 → 回退单稿 0 引用 → 诚实熔断。
+    # 段落级双重防线:meta 行剥离 + 非正文判据命中即定向重写一次。
+    text = _strip_obvious_meta_lines(normalize_model_output(raw)).strip()
+    if text and _looks_like_non_article(text):
+        try:
+            retry_raw = messages_create(
+                system=_OUTLINE_PARA_SYSTEM,
+                user=(
+                    f"章节标题:{section.title}(综述主题:{topic})\n"
+                    f"本段论点:{piece.get('claim', '')}\n"
+                    "你上一版混入了英文内部推理/自我分析,严禁输出任何英文推理,"
+                    "只输出纯中文正文段落。\n"
+                    f"【上一版】\n{text[:1500]}\n\n只输出修正后的该段正文。"
+                ),
+                max_tokens=1500,
+            )
+            retried = _strip_obvious_meta_lines(
+                normalize_model_output(retry_raw)
+            ).strip()
+            if retried and not _looks_like_non_article(retried):
+                return retried
+        except Exception:  # noqa: BLE001  重写失败保留清洗后的首稿
+            log.warning("段落定向重写失败,保留清洗稿(章节 %s)", section.key)
+    return text
 
 
 # 模型自写的引用占位符(评审41/42 实测 22 处 `[...]` 悬空):
@@ -1676,6 +1704,10 @@ def _write_section_via_outline(
     content = "\n\n".join(
         para_results[i] for i in range(len(outline)) if para_results.get(i)
     )
+    # 拼装级清洗:跨段交错剥离(meta 块≥3 触发)+ 占位符清除,
+    # 交付给夹注回填/核查链前把草稿过程残留清干净(job3 实测加固)
+    content = normalize_model_output(content)
+    content, _ph = _strip_citation_placeholders(content)
     return content, required
 
 
