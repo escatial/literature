@@ -8,6 +8,7 @@ import json as _json
 import logging
 import difflib
 import math
+import uuid
 import os
 import re as _re
 import time
@@ -1149,11 +1150,27 @@ def _split_group_balanced(
             base_name = f"{base[:12]}·第{j + 1}部分"
             name = base_name
             counter = 2
-            while _group_name_conflicts(name, used_names) or not _group_name_acceptable(
-                name, pool_language=_pool_dominant_language(papers),
-            ):
+            # 2026-11-14 无界循环修复:包容式冲突规则下,base 被占用后任何
+            # "base(n)" 扩展名都含 base → 永远冲突 → 死循环(test_classifier
+            # 120 篇语义大簇拆分实测挂死)。迭代上界 + 换引导词族 + uuid 兜底。
+            for _ in range(50):
+                if not (_group_name_conflicts(name, used_names) or not _group_name_acceptable(
+                    name, pool_language=_pool_dominant_language(papers),
+                )):
+                    break
                 name = f"{base_name}({counter})"
                 counter += 1
+            else:
+                stem = f"拆分主题{j + 1}组"
+                for c in range(2, 60):
+                    cand = stem if c == 2 else f"{stem}{c}"
+                    if not (_group_name_conflicts(cand, used_names) or not _group_name_acceptable(
+                        cand, pool_language=_pool_dominant_language(papers),
+                    )):
+                        name = cand
+                        break
+                else:
+                    name = f"拆分主题{j + 1}组{uuid.uuid4().hex[:6]}"
         payload.name = name
         used_names.add(name)
         parts.append(payload)
