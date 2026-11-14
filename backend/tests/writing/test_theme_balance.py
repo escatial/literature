@@ -67,8 +67,12 @@ def test_balance_splits_oversize_group_without_losing_papers():
     )
 
 
-def test_balance_keeps_majority_theme_up_to_half():
-    """证据密集的真主题(45%)不再被强拆 —— 35% 时代会肢解完整主题。"""
+def test_balance_splits_over_fixed_cap_majority():
+    """2026-11-14 设计变更:大组上限从「池子一半」收紧为固定 25
+    (WRITING_THEME_MAX_PAPERS)。旧契约「未过半不拆」作废——引用目标已改为
+    大纲分配(claim-driven, cap 16),不再随池规模膨胀,但超大组仍会让确认
+    面板失去粒度、单章候选文献过载。45 篇组拆到 ≤25,25 篇组不动,覆盖不变。
+    """
     papers = [
         _paper(i, f"水产品市场营销策略分析{i % 20}:渠道与消费行为研究")
         for i in range(1, 46)
@@ -87,9 +91,12 @@ def test_balance_keeps_majority_theme_up_to_half():
         clf.Group(name="消费行为研究", lit_ids=[p.lit_id for p in papers[75:]]),
     ]
     balanced = clf._balance_oversize_groups(papers, groups, "水产品营销策略")
-    assert [g.name for g in balanced] == [g.name for g in groups], (
-        "未过半的主题不应被拆分"
-    )
+    sizes = [len(g.lit_ids) for g in balanced]
+    assert max(sizes) <= 25, f"超过固定上限的组必须被拆分: {sizes}"
+    assert sum(sizes) == 100, "拆分不得丢文献"
+    # 未超上限的组(25 篇)保持原名原样
+    kept = [g for g in balanced if g.name == "消费行为研究"]
+    assert kept and len(kept[0].lit_ids) == 25
 
 
 def test_balance_keeps_reasonable_groups_untouched():
