@@ -30,7 +30,10 @@ endpoints:
   base: "https://kns.cnki.net"
   search: "https://kns.cnki.net/kns8s/brief/grid"
   adv_search: "https://kns.cnki.net/kns8s/AdvSearch"
-  verify_api: "https://kns.cnki.net/verify-api/web"
+  # 2026-11-14 实测修复:CNKI 已把验证码 API 从 /verify-api/web/{get,check} 迁到
+  # /verify-api/{get,check}(旧路径 404 HTML → 滑块流程 json 解析崩溃 →
+  # "滑块验证码连续 6 次处理失败" 熔断)。/verify-api/get 返回 200 JSON 已验证。
+  verify_api: "https://kns.cnki.net/verify-api"
   verify_home: "https://kns.cnki.net/verify/home"
 
 # ---------- HTTP 客户端伪装 ----------

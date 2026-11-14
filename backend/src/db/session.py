@@ -437,11 +437,14 @@ def _mig_purge_dirty_papers(conn: _Connection) -> None:
 # owner_user_id 列会直接炸(重排时对真实存量库拷贝实测暴露,B6 起潜伏)。
 def _mig_users_fast_llm_columns(conn: _Connection) -> None:
     """v9.12:users 补快模型四列(2026-11-14 分级路由)。留空=回落主档。"""
+    # 注意 _ensure_columns 的实际约定:DDL 片段自带列名(键仅用于存在性
+    # 检查,f-string 只拼 {ddl})——v4.1 "events": "events JSON DEFAULT '[]'"
+    # 即此形态;按 docstring 只传类型会产出缺列名的 ALTER 而炸。
     _ensure_columns(conn, "users", {
-        "fast_kind": "VARCHAR(16) DEFAULT ''",
-        "fast_base_url": "VARCHAR(500) DEFAULT ''",
-        "fast_api_key": "TEXT DEFAULT ''",
-        "fast_model": "VARCHAR(200) DEFAULT ''",
+        "fast_kind": "fast_kind VARCHAR(16) DEFAULT ''",
+        "fast_base_url": "fast_base_url VARCHAR(500) DEFAULT ''",
+        "fast_api_key": "fast_api_key TEXT DEFAULT ''",
+        "fast_model": "fast_model VARCHAR(200) DEFAULT ''",
     })
     conn.commit()
 

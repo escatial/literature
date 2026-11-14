@@ -78,7 +78,11 @@ def test_90_paper_pool_uses_global_axis_planning(monkeypatch):
     """>=30 篇走两遍式:第一遍全局定轴,第二遍按固定轴归组,一篇不丢。"""
     papers = _papers(90)
     progress_events: list[dict] = []
-    axis_names = ["协同主题", "绩效主题", "转型主题"]
+    # 2026-11-14 大组拆分上限收紧到 25(WRITING_THEME_MAX_PAPERS):
+    # 90 篇 / 3 轴 = 30 篇/组会触发拆分(该行为由 test_conditional_polish
+    # 的 TestOversizeCap 专门守护);本测试验证的是两遍式路径与轴名逐字
+    # 对应,故用 4 轴 × ~23 篇保持"轴名=组名"不变量。
+    axis_names = ["协同主题", "绩效主题", "转型主题", "数字化主题"]
 
     monkeypatch.setattr(
         clf, "messages_create",
@@ -92,8 +96,8 @@ def test_90_paper_pool_uses_global_axis_planning(monkeypatch):
     # 旧分块路径必须彻底退场:不再有块级自造主题与跨块合并事件。
     assert "chunk_started" not in kinds
     assert "merge_candidates" not in kinds
-    # 归组结果与主题轴一一对应(逐字使用轴名),覆盖一篇不丢。
-    assert [g.name for g in groups] == axis_names
+    # 归组结果与主题轴一一对应(逐字使用轴名;组序按规模重排,比集合),覆盖一篇不丢。
+    assert {g.name for g in groups} == set(axis_names)
     covered = {lid for g in groups for lid in g.lit_ids}
     assert covered == {p.lit_id for p in papers}
     # 主题轴的 research_question 锚定到最终分组,供确认面板展示。

@@ -948,6 +948,13 @@ async def run_cnki_full_auto(
                 log.exception("[cnki] 监控任务终态登记失败")
 
     def _run_sync_inner() -> tuple[int, int]:
+        # 冷启动热身(2026-11-14 全流程实测):cookies.json 缺失时裸会话的
+        # 首个检索请求即被知网 403 拦进滑块,而滑块流程内部依赖 Ecp_ClientId
+        # 构造签名 → 连续 6 次失败熔断,检索必死。refresh_cookies 访首页/
+        # 检索页拿 KNS2COOKIE 等指纹 cookie 并落盘,绕开这个死锁;失败只告警,
+        # 交给既有验证码链路兜底(与「cookie 过期自愈」同一机制)。
+        if not crawler.COOKIES.get("Ecp_ClientId"):
+            crawler.refresh_cookies("冷启动无 cookie,自动续期")
         per_query_count = target_count if max_count is None else min(max_count, target_count)
 
         def fetcher(query: str) -> list[dict]:
