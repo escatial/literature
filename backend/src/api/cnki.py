@@ -13,7 +13,7 @@ import threading
 from typing import AsyncIterator
 from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -125,6 +125,62 @@ class CnkiStartResponse(BaseModel):
 def _schedule(coro) -> object:
     """把**已构造的协程**排入后台任务。"""
     return asyncio.create_task(coro)
+
+
+# ---- Cookie 在线录入(2026-11-14:监控页集成,替代 CLI --setup-cookies) ----
+
+class CnkiCookieIn(BaseModel):
+    """粘贴内容:整条 cURL 命令(取 -b/--cookie)或纯 cookie 头串。"""
+    payload: str = Field(..., min_length=1)
+
+
+@router.get("/cnki/cookies/status")
+def cnki_cookies_status():
+    """当前 cookie 状态(无网络请求,状态卡片轮询用)。"""
+    try:
+        from automation.cnki.crawler import cookie_status
+        return cookie_status()
+    except ImportError:
+        from src.automation.cnki.crawler import cookie_status
+        return cookie_status()
+
+
+@router.post("/cnki/cookies")
+def cnki_cookies_save(req: CnkiCookieIn, request: Request):
+    """解析粘贴内容 → 热应用到运行中爬虫会话并落盘 → 真实可用性探测。
+
+    验证=check_cookies:轻量 GET 高级检索页,识别登录重定向/拦截页,
+    不触发搜索、不扣题分。返回 applied/missing_required/verified,
+    前端据此展示成功或给出缺什么/需重新登录的明确指引。
+    """
+    from automation.cnki.crawler import (  # 与面板/adapter 同源单例
+        apply_cookies, check_cookies, cookie_status, parse_cookie_payload,
+    )
+
+    cookies = parse_cookie_payload(req.payload)
+    if not cookies:
+        raise HTTPException(400, "未能从粘贴内容解析出任何 cookie:请粘贴整条 cURL 命令或形如 K=V;K=V 的 cookie 串")
+    # 缺核心字段直接拒绝,不应用不落盘(与 CLI 向导同语义;
+    # 否则垃圾字段会污染 cookies.json 且用户误以为已修好)
+    missing = [r for r in ("KNS2COOKIE", "Ecp_ClientId") if r not in cookies]
+    if missing:
+        raise HTTPException(
+            400,
+            f"缺少必需 cookie 字段: {', '.join(missing)}。"
+            "请在浏览器登录知网后,从 F12 → Network 任意请求 Copy as cURL 后整段粘贴。",
+        )
+    result = apply_cookies(cookies)
+    try:
+        ok = check_cookies()
+    except Exception as exc:  # noqa: BLE001  探测网络故障不吞已应用事实
+        return {**result, "verified": False,
+                "verify_detail": f"已应用 {result['count']} 枚,但可用性探测失败: {exc}"}
+    return {
+        **result,
+        "verified": bool(ok),
+        "verify_detail": "已应用并验证通过,任务即刻可用" if ok
+        else "cookie 已应用但验证未通过(可能已过期/被重定向到登录),请重新复制最新 cookie",
+    }
 
 
 @router.post("/cnki/start", response_model=CnkiStartResponse)

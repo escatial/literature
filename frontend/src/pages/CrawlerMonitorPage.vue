@@ -35,6 +35,7 @@ import {
   updateCrawlerTaskParams,
 } from '@/api/crawlerAdmin';
 import { authApi, type AuthUser, type LLMProfile } from '@/api/auth';
+import { cnkiCookieApi, type CnkiCookieStatus } from '@/api/crawlerAdmin';
 import { useAuthStore } from '@/stores/auth';
 import { useLlmProfilesStore } from '@/stores/llmProfiles';
 import type {
@@ -136,6 +137,51 @@ const clearFast = async () => {
     savingFast.value = false;
   }
 };
+
+// ─── 知网 Cookie 在线录入(爬虫监控页):粘贴 → 服务端验证 → 热应用 ──
+const cookieStatus = ref<CnkiCookieStatus | null>(null);
+const cookiePayload = ref('');
+const cookieSaving = ref(false);
+const cookieLoading = ref(false);
+const cookieVerified = ref(false);
+const cookieVerifyDetail = ref('');
+
+const cookieOk = computed(
+  () => !!cookieStatus.value
+    && cookieStatus.value.has_kns2cookie
+    && cookieStatus.value.has_ecp_client_id,
+);
+
+const loadCookieStatus = async () => {
+  cookieLoading.value = true;
+  try {
+    const { data } = await cnkiCookieApi.status();
+    cookieStatus.value = data;
+  } catch {
+    /* 拦截器已弹错;状态卡片保持静默 */
+  } finally {
+    cookieLoading.value = false;
+  }
+};
+
+const saveCnkiCookie = async () => {
+  cookieSaving.value = true;
+  try {
+    const { data } = await cnkiCookieApi.save(cookiePayload.value.trim());
+    cookieVerified.value = data.verified;
+    cookieVerifyDetail.value = data.verify_detail;
+    if (data.applied) {
+      cookiePayload.value = '';
+      await loadCookieStatus();
+    }
+  } catch (e) {
+    cookieVerified.value = false;
+    cookieVerifyDetail.value = '保存失败:请检查粘贴内容与网络';
+  } finally {
+    cookieSaving.value = false;
+  }
+};
+onMounted(loadCookieStatus);
 
 /** 删除配置(二次确认)。*/
 const doRemoveProfile = async (p: LLMProfile) => {
@@ -389,6 +435,37 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
           <el-button :loading="loading" @click="loadAll">手动刷新</el-button>
           <el-button type="danger" plain @click="stopEverything">停止全部任务</el-button>
         </div>
+
+        <!-- 知网 Cookie:中文检索凭证,粘贴后服务端即时验证并热应用 -->
+        <el-card shadow="never" class="cnki-cookie-card">
+          <template #header>
+            <div class="llm-list-head">
+              <span class="card-head">
+                知网 Cookie(中文检索凭证)
+                <el-tag v-if="cookieOk" type="success" size="small" class="llm-active-tag">可用</el-tag>
+                <el-tag v-else-if="cookieStatus && cookieStatus.exists" type="warning" size="small" class="llm-active-tag">待验证/缺字段</el-tag>
+                <el-tag v-else type="danger" size="small" class="llm-active-tag">未录入</el-tag>
+              </span>
+              <el-button size="small" :loading="cookieLoading" @click="loadCookieStatus">刷新状态</el-button>
+            </div>
+          </template>
+          <div class="tab-hint llm-hint">
+            中文文献检索(知网)需要浏览器会话 cookie;匿名会话会被知网降权,搜索只回空页。
+            粘贴整条 cURL 命令(Copy as cURL)或 cookie 字符串均可,保存后服务端即时验证并热应用到运行中的爬虫会话,无需重启。
+            须包含 KNS2COOKIE 与 Ecp_ClientId 两个核心字段。
+          </div>
+          <el-input
+            v-model="cookiePayload"
+            type="textarea" :rows="3"
+            :disabled="cookieSaving"
+            placeholder='粘贴整条 cURL 命令(浏览器 F12 → Network → 任意请求右键 Copy as cURL)或 "KNS2COOKIE=...; Ecp_ClientId=..."'
+            class="cnki-cookie-input"
+          />
+          <div class="cnki-cookie-actions">
+            <el-button type="primary" :loading="cookieSaving" :disabled="!cookiePayload.trim()" @click="saveCnkiCookie">保存并验证</el-button>
+            <span v-if="cookieVerifyDetail" :class="cookieVerified ? 'cnki-verify-ok' : 'cnki-verify-fail'">{{ cookieVerifyDetail }}</span>
+          </div>
+        </el-card>
 
     <!-- 任务概览:账目式六栏 -->
     <div v-if="stats" class="stat-row">
@@ -1059,5 +1136,25 @@ h4 {
 h4::before {
   content: '· ';
   color: var(--cinnabar);
+}
+.cnki-cookie-card {
+  margin-bottom: 16px;
+}
+.cnki-cookie-input {
+  margin-top: 8px;
+}
+.cnki-cookie-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cnki-verify-ok {
+  color: var(--el-color-success);
+  font-size: 13px;
+}
+.cnki-verify-fail {
+  color: var(--el-color-danger);
+  font-size: 13px;
 }
 </style>

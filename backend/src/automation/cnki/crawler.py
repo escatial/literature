@@ -2678,6 +2678,69 @@ def cmd_setup_cookies():
     return True
 
 
+# ========================== Cookie 在线录入(2026-11-14 API 集成) ==========================
+
+def parse_cookie_payload(raw: str) -> dict:
+    """解析粘贴内容:cURL 命令(-b/--cookie,单双引号)或纯 cookie 头串 → {k:v}。
+
+    支持监控页「粘贴整条 cURL 命令」的场景:命令里其它 flag 一律忽略,
+    只取 -b/--cookie 的值;纯 cookie 串按分号切 k=v 并对值做 URL 解码
+    (与 cmd_setup_cookies 同语义)。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    m = re.search(r'(?:-b|--cookie)\s+(?:\$?\'([^\']*)\'|"([^"]*)")', raw)
+    if m:
+        raw = (m.group(1) or m.group(2) or "").strip()
+    cookies: dict[str, str] = {}
+    for part in raw.split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        k, _, v = part.partition("=")
+        k = k.strip()
+        v = unquote(v.strip())
+        if k:
+            cookies[k] = v
+    return cookies
+
+
+def apply_cookies(cookies: dict) -> dict:
+    """热应用到运行中会话并落盘,返回应用摘要。
+
+    - session.cookies 与模块级 COOKIES 同步更新(下一次任务即刻生效,
+      无需重启后端);
+    - 落盘 cookies.json(重启后自动加载,语义与 cmd_setup_cookies 一致);
+    - 返回 missing_required 供调用方向用户明确提示缺什么。
+    """
+    required = ["KNS2COOKIE", "Ecp_ClientId"]
+    missing = [r for r in required if r not in cookies]
+    if cookies:
+        global COOKIES
+        domain = CONFIG["endpoints"]["base"].replace("https://", "")
+        for k, v in cookies.items():
+            session.cookies.set(k, v, domain=domain)
+        COOKIES.update(cookies)
+        save_cookies(session.cookies.get_dict(), CONFIG["paths"]["cookies_file"])
+    return {"applied": bool(cookies), "count": len(cookies), "missing_required": missing}
+
+
+def cookie_status() -> dict:
+    """当前 cookie 状态(无网络请求,供状态卡片轮询)。"""
+    present = sorted(COOKIES.keys())
+    missing = [r for r in ("KNS2COOKIE", "Ecp_ClientId") if r not in COOKIES]
+    path = CONFIG["paths"]["cookies_file"]
+    return {
+        "exists": bool(present) or os.path.exists(path),
+        "count": len(present),
+        "has_kns2cookie": "KNS2COOKIE" in COOKIES,
+        "has_ecp_client_id": "Ecp_ClientId" in COOKIES,
+        "missing_required": missing,
+        "fields": present,
+    }
+
+
 # ========================== cookie 有效性检查 ==========================
 # 知网拦截页强特征（登录页 / 安全验证页）。判定必须配合页面尺寸，避免误伤正常页面
 # （正常详情页/列表页通常 >100KB，拦截页仅几 KB）

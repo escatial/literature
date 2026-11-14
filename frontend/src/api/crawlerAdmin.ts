@@ -1,6 +1,31 @@
 /** 爬虫运维管理 API 客户端(对应后端 /api/crawler/*,见 backend/src/api/crawler_admin.py)。*/
 import { http } from './http';
 
+// ─── 知网 Cookie 在线录入(2026-11-14:监控页集成,替代 CLI --setup-cookies) ───
+
+export interface CnkiCookieStatus {
+  exists: boolean;
+  count: number;
+  has_kns2cookie: boolean;
+  has_ecp_client_id: boolean;
+  missing_required: string[];
+  fields: string[];
+}
+
+export interface CnkiCookieSaveResult {
+  applied: boolean;
+  count: number;
+  missing_required: string[];
+  verified: boolean;
+  verify_detail: string;
+}
+
+export const cnkiCookieApi = {
+  status: () => http.get<CnkiCookieStatus>('/cnki/cookies/status'),
+  save: (payload: string) =>
+    http.post<CnkiCookieSaveResult>('/cnki/cookies', { payload }),
+};
+
 // ─── 类型(与后端各子系统 snapshot 字段一一对应) ────────────────
 
 export type CrawlerTaskStatus = 'queued' | 'running' | 'done' | 'stopped' | 'failed';
