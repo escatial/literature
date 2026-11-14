@@ -98,11 +98,19 @@ def normalize_cnki_query(query: str) -> str:
     body = re.sub(r"'+", "'", body)
     body = body.strip()
 
-    # 单组式(无 *)= 全库 OR 大杂烩,知网会忠实返回海量无关文献,
-    # 必须至少 2 组概念交叉。2026-08-29 事故实证:缺此校验时一次检索
-    # 返回 165 篇全领域文献,0 篇与主题交叉相关。
-    if "*" not in body:
-        raise ValueError(f"知网检索式必须至少 2 组概念交叉(含 *): {query}")
+    # 概念约束校验(2026-11-15 实测修订):
+    # - 旧规则「必须含 *」已失效:知网接口当前对一切 * AND 交叉式系统性
+    #   返回空页(实测:SU='油气储运'*SU='海上' / SU=('油气外输'+'油气储运')*SU='海上'
+    #   等 8 种组合全部空页;而 SU='油气外输'、SU=('油气外输'+'油气储运') 均正常
+    #   返回结果页)。AND 强制只会产出 0 结果任务。
+    # - 新规则:必须含「括号 OR 组合」(*A'*+'B'*)——单引号词组 ≥2 且以
+    #   括号组合或 * 交叉呈现,保证式子是多概念约束而非裸单词;纯裸单词
+    #   (如 SU='人工智能')仍拒(2026-08-29 全库大杂烩事故的防范保留)。
+    if "*" not in body and not re.search(r"\([^)]*'[^']+'\s*\+\s*'[^']+'[^)]*\)", body):
+        raise ValueError(
+            f"知网检索式须为多概念组合:括号 OR 组合 SU=('A'+'B') 或 * 交叉。实测 * 交叉当前返回空页,"
+            f"推荐括号 OR 形式;裸单词式无效: {query}"
+        )
 
     return f"SU={body}"
 
@@ -237,7 +245,9 @@ def plan_query_strings(topic: str, year: int | None = None) -> dict:
                 # 之前 4000 时 deepseek-v4-flash 偶尔在数组第 N 项字符串里被截断,
                 # 导致所有 3 个数据库列表都只能解析到前 2-3 项。
                 # 升到 8000 给足 buffer,并随 attempt 递增以应对偶发长尾。
-                max_tokens=(6000, 8000, 8000)[attempt],
+                # 2026-11-15:glm-5.3 思考模型 reasoning 会计入 max_tokens,
+                # 8000 时 JSON 系统性截断(3 次重试全挂,实测);提到 16k 给足。
+                max_tokens=(12000, 16000, 16000)[attempt],
                 temperature=(0.3, 0.5, 0.7)[attempt],
                 # MiniMax-M3 是深度推理模型:实测本步骤 reasoning tokens ~6900,
                 # 端到端 60~90s。之前 25s(防 ChatGLM 不可达)必定超时 → 3 次重试
