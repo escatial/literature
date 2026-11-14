@@ -40,6 +40,12 @@ class LLMConfigIn(BaseModel):
     llm_api_key: str = ""
     llm_model: str = ""
 
+    # 快模型档(2026-11-14 分级路由):全部留空 = 清除快档(回落主档)。
+    fast_kind: str = ""
+    fast_base_url: str = ""
+    fast_api_key: str = ""   # 空 = 保持现有快档 key 不变
+    fast_model: str = ""
+
 
 class ModelsProbeIn(BaseModel):
     llm_kind: str = "openai"
@@ -181,6 +187,21 @@ def save_llm_config(req: LLMConfigIn, request: Request) -> dict:
         if req.llm_api_key.strip():
             row.llm_api_key = req.llm_api_key.strip()
         row.llm_model = req.llm_model.strip()
+        # 快档:base_url 给了就整体更新;三要素齐空才清除(留 key 保配置)。
+        fast_base = (req.fast_base_url or "").strip()
+        fast_model = (req.fast_model or "").strip()
+        fast_key_given = bool((req.fast_api_key or "").strip())
+        if fast_base and fast_model:
+            row.fast_kind = (req.fast_kind or "openai").strip().lower() or "openai"
+            row.fast_base_url = fast_base
+            row.fast_model = fast_model
+            if fast_key_given:
+                row.fast_api_key = req.fast_api_key.strip()
+        elif not fast_base and not fast_model and not fast_key_given:
+            row.fast_kind = ""
+            row.fast_base_url = ""
+            row.fast_api_key = ""
+            row.fast_model = ""
         db.commit()
         db.refresh(row)
         # B5 审计:detail 只记 kind/base_url/model,绝不落 api_key 明文
@@ -192,6 +213,10 @@ def save_llm_config(req: LLMConfigIn, request: Request) -> dict:
                 "llm_base_url": base_url,
                 "llm_model": req.llm_model.strip(),
                 "api_key_changed": bool(req.llm_api_key.strip()),
+                "fast_configured": bool(
+                    (getattr(row, "fast_base_url", "") or "")
+                    and (getattr(row, "fast_model", "") or "")
+                ),
             },
             **_client_meta(request),
         )

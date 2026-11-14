@@ -758,7 +758,10 @@ export interface WritingJobInfo {
   error: string | null;
   req_snapshot?: Record<string, unknown> | null;
   /** J1:规划快照中的主题分组(阶段2失败恢复到确认面板用) */
-  plan_groups?: { name: string; lit_ids: string[] }[] | null;
+  plan_groups?: {
+    name: string; lit_ids: string[];
+    rationale?: { research_question: string; sample_titles: string[] };
+  }[] | null;
   /** J1:快照文献标题(lit_id → title,确认面板预览与移动 UI 用) */
   plan_papers?: { lit_id: string; title: string }[] | null;
 }
@@ -900,6 +903,11 @@ export function buildWritingResponse(
   if (manifest.anchor_leaks > 0) {
     throw new Error(
       `交付异常:正文残留 ${manifest.anchor_leaks} 处未编号引用,已拒绝保存。请重新生成。`,
+    );
+  }
+  if ((manifest.citation_placeholders ?? 0) > 0) {
+    throw new Error(
+      `交付异常:正文残留 ${manifest.citation_placeholders} 处空引用占位符,已拒绝保存。请重新生成。`,
     );
   }
   if (state.sections.length !== manifest.sections.length) {

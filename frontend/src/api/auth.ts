@@ -15,6 +15,11 @@ export interface AuthUser {
   llm_base_url: string;
   llm_api_key_masked: string;
   llm_model: string;
+  /** 快模型档(2026-11-14 分级路由):筛选/核查类短调用走此配置;空 = 回落主档 */
+  fast_kind?: 'openai' | 'anthropic' | string;
+  fast_base_url?: string;
+  fast_api_key_masked?: string;
+  fast_model?: string;
 }
 
 export interface UpstreamModel {
@@ -55,7 +60,10 @@ export const authApi = {
     http.post<{ token: string; user: AuthUser }>('/auth/login', d),
   logout: () => http.post('/auth/logout'),
   me: () => http.get<{ user: AuthUser }>('/auth/me'),
-  saveLlmConfig: (d: { llm_kind: string; llm_base_url: string; llm_api_key: string; llm_model: string }) =>
+  saveLlmConfig: (d: {
+    llm_kind: string; llm_base_url: string; llm_api_key: string; llm_model: string;
+    fast_kind?: string; fast_base_url?: string; fast_api_key?: string; fast_model?: string;
+  }) =>
     http.put<{ user: AuthUser; message: string }>('/auth/llm-config', d),
   probeModels: (d: { llm_kind: string; llm_base_url: string; llm_api_key: string }) =>
     http.post<{ models: UpstreamModel[] }>('/auth/llm-config/models', d),

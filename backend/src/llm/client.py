@@ -253,6 +253,39 @@ def get_runtime_llm() -> dict | None:
     return dict(rt) if rt else None
 
 
+# ---- 快模型运行时覆盖(2026-11-14 分级路由:筛选/核查类调用走快档) ----
+# 与主档互相独立:主档管「写作/规划」的旗舰调用,快档管「筛选/lint/QA
+# 结构检查」的高频短调用。未配置快档时 tier="fast" 的调用自动回落主档,
+# 行为与未引入分级前完全一致。
+_fast_llm_ctx: ContextVar[dict | None] = ContextVar("runtime_llm_fast", default=None)
+
+
+def set_runtime_fast_llm(*, kind: str, base_url: str, api_key: str, model: str):
+    """启用快模型覆盖(当前上下文)。语义同 set_runtime_llm,返回 Token。"""
+    normalized = (kind or "openai").strip().lower()
+    if normalized == "minimax":
+        normalized = "openai"
+    return _fast_llm_ctx.set({
+        "kind": normalized,
+        "base_url": (base_url or "").strip().rstrip("/"),
+        "api_key": (api_key or "").strip(),
+        "model": (model or "").strip(),
+    })
+
+
+def reset_runtime_fast_llm(token) -> None:
+    _fast_llm_ctx.reset(token)
+
+
+def clear_runtime_fast_llm() -> None:
+    _fast_llm_ctx.set(None)
+
+
+def get_runtime_fast_llm() -> dict | None:
+    rt = _fast_llm_ctx.get()
+    return dict(rt) if rt else None
+
+
 def _runtime_llm_active() -> bool:
     rt = _runtime_llm_ctx.get()
     return bool(
@@ -550,6 +583,33 @@ def resolve_provider(provider: str | None = None) -> ResolvedProvider:
     )
 
 
+def _resolve_fast_provider() -> ResolvedProvider | None:
+    """解析快档覆盖;未配置(base_url/api_key/model 任一缺)返回 None。
+
+    校验语义与 resolve_provider 的运行时分支一致(SSRF 兜底),mode 映射同。
+    """
+    rt = get_runtime_fast_llm()
+    if not (rt and rt.get("base_url") and rt.get("api_key") and rt.get("model")):
+        return None
+    normalized_kind = rt.get("kind") or "openai"
+    if normalized_kind == "minimax":
+        normalized_kind = "openai"
+    from security.auth import validate_external_url
+
+    try:
+        validated_base = validate_external_url(rt["base_url"])
+    except ValueError as exc:
+        raise RuntimeError(f"快模型接口地址被拒绝(仅允许公网 http/https): {exc}") from exc
+    return ResolvedProvider(
+        id=f"fast:{normalized_kind}",
+        label="快模型",
+        api_key=rt["api_key"],
+        base_url=validated_base,
+        model=rt["model"],
+        mode="anthropic" if normalized_kind == "anthropic" else "chat",
+    )
+
+
 def _client_key(provider_id: str, timeout: float, api_key: str = "", base_url: str = "") -> str:
     # 缓存键须带 base_url/key 指纹:用户运行时覆盖会切换同一 provider id 的
     # 指向,仅按 id+timeout 缓存会复用旧配置的客户端。
@@ -710,6 +770,7 @@ def messages_stream_ex(
     provider: str | None = None,
     timeout: float | None = None,
     response_format: dict | None = None,
+    tier: str | None = None,
 ) -> Generator[tuple[str, str], None, None]:
     """流式调用 LLM,逐块返回 (kind, text) 二元组。
 
@@ -723,6 +784,31 @@ def messages_stream_ex(
 
     fallback_used: list[str] = []
     last_err: Exception | None = None
+    yielded_any = False
+    # tier="fast":先尝试快档流式;在任何正文产出前失败则继续常规链路。
+    if (tier or "").strip().lower() == "fast":
+        fast = None
+        try:
+            fast = _resolve_fast_provider()
+        except RuntimeError as exc:
+            log.warning("快模型配置不可用,回落主档流式: %s", exc)
+        if fast is not None:
+            try:
+                for kind, piece in _stream_with_resolved(
+                    fast, system=system, user=user,
+                    max_tokens=max_tokens, model=fast.model,
+                    temperature=temperature, timeout=timeout,
+                    response_format=response_format,
+                ):
+                    if kind == "content":
+                        yielded_any = True
+                    yield kind, piece
+                return
+            except Exception as exc:  # noqa: BLE001
+                if yielded_any:
+                    raise  # 已产出正文,切链会重复投喂
+                last_err = exc
+                log.warning("快模型流式失败,回落主档: %s", exc)
     for pid in candidates:
         # 2026-10-27:必须先于 try 初始化。此前放在 try 内 resolve_provider
         # 之后,resolve 抛 RuntimeError(如覆盖态未选模型)时 except 分支访问
@@ -1088,6 +1174,7 @@ def messages_create(
     response_format: dict | None = None,
     timeout: float | None = None,
     provider: str | None = None,
+    tier: str | None = None,
 ) -> str:
     """按 fallback 顺序调用 LLM,任何一级 provider 失败自动降级到下一级。
 
@@ -1100,9 +1187,29 @@ def messages_create(
 
     跨 provider 仅在遇到鉴权/限流/超时/网关错误时切换,模型能力错误
     不切换(节省时间)。
+
+    tier="fast"(2026-11-14 分级路由):优先走用户配置的快模型覆盖
+    (高频短调用:筛选/核查类);未配置快档或快档调用失败时回落常规
+    链路,行为与未分级时一致。
     """
-    candidates = select_providers(provider)
     timeout_value = timeout if timeout is not None else 300.0
+    if (tier or "").strip().lower() == "fast":
+        fast = None
+        try:
+            fast = _resolve_fast_provider()
+        except RuntimeError as exc:
+            log.warning("快模型配置不可用,回落主档: %s", exc)
+        if fast is not None:
+            try:
+                return normalize_model_output(_create_with_provider(
+                    resolved=fast, system=system, user=user,
+                    max_tokens=max_tokens, model=fast.model,
+                    temperature=temperature, response_format=response_format,
+                    timeout=timeout_value, max_retries=1,
+                ))
+            except Exception as exc:  # noqa: BLE001 快档失败回落主档
+                log.warning("快模型调用失败,回落主档: %s", exc)
+    candidates = select_providers(provider)
     return normalize_model_output(_create_fallback(
         system=system, user=user, candidates=candidates,
         max_tokens=max_tokens,

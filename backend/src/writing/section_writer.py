@@ -18,6 +18,7 @@ import os
 import re
 import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Generator
 
@@ -1380,6 +1381,304 @@ def _repair_section_draft(
     return _invoke_section_chain(system=system, user=repair_user)
 
 
+# ============================================================================
+# 段落级大纲→成文(2026-11-14 写作重构)
+# 根因对应:① "每段对比≥3篇"的机械模板产出目录式罗列 → 改为论证大纲驱动;
+# ② 引用密度按池规模定目标(34篇要求16处)与单章容量脱节 → 引用目标改为
+#    大纲分配的文献集(claim-driven);③ 整章重写 545s 且必然失败 → 失败
+#    只重写单段(~30s)。大纲失败或结构不合法时回退旧单稿路径,行为不变。
+# ============================================================================
+
+_OUTLINE_SYSTEM = (
+    "你是学术文献综述的结构规划专家。为综述章节设计段落级论证大纲。\n"
+    "只输出严格 JSON 对象,格式:\n"
+    '{"paragraphs":[{"claim":"本段论点句(一句完整中文陈述)",'
+    '"lit_ids":["lit_xxx", ...],"relation":"consensus|controversy|evolution|gap"}]}\n'
+    "要求:\n"
+    "- 4-7 个段落;第 1 段是领域地图(该主题下研究整体格局),最后 1 段是小结与缺口;\n"
+    "- 中间每段一个独立论点,由该段文献支撑,relation 说明文献间关系:"
+    "consensus=共识 / controversy=分歧 / evolution=演进脉络 / gap=研究缺口;\n"
+    "- lit_ids 只能来自给定清单,按论证需要选取,不凑数;\n"
+    "- claim 要写成可被后续段落展开的陈述句,不得是题目复述。"
+)
+
+
+def _outline_json_parse(raw: str) -> list[dict] | None:
+    """容错解析大纲 JSON:直接 loads → 最大平衡花括号块 → None。"""
+    from llm.client import normalize_model_output
+
+    text = normalize_model_output(raw or "").strip()
+    candidates = [text]
+    brace_start = text.find("{")
+    if brace_start >= 0:
+        depth = 0
+        end = None
+        for i, ch in enumerate(text[brace_start:], start=brace_start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end:
+            candidates.append(text[brace_start:end])
+    for cand in candidates:
+        try:
+            data = json.loads(cand)
+        except Exception:  # noqa: BLE001
+            continue
+        paras = data.get("paragraphs") if isinstance(data, dict) else None
+        if isinstance(paras, list) and paras:
+            return [p for p in paras if isinstance(p, dict)]
+    return None
+
+
+def _build_paragraph_outline(
+    *,
+    section: SectionSpec,
+    topic: str,
+    papers: list[Paper],
+    allowed: set[str],
+    is_comment: bool,
+    research_questions: list[str] | None,
+    review_goal: str | None,
+    notes_block: str | None,
+    model: str | None,
+) -> list[dict] | None:
+    """一次调用产出段落级论证大纲;失败/不合法返回 None(回退旧路径)。"""
+    if is_comment or len(papers) < 3:
+        return None
+    allowed_papers = [p for p in papers if p.lit_id in allowed] or list(papers)
+    catalog = "\n".join(
+        f"- {p.lit_id} | {p.title} | {', '.join(p.authors)} | {p.year or 'N/A'}"
+        for p in allowed_papers
+    )
+    parts = [
+        f"章节标题:{section.title}",
+        f"综述主题:{topic}",
+    ]
+    if research_questions:
+        parts.append("研究问题:" + ";".join(research_questions[:5]))
+    if review_goal:
+        parts.append(f"综述目标:{review_goal}")
+    if notes_block:
+        parts.append("通读笔记(证据层):\n" + notes_block[:6000])
+    parts.append("可选文献清单:\n" + catalog)
+    parts.append("请输出段落级论证大纲 JSON。")
+    raw = messages_create(
+        system=_OUTLINE_SYSTEM,
+        user="\n\n".join(parts),
+        max_tokens=2500,
+        model=model,
+        tier="fast",
+    )
+    paras = _outline_json_parse(raw)
+    if not paras or len(paras) < 3:
+        return None
+    cleaned: list[dict] = []
+    for p in paras[:7]:
+        claim = str(p.get("claim") or "").strip()
+        ids = [x for x in (p.get("lit_ids") or []) if x in allowed]
+        relation = str(p.get("relation") or "consensus").strip().lower()
+        if relation not in {"consensus", "controversy", "evolution", "gap"}:
+            relation = "consensus"
+        if not claim:
+            continue
+        cleaned.append({"claim": claim, "lit_ids": ids, "relation": relation})
+    if len(cleaned) < 3:
+        return None
+    return cleaned
+
+
+_OUTLINE_PARA_SYSTEM = (
+    "你是中文学术文献综述的写作专家,为综述章节撰写其中一个自然段。\n"
+    "要求:\n"
+    "- 只输出该段正文,纯中文书面学术语体;无标题、无列表、无英文解释;\n"
+    "- 紧扣给定的论点句展开,引用给出的文献时用『作者(年份)』夹注;"
+    "中文作者如『侯子楠等(2019)』,英文作者如『Galati et al.(2021)』;\n"
+    "- 按 relation 组织文献:consensus 综合多篇指向同一结论的证据;"
+    "controversy 并陈对立发现;evolution 按时间/方法演进叙述;gap 指出未覆盖处;\n"
+    "- 不得罗列(一句一文献依次复述);一个论点统领整段,文献作为证据嵌入;\n"
+    "- 350-500 字;严禁输出内部推理、计划、英文自我分析。"
+)
+
+
+def _paper_brief_for_para(p: Paper) -> str:
+    authors = ", ".join(str(a).strip() for a in (p.authors or []) if str(a).strip())
+    abstract = (p.abstract or "")[:220]
+    return (
+        f"- 作者:{authors or 'N/A'} | 年份:{p.year or 'N/A'} | 标题:{p.title}\n"
+        f"  摘要节选:{abstract or 'N/A'}"
+    )
+
+
+def _write_paragraph_text(
+    piece: dict,
+    *,
+    section: SectionSpec,
+    topic: str,
+    papers_by_id: dict[str, Paper],
+    prev_tail: str | None,
+) -> str:
+    """按大纲片段写一个自然段;失败抛错由调用方决定保留或重试。"""
+    ids = [x for x in piece.get("lit_ids", []) if x in papers_by_id]
+    support = "\n".join(
+        _paper_brief_for_para(papers_by_id[x]) for x in ids[:6]
+    )
+    parts = [
+        f"章节标题:{section.title}(综述主题:{topic})",
+        f"本段论点:{piece.get('claim', '')}",
+        f"文献关系:{piece.get('relation', 'consensus')}",
+    ]
+    if support:
+        parts.append("支撑文献:\n" + support)
+    else:
+        parts.append("该段无指定文献,依据章节主题用通用表述,不得虚构引用")
+    if prev_tail:
+        parts.append("上一段结尾(衔接用,不要重复):" + prev_tail[-120:])
+    parts.append("请输出该段正文。")
+    raw = messages_create(
+        system=_OUTLINE_PARA_SYSTEM,
+        user="\n\n".join(parts),
+        max_tokens=1500,
+    )
+    return normalize_model_output(raw).strip()
+
+
+# 模型自写的引用占位符(评审41/42 实测 22 处 `[...]` 悬空):
+# 夹注回填只绑定"作者(年份)",这些占位没人认领就直通交付。
+_CITE_PLACEHOLDER_RE = re.compile(r"\[\s*(?:\.\.\.|…|……)\s*\]")
+
+
+def _strip_citation_placeholders(text: str) -> str:
+    """删除模型自写的 `[...]` 引用占位符,返回 (清洗后文本, 删除数)。
+
+    占位处通常是模型知道要引用但没给作者年;删除后同句的作者年夹注
+    仍可被 _inject_citations_by_author_year 绑定,剩余空缺由补证据兜底。
+    """
+    if not text:
+        return text, 0
+    cleaned, n = _CITE_PLACEHOLDER_RE.subn("", text)
+    return cleaned, n
+
+
+def _para_has_citation(text: str) -> bool:
+    """段落是否含作者(年份)夹注(中文括号/英文括号都认)。"""
+    return bool(
+        re.search(r"[\u4e00-\u9fffA-Za-z .]{1,40}(?:（|\()[12][0-9]{3}(?:）|\))", text)
+    )
+
+
+def _rewrite_paragraph_text(
+    piece: dict,
+    draft: str,
+    *,
+    section: SectionSpec,
+    topic: str,
+    papers_by_id: dict[str, Paper],
+) -> str:
+    """单段重写(引用缺失时点名作者);只重写该段。"""
+    ids = [x for x in piece.get("lit_ids", []) if x in papers_by_id]
+    expected = ";".join(
+        _paper_display_author_year(papers_by_id[x]) for x in ids[:6]
+    ) or "至少 1 位真实作者(年份)"
+    raw = messages_create(
+        system=_OUTLINE_PARA_SYSTEM,
+        user=(
+            f"章节标题:{section.title}(综述主题:{topic})\n"
+            f"本段论点:{piece.get('claim', '')}\n"
+            f"文献关系:{piece.get('relation', 'consensus')}\n"
+            f"你上一版段落缺少『作者(年份)』夹注,必须自然嵌入: {expected}\n"
+            f"【上一版】\n{draft[:1500]}\n\n"
+            "只输出修正后的该段正文。"
+        ),
+        max_tokens=1500,
+    )
+    return normalize_model_output(raw).strip()
+
+
+def _write_section_via_outline(
+    *,
+    section: SectionSpec,
+    topic: str,
+    papers: list[Paper],
+    allowed: set[str],
+    is_comment: bool,
+    research_questions: list[str] | None,
+    review_goal: str | None,
+    notes_block: str | None,
+    model: str | None,
+    progress=None,
+) -> tuple[str, int] | None:
+    """大纲模式写整章:返回 (正文, 大纲引用目标数);不适用返回 None。
+
+    progress: 可选回调,收到 {"step": "outline"/"para", ...} 事件供流式
+    面板展示。段落并行写(≤4 线程),交付按大纲顺序拼接。
+    """
+    outline = _build_paragraph_outline(
+        section=section, topic=topic, papers=papers, allowed=allowed,
+        is_comment=is_comment, research_questions=research_questions,
+        review_goal=review_goal, notes_block=notes_block, model=model,
+    )
+    if not outline:
+        return None
+    papers_by_id = {p.lit_id: p for p in papers}
+    required = min(16, len({x for piece in outline for x in piece.get("lit_ids", [])}))
+
+    def _emit(evt: dict) -> None:
+        if progress is None:
+            return
+        try:
+            progress(evt)
+        except Exception:  # noqa: BLE001
+            pass
+
+    _emit({"step": "outline", "status": "ok",
+           "message": f"论证大纲就绪:{len(outline)} 个段落",
+           "paragraphs": len(outline), "required": required})
+
+    workers = min(4, len(outline))
+    para_results: dict[int, str] = {}
+
+    def _run_one(idx_piece: tuple[int, dict]) -> tuple[int, str]:
+        idx, piece = idx_piece
+        _emit({"step": "para", "status": "start", "index": idx,
+               "total": len(outline), "message": f"撰写第 {idx + 1}/{len(outline)} 段"})
+        text = _write_paragraph_text(
+            piece, section=section, topic=topic,
+            papers_by_id=papers_by_id, prev_tail=None,
+        )
+        if not _para_has_citation(text) and piece.get("lit_ids"):
+            try:
+                text = _rewrite_paragraph_text(
+                    piece, text, section=section, topic=topic,
+                    papers_by_id=papers_by_id,
+                )
+            except Exception:  # noqa: BLE001  保留首稿,交由下游兜底
+                log.warning("章节 %s 第 %d 段重试失败,保留首稿", section.key, idx)
+        _emit({"step": "para", "status": "ok", "index": idx,
+               "total": len(outline), "chars": len(text),
+               "message": f"第 {idx + 1}/{len(outline)} 段完成({len(text)} 字)"})
+        return idx, text
+
+    if workers <= 1:
+        for idx_piece in list(enumerate(outline)):
+            idx, text = _run_one(idx_piece)
+            para_results[idx] = text
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_run_one, ip) for ip in enumerate(outline)]
+            for fut in futures:
+                idx, text = fut.result()
+                para_results[idx] = text
+
+    content = "\n\n".join(
+        para_results[i] for i in range(len(outline)) if para_results.get(i)
+    )
+    return content, required
+
+
 # 整句边界判定字符(含换行,防止跨段误删)
 _SENTENCE_CHARS = "。！？!?；;\n"
 
@@ -1448,6 +1747,8 @@ def _finalize_section_result(
     is_comment: bool,
 ) -> SectionResult:
     content = normalize_model_output(raw_content)
+    # 模型自写的 [...] 引用占位符在此统一剥离(单一咽喉点,两条写路径都过)
+    content, _ph_removed = _strip_citation_placeholders(content)
     citations: list[str] = []
     dropped: list[str] = []
     real_lit_by_alias = dict(alias_map)
@@ -1502,18 +1803,32 @@ def write_section(
         notes_block=notes_block,
     )
     required = 0 if is_comment else _min_citation_target(len(papers))
-    raw = _invoke_section_chain(system=system, user=user, model=model)
+    # 大纲模式优先(2026-11-14):段落级论证大纲→逐段成文;不适用回退单稿。
+    outline_res = _write_section_via_outline(
+        section=section, topic=topic, papers=list(papers), allowed=allowed,
+        is_comment=is_comment, research_questions=research_questions,
+        review_goal=review_goal, notes_block=notes_block, model=model,
+    )
+    if outline_res is not None:
+        raw, required = outline_res
+    else:
+        raw = _invoke_section_chain(system=system, user=user, model=model)
     initial_meta = _looks_like_non_article(raw)
     if initial_meta:
         try:
-            raw = _repair_section_draft(
-                system=system,
-                user=user,
-                draft=raw[:16000],
-                papers=list(papers),
-                required=required,
-                unmatched=[],
-            )
+            if outline_res is not None:
+                # 大纲模式:整章被污染时回退单稿重生成一次(1 次调用),
+                # 不走 3 轮整章重写链(2026-11-14 重构)
+                raw = _invoke_section_chain(system=system, user=user, model=model)
+            else:
+                raw = _repair_section_draft(
+                    system=system,
+                    user=user,
+                    draft=raw[:16000],
+                    papers=list(papers),
+                    required=required,
+                    unmatched=[],
+                )
         except Exception as exc:  # noqa: BLE001
             log.warning("章节 %s 检测到模型内部推理泄漏,首轮清理失败: %s", section.key, exc)
         initial_meta = _looks_like_non_article(raw)
@@ -1526,7 +1841,8 @@ def write_section(
     result = _finalize_section_result(section, raw, allowed, alias_map, is_comment)
     result.dropped_citations.extend(unmatched)
     needs_repair = initial_meta or _looks_like_non_article(result.content)
-    if required and (len(result.citations) < required or unmatched):
+    # 大纲模式:引用缺失已由段级验收(单段重写)兜住,不再按密度触发整章重写
+    if not outline_res and required and (len(result.citations) < required or unmatched):
         needs_repair = True
     if needs_repair:
         try:
@@ -1741,35 +2057,64 @@ def write_section_stream(
            "seconds": round(time.monotonic() - prepare_t0, 1),
            "message": f"写作上下文就绪,本章候选文献 {len(papers)} 篇"}
     stream_t0 = time.monotonic()
-    yield {"kind": "step", "step": "llm_stream", "status": "start",
-           "message": "模型正在思考并流式生成正文"}
-    raw_parts: list[str] = []
 
-    def _pump() -> Generator[dict, None, None]:
-        """单次流式拉取,正文增量累积进 raw_parts。"""
-        raw_parts.clear()
-        for kind, piece in messages_stream_ex(system=system, user=user, max_tokens=8000, model=model):
-            if kind == "reasoning":
-                yield {"kind": "reasoning", "delta": piece}
-                continue
-            raw_parts.append(piece)
-            yield {"kind": "token", "delta": piece}
+    # 大纲模式优先(2026-11-14):段落级论证大纲→逐段并行成文。
+    # 大纲/段落为整段调用(非 token 流),事件在阶段完成后批量上报;
+    # 大纲不可用时回退旧流式路径(逐 token 直播),行为不变。
+    outline_events: list[dict] = []
+    outline_res = None
+    try:
+        outline_res = _write_section_via_outline(
+            section=section, topic=topic, papers=list(papers), allowed=allowed,
+            is_comment=is_comment, research_questions=research_questions,
+            review_goal=review_goal, notes_block=notes_block, model=model,
+            progress=outline_events.append,
+        )
+    except Exception as exc:  # noqa: BLE001  大纲链路故障回退旧路径
+        log.warning("章节 %s 大纲模式失败,回退单稿流式: %s", section.key, exc)
+        outline_res = None
+    for evt in outline_events:
+        if evt.get("step") == "outline":
+            yield {"kind": "step", "step": "outline", "status": evt.get("status", "ok"),
+                   "message": evt.get("message", ""), "seconds": None}
+        else:
+            yield {"kind": "step", "step": "para", "status": evt.get("status", "ok"),
+                   "message": evt.get("message", "")}
+    if outline_res is not None:
+        raw, required = outline_res
+        yield {"kind": "step", "step": "llm_stream", "status": "ok",
+               "seconds": round(time.monotonic() - stream_t0, 1),
+               "message": f"段落级成文完成,共 {len(raw)} 字(大纲 {required} 篇引用目标)"}
+    else:
+        yield {"kind": "step", "step": "llm_stream", "status": "start",
+               "message": "模型正在思考并流式生成正文"}
+        raw_parts: list[str] = []
 
-    for evt in _pump():
-        yield evt
-    raw = "".join(raw_parts)
-    if _section_stream_anomaly(raw):
-        # 网关缓冲/推理回声类异常流(2026-11-12 事故:单块 45766 字符的
-        # 系统提示词回声+错位重复流)不可用作正文,整段重新生成一次,
-        # 而不是把废料送进夹注回填与重写链再浪费两轮调用
-        yield {"kind": "step", "step": "llm_stream", "status": "fail",
-               "message": f"检测到异常输出({len(raw)} 字),正在重新生成本章"}
+        def _pump() -> Generator[dict, None, None]:
+            """单次流式拉取,正文增量累积进 raw_parts。"""
+            raw_parts.clear()
+            for kind, piece in messages_stream_ex(system=system, user=user, max_tokens=8000, model=model):
+                if kind == "reasoning":
+                    yield {"kind": "reasoning", "delta": piece}
+                    continue
+                raw_parts.append(piece)
+                yield {"kind": "token", "delta": piece}
+
         for evt in _pump():
             yield evt
         raw = "".join(raw_parts)
-    yield {"kind": "step", "step": "llm_stream", "status": "ok",
-           "seconds": round(time.monotonic() - stream_t0, 1),
-           "message": f"正文流式生成完成,共 {len(raw)} 字"}
+        if _section_stream_anomaly(raw):
+            # 网关缓冲/推理回声类异常流(2026-11-12 事故:单块 45766 字符的
+            # 系统提示词回声+错位重复流)不可用作正文,整段重新生成一次,
+            # 而不是把废料送进夹注回填与重写链再浪费两轮调用
+            yield {"kind": "step", "step": "llm_stream", "status": "fail",
+                   "message": f"检测到异常输出({len(raw)} 字),正在重新生成本章"}
+            for evt in _pump():
+                yield evt
+            raw = "".join(raw_parts)
+        yield {"kind": "step", "step": "llm_stream", "status": "ok",
+               "seconds": round(time.monotonic() - stream_t0, 1),
+               "message": f"正文流式生成完成,共 {len(raw)} 字"}
     unmatched: list[str] = []
     if not is_comment and papers:
         raw = _remove_model_citation_tokens(raw)
@@ -1794,11 +2139,44 @@ def write_section_stream(
         is_comment,
     )
     result.dropped_citations.extend(unmatched)
-    required = 0 if is_comment else _min_citation_target(len(papers))
-    needs_repair = _looks_like_non_article(result.content)
-    if required and (len(result.citations) < required or unmatched):
-        needs_repair = True
-    if needs_repair:
+    outline_mode = outline_res is not None
+    if not outline_mode:
+        required = 0 if is_comment else _min_citation_target(len(papers))
+        needs_repair = _looks_like_non_article(result.content)
+        if required and (len(result.citations) < required or unmatched):
+            needs_repair = True
+    else:
+        # 大纲模式:引用缺失已在段级验收处理(单段重写),不再整章重写;
+        # 仅当拼装结果仍是"非正文"(事故防线)才回退单稿重生成一次。
+        needs_repair = _looks_like_non_article(result.content)
+        if needs_repair:
+            yield {"kind": "step", "step": "repair_draft", "status": "start",
+                   "message": "大纲拼装结果异常,回退单稿重新生成"}
+            try:
+                fallback_raw = _invoke_section_chain(system=system, user=user, model=model)
+                fallback_raw = _remove_model_citation_tokens(fallback_raw)
+                fallback_raw, _, fb_unmatched = _inject_citations_by_author_year(
+                    fallback_raw, list(papers)
+                )
+                if fb_unmatched:
+                    fallback_raw = _drop_sentences_with_quotes(fallback_raw, fb_unmatched)
+                fb_result = _finalize_section_result(
+                    section, fallback_raw, allowed, alias_map, is_comment
+                )
+                fb_result.dropped_citations.extend(fb_unmatched)
+                required = _min_citation_target(len(papers))
+                if not _looks_like_non_article(fb_result.content) or _article_quality_score(
+                    fb_result.content, len(fb_result.citations),
+                ) > _article_quality_score(result.content, len(result.citations)):
+                    result = fb_result
+                    unmatched = fb_unmatched
+                yield {"kind": "step", "step": "repair_draft", "status": "ok",
+                       "message": f"单稿重生成完成,本章引用 {len(result.citations)} 处"}
+                needs_repair = _looks_like_non_article(result.content)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("章节 %s 大纲回退单稿失败: %s", section.key, exc)
+                needs_repair = False  # 保留大纲拼装结果,如实进入 QA
+    if needs_repair and not outline_mode:
         repair_t0 = time.monotonic()
         yield {"kind": "step", "step": "repair_draft", "status": "start",
                "message": f"引用密度或正文形态未达标(要求 {required} 篇),正在自动重写"}

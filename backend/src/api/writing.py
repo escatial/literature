@@ -896,6 +896,18 @@ def _enrich_job_with_plan(job: dict, user) -> dict:
                     {"lit_id": r.lit_id, "title": r.title}
                     for r in rows
                 ]
+            # 归组依据(2026-11-14):每组附研究问题 + 3 篇代表文献标题,
+            # 让用户在确认面板能判断"为什么这些文献归为一组",不再凭感觉。
+            title_by_id = {r.lit_id: r.title for r in rows} if lit_ids else {}
+            for g in plan_groups:
+                if not isinstance(g, dict):
+                    continue
+                sample = [title_by_id[x] for x in (g.get("lit_ids") or [])[:3]
+                          if x in title_by_id]
+                g["rationale"] = {
+                    "research_question": g.get("research_question") or "",
+                    "sample_titles": sample,
+                }
     except Exception:  # noqa: BLE001  快照缺失不阻断快照接口
         pass
     job["plan_groups"] = plan_groups

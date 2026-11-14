@@ -108,10 +108,16 @@ _SCREENING_BATCH_SIZE = 36
 def _env_workers() -> int:
     import os
     try:
-        return max(2, min(8, int(os.environ.get("SCREENING_WORKERS", "6"))))
+        # 2026-11-14 提速:快档下筛选单次调用短,并发默认与上限同步放宽
+        return max(2, min(16, int(os.environ.get("SCREENING_WORKERS", "10"))))
     except (TypeError, ValueError):
         return 4
-_SCREENING_ABSTRACT_CHARS = 2000
+
+
+# 2026-11-14 摘要瘦身:筛选只需主题相关性与质量信号,2000→600 字符
+# (399 篇 × 2000 = 80 万字符载荷是 17.7 分钟的主要推手之一;
+#  600 字符保留「研究问题+方法+结论」信号,批次载荷降 70%)。
+_SCREENING_ABSTRACT_CHARS = 600
 _SCREENING_TIMEOUT_SECONDS = 75.0
 _SCREENING_MAX_RETRIES = 2
 
@@ -158,6 +164,7 @@ def _screen_chunk(
                 max_tokens=8000,
                 timeout=_SCREENING_TIMEOUT_SECONDS,
                 response_format={"type": "json_object"},
+                tier="fast",
             ):
                 if kind == "content":
                     parts.append(piece)
@@ -176,6 +183,7 @@ def _screen_chunk(
             max_retries=_SCREENING_MAX_RETRIES,
             timeout=_SCREENING_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
+            tier="fast",
         )
     return _parse_decisions(raw)
 

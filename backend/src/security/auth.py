@@ -268,6 +268,10 @@ def user_public(user: UserModel) -> dict:
         "llm_base_url": user.llm_base_url or "",
         "llm_api_key_masked": mask_key(user.llm_api_key or ""),
         "llm_model": user.llm_model or "",
+        "fast_kind": getattr(user, "fast_kind", "") or "",
+        "fast_base_url": getattr(user, "fast_base_url", "") or "",
+        "fast_api_key_masked": mask_key(getattr(user, "fast_api_key", "") or ""),
+        "fast_model": getattr(user, "fast_model", "") or "",
     }
 
 
@@ -294,6 +298,32 @@ def apply_user_llm(user: UserModel | None):
             except Exception:  # noqa: BLE001  reset 只能在原上下文调用;跨上下文兜底清除
                 llm_client.clear_runtime_llm()
 
-        return _reset
+        # 快档(2026-11-14 分级路由):用户配置了快模型时同步应用;
+        # 未配置则清除,让 tier="fast" 调用回落主档。
+        if (getattr(user, "fast_base_url", "") or "").strip() and                 (getattr(user, "fast_api_key", "") or "").strip() and                 (getattr(user, "fast_model", "") or "").strip():
+            fast_token = llm_client.set_runtime_fast_llm(
+                kind=(getattr(user, "fast_kind", "") or "openai").strip().lower(),
+                base_url=user.fast_base_url.strip(),
+                api_key=user.fast_api_key.strip(),
+                model=user.fast_model.strip(),
+            )
+
+            def _reset_fast() -> None:
+                try:
+                    llm_client.reset_runtime_fast_llm(fast_token)
+                except Exception:  # noqa: BLE001
+                    llm_client.clear_runtime_fast_llm()
+        else:
+            llm_client.clear_runtime_fast_llm()
+
+            def _reset_fast() -> None:
+                llm_client.clear_runtime_fast_llm()
+
+        def _combined_reset() -> None:
+            _reset()
+            _reset_fast()
+
+        return _combined_reset
     llm_client.clear_runtime_llm()
+    llm_client.clear_runtime_fast_llm()
     return lambda: None

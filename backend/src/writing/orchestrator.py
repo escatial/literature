@@ -39,6 +39,7 @@ from writing.relevance import (
     grade_papers,
 )
 from writing.section_writer import (
+    _CITE_PLACEHOLDER_RE,
     SectionResult,
     ensure_section_evidence,
     write_section,
@@ -1265,13 +1266,16 @@ def _polish_and_verify_section(
 ) -> SectionResult:
     """润色后的章节级核查+自动修复闭环(用户策略:agent 应自我纠错)。
 
-    流程: humanize(3轮,引用保持) → article_lint → 自动修复 → 再查
+    流程: article_lint 先行 → 通过则跳过润色(2026-11-14 提速);不达标才补
+    1 轮 humanize(引用保持由 humanize 内部保证)→ 自动修复 → 再查。
+    旧固定 3 轮 humanize 是每章 2-4 分钟的固定开销,大纲成文的文风已在
+    提示词内保证,润色降级为"核查不过才触发"的条件步骤。
     不合格的段落在此修复,而不是等到最终 QA 才暴露。
     修复失败时保留原稿(density_warning 如实标记),不伪造通过。
     progress: 可选 (event, data) 回调,流式路径用它把润色/核查各阶段
     作为 section_step 事件实时上报;同步路径不传,行为不变。
     """
-    from humanizer.agent import humanize_three_rounds
+    from humanizer.agent import humanize_one_round
     from qa.article_lint import check_article_text, repair_article_text
 
     def emit(step: str, status: str, message: str, seconds: float | None = None) -> None:
@@ -1286,21 +1290,27 @@ def _polish_and_verify_section(
             # 上报永不中断主流程(含用户停止触发的 RuntimeError)
             log.debug("章节 %s 步骤上报失败: %s", result.key, exc)
 
-    # -- Phase 1: humanize 3 轮(引用保持由 humanize 内部保证) --
+    # -- Phase 1: 核查先行,humanize 降级为条件步骤(0 或 1 轮) --
     def llm_call(system, user, max_tokens=8000, **kw):
         from llm.client import messages_create
         return messages_create(system, user, max_tokens=max_tokens)
 
-    humanize_t0 = time.monotonic()
-    emit("humanize", "start", "正在润色正文(3 轮去 AI 味,引用保持)")
-    try:
-        polished, _diffs = humanize_three_rounds(text=result.content or "", caller=llm_call)
-        if polished and polished != result.content:
-            result.content = polished
-        emit("humanize", "ok", "润色完成,引用保持不变", time.monotonic() - humanize_t0)
-    except Exception as exc:
-        log.warning("章节 %s 润色失败,保留原文: %s", result.key, exc)
-        emit("humanize", "fail", f"润色失败,保留原文:{exc}", time.monotonic() - humanize_t0)
+    pre_check = check_article_text([result], papers=papers)
+    if pre_check.status.value == "pass":
+        emit("humanize", "ok", "章节核查通过,跳过润色", 0.0)
+    else:
+        humanize_t0 = time.monotonic()
+        emit("humanize", "start", "章节核查未通过,润色 1 轮后复查")
+        try:
+            polished, _diff = humanize_one_round(
+                round_no=1, text=result.content or "", caller=llm_call,
+            )
+            if polished and polished != result.content:
+                result.content = polished
+            emit("humanize", "ok", "润色完成,引用保持不变", time.monotonic() - humanize_t0)
+        except Exception as exc:
+            log.warning("章节 %s 润色失败,保留原文: %s", result.key, exc)
+            emit("humanize", "fail", f"润色失败,保留原文:{exc}", time.monotonic() - humanize_t0)
 
     # -- Phase 2: 章节级核查 + 自动修复 --
     lint_t0 = time.monotonic()
@@ -2116,7 +2126,22 @@ def plan_review_stream(
         )
         yield _sse_event("plan_complete", {
             "phase": "await_confirm",
-            "groups": [{"name": g.name, "lit_ids": g.lit_ids} for g in groups],
+            # 归组依据(2026-11-14):研究问题 + 3 篇代表文献标题,
+            # 确认面板可判断"为什么这些文献归为一组",不再凭感觉。
+            "groups": [
+                {
+                    "name": g.name,
+                    "lit_ids": g.lit_ids,
+                    "rationale": {
+                        "research_question": g.research_question or "",
+                        "sample_titles": [
+                            p.title for p in papers
+                            if p.lit_id in set(g.lit_ids)
+                        ][:3],
+                    },
+                }
+                for g in groups
+            ],
             "section_titles": [spec.title for spec in section_specs],
             "papers": [_paper_payload(p) for p in papers],
             "screened_out_ids": screened_out,
@@ -3227,6 +3252,11 @@ def _build_delivery_manifest(
         ),
         "anchor_leaks": sum(
             len(_CITE_ANCHOR_RE.findall(s.content or "")) for s in sections
+        ),
+        # 2026-11-14:模型自写引用占位符计数(交付应为 0;finalize 已剥离,
+        # 这里是门禁复核,防未来变体绕过咽喉点)
+        "citation_placeholders": sum(
+            len(_CITE_PLACEHOLDER_RE.findall(s.content or "")) for s in sections
         ),
         "has_abstract": bool(abstract_text),
     }

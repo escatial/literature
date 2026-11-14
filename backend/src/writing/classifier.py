@@ -1232,7 +1232,13 @@ def _balance_oversize_groups(
     """
     if len(papers) < 16 or not groups:
         return groups
-    cap = max(12, math.ceil(len(papers) * 0.5))
+    # 2026-11-14 收紧:旧上限(池子一半)让 90 篇池出现 33 篇巨型组 →
+    # 引用密度目标被推高、正文塞引用。封顶 25(可 env 覆盖),小池仍按
+    # 一半兜底(12 篇下限不变)。
+    cap = max(12, min(
+        int(os.environ.get("WRITING_THEME_MAX_PAPERS", "25")),
+        math.ceil(len(papers) * 0.5),
+    ))
     if not any(len(g.lit_ids) > cap for g in groups):
         return groups
     used_names = {g.name for g in groups}

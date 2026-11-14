@@ -297,7 +297,16 @@ def build_all_syntheses(
     failures: list[dict] = []
     counts = {"consensus": 0, "controversies": 0, "gaps": 0}
 
-    for idx, group in enumerate(groups, start=1):
+    # 2026-11-14 并行化:逐主题线程池(旧串行 = 240s 硬时钟 × N 主题,
+    # 4 主题最差 16 分钟)。build_theme_synthesis 自带守护线程硬时钟,
+    # 线程池并发安全;progress 回调由 job worker 的 seq 锁保护 append。
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    _agg_lock = threading.Lock()
+
+    def _one(idx_group):
+        idx, group = idx_group
         theme_papers = [p for p in papers if p.lit_id in set(group.lit_ids) & by_id]
         if progress:
             try:
@@ -318,21 +327,36 @@ def build_all_syntheses(
                 log.info("主题综合跳过: %s", exc)
             else:
                 log.warning("主题综合失败(%s): %s", group.name, exc)
-            failures.append({"theme_index": idx, "theme": group.name, "reason": str(exc)})
-            continue
-        syntheses[f"theme_{idx}"] = result
-        counts["consensus"] += len(result["consensus"])
-        counts["controversies"] += len(result["controversies"])
-        counts["gaps"] += len(result["gaps"])
+            with _agg_lock:
+                failures.append({"theme_index": idx, "theme": group.name, "reason": str(exc)})
+            return
+        with _agg_lock:
+            syntheses[f"theme_{idx}"] = result
+            counts["consensus"] += len(result["consensus"])
+            counts["controversies"] += len(result["controversies"])
+            counts["gaps"] += len(result["gaps"])
         if progress:
-            progress({
-                "kind": "theme_synthesis_done",
-                "theme_index": idx,
-                "theme": group.name,
-                "consensus": len(result["consensus"]),
-                "controversies": len(result["controversies"]),
-                "gaps": len(result["gaps"]),
-            })
+            try:
+                progress({
+                    "kind": "theme_synthesis_done",
+                    "theme_index": idx,
+                    "theme": group.name,
+                    "consensus": len(result["consensus"]),
+                    "controversies": len(result["controversies"]),
+                    "gaps": len(result["gaps"]),
+                })
+            except Exception:  # noqa: BLE001
+                pass
+
+    if len(groups) <= 1:
+        for idxg in list(enumerate(groups, start=1)):
+            _one(idxg)
+    else:
+        with ThreadPoolExecutor(max_workers=min(4, len(groups))) as _pool:
+            futures = [_pool.submit(_one, (idx, g))
+                       for idx, g in enumerate(groups, start=1)]
+            for _f in futures:
+                _f.result()
 
     meta = {
         "succeeded": len(syntheses),

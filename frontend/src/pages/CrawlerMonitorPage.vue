@@ -2,7 +2,7 @@
 /** 监控与管理:爬虫监控 / 用户管理(管理员) / LLM 设置(按用户)。
  *  爬虫数据源:后端 /api/crawler/*(backend/src/api/crawler_admin.py),轮询刷新。
  *  用户与 LLM 配置:/api/auth/*(backend/src/api/auth.py)。*/
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import {
   ElButton,
@@ -64,6 +64,78 @@ const llm = useLlmProfilesStore();
 /** 激活行高亮 class(与「使用中」标签呼应)。*/
 const activeRowClass = (p: { row: LLMProfile }): string =>
   p.row.is_active ? 'llm-active-row' : '';
+
+// ─── 快模型档(2026-11-14 分级路由):筛选/核查类高频短调用走此配置 ──
+// 主档管写作/规划的旗舰调用;快档未配置时 tier="fast" 自动回落主档。
+
+const fastForm = reactive({
+  kind: 'openai',
+  base_url: '',
+  api_key: '',
+  model: '',
+});
+const savingFast = ref(false);
+const fastConfigured = computed(
+  () => !!(auth.user?.fast_base_url && auth.user?.fast_model),
+);
+
+const syncFastFormFromUser = () => {
+  fastForm.kind = (auth.user?.fast_kind as string) || 'openai';
+  fastForm.base_url = auth.user?.fast_base_url || '';
+  fastForm.api_key = '';
+  fastForm.model = auth.user?.fast_model || '';
+};
+watch(() => auth.user, syncFastFormFromUser, { immediate: true });
+
+const saveFast = async () => {
+  if (!fastForm.base_url.trim() || !fastForm.model.trim()) {
+    toast.warning('快模型的 Base URL 与模型名必填;要停用请用「停用快模型」');
+    return;
+  }
+  savingFast.value = true;
+  try {
+    // 主档字段原样回传(留空 key = 不改),只更新快档四元组
+    const u = auth.user;
+    const { data } = await authApi.saveLlmConfig({
+      llm_kind: u?.llm_kind || 'openai',
+      llm_base_url: u?.llm_base_url || '',
+      llm_api_key: '',
+      llm_model: u?.llm_model || '',
+      fast_kind: fastForm.kind,
+      fast_base_url: fastForm.base_url.trim(),
+      fast_api_key: fastForm.api_key.trim(),
+      fast_model: fastForm.model.trim(),
+    });
+    auth.user = data.user;
+    toast.success('快模型已保存,下一次写作任务的筛选/核查阶段生效');
+    syncFastFormFromUser();
+  } catch {
+    toast.error('快模型保存失败');
+  } finally {
+    savingFast.value = false;
+  }
+};
+
+const clearFast = async () => {
+  savingFast.value = true;
+  try {
+    const u = auth.user;
+    const { data } = await authApi.saveLlmConfig({
+      llm_kind: u?.llm_kind || 'openai',
+      llm_base_url: u?.llm_base_url || '',
+      llm_api_key: '',
+      llm_model: u?.llm_model || '',
+      fast_kind: '', fast_base_url: '', fast_api_key: '', fast_model: '',
+    });
+    auth.user = data.user;
+    toast.success('快模型已停用,筛选/核查回落主模型');
+    syncFastFormFromUser();
+  } catch {
+    toast.error('停用失败');
+  } finally {
+    savingFast.value = false;
+  }
+};
 
 /** 删除配置(二次确认)。*/
 const doRemoveProfile = async (p: LLMProfile) => {
@@ -620,7 +692,48 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
             <div class="llm-actions">
               <el-button type="primary" :loading="llm.saving" @click="llm.save(true)">保存并使用</el-button>
               <el-button :loading="llm.saving" @click="llm.save(false)">保存到列表</el-button>
-              <el-button v-if="llm.editingId !== null" @click="llm.startCreate()">取消编辑</el-button>
+              <el-button v-if="llm.editingId === null" @click="llm.startCreate()">取消编辑</el-button>
+            </div>
+          </el-form>
+        </el-card>
+
+        <!-- 快模型档(可选):筛选/核查等高频短调用走此配置,大幅压缩总时长 -->
+        <el-card shadow="never" class="llm-card">
+          <template #header>
+            <span class="card-head">
+              快模型(可选,提速)
+              <el-tag v-if="fastConfigured" type="success" size="small" class="llm-active-tag">已启用</el-tag>
+              <el-tag v-else type="info" size="small" class="llm-active-tag">未启用(回落主模型)</el-tag>
+            </span>
+          </template>
+          <div class="tab-hint llm-hint">
+            文献筛选、质量核查等高频短调用走快模型(建议选同平台的快速档,如 glm-4.5-flash),
+            主题规划与正文写作仍用上方主模型。不配置则全部走主模型。
+            API Key 只保存在本机数据库,编辑时留空表示不修改。
+          </div>
+          <el-form label-position="top" class="llm-form">
+            <el-form-item label="接口类型">
+              <el-radio-group v-model="fastForm.kind">
+                <el-radio-button value="openai">OpenAI 兼容</el-radio-button>
+                <el-radio-button value="anthropic">Anthropic 兼容</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="Base URL">
+              <el-input v-model="fastForm.base_url" placeholder="如 https://open.bigmodel.cn/api/paas/v4" clearable />
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="fastForm.api_key"
+                type="password" show-password clearable
+                :placeholder="auth.user?.fast_api_key_masked ? `已保存(${auth.user.fast_api_key_masked}),留空不修改` : '快模型的 API Key'"
+              />
+            </el-form-item>
+            <el-form-item label="模型">
+              <el-input v-model="fastForm.model" placeholder="如 glm-4.5-flash" clearable />
+            </el-form-item>
+            <div class="llm-actions">
+              <el-button type="primary" :loading="savingFast" @click="saveFast">保存快模型</el-button>
+              <el-button v-if="fastConfigured" :loading="savingFast" @click="clearFast">停用快模型</el-button>
             </div>
           </el-form>
         </el-card>

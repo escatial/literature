@@ -309,7 +309,11 @@ const start = async () => {
 };
 
 // 确认面板的可编辑分组副本:确认前不改动 store 里的原始划分
-interface EditableGroup { name: string; lit_ids: string[]; }
+interface EditableGroup {
+  name: string; lit_ids: string[];
+  /** 归组依据(2026-11-14):研究问题 + 代表文献,让用户能判断分组是否合理 */
+  rationale?: { research_question: string; sample_titles: string[] };
+}
 const editableGroups = ref<EditableGroup[]>([]);
 
 // J1 自定义主题:用户预设主题名(「自定义主题」模式下启动写作)
@@ -754,6 +758,10 @@ const downloadMd = () => {
           <div v-if="blueprintGroup(g.name)" class="group-meta">
             <span v-if="blueprintGroup(g.name)?.boundary">边界：{{ blueprintGroup(g.name)?.boundary }}</span>
             <span v-if="blueprintGroup(g.name)?.relation_hint">比较：{{ blueprintGroup(g.name)?.relation_hint }}</span>
+          </div>
+          <div v-if="g.rationale" class="group-meta">
+            <span v-if="g.rationale.research_question">研究问题：{{ g.rationale.research_question }}</span>
+            <span v-if="g.rationale.sample_titles.length">依据文献：{{ g.rationale.sample_titles.join('；') }}</span>
           </div>
         </div>
         <el-collapse class="group-detail">

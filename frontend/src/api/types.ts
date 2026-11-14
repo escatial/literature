@@ -141,6 +141,8 @@ export interface DeliveryManifest {
   missing_sections: string[];
   reference_count: number;
   anchor_leaks: number;
+  /** 2026-11-14:模型自写引用占位符计数(交付应为 0) */
+  citation_placeholders?: number;
   has_abstract: boolean;
 }
 

@@ -435,12 +435,24 @@ def _mig_purge_dirty_papers(conn: _Connection) -> None:
 # C8 修正:owner/users 补列必须先于 v7.0 repair_identity_index ——
 # repair_database 经 ORM 全列 SELECT papers,存量库若此时尚无
 # owner_user_id 列会直接炸(重排时对真实存量库拷贝实测暴露,B6 起潜伏)。
+def _mig_users_fast_llm_columns(conn: _Connection) -> None:
+    """v9.12:users 补快模型四列(2026-11-14 分级路由)。留空=回落主档。"""
+    _ensure_columns(conn, "users", {
+        "fast_kind": "VARCHAR(16) DEFAULT ''",
+        "fast_base_url": "VARCHAR(500) DEFAULT ''",
+        "fast_api_key": "TEXT DEFAULT ''",
+        "fast_model": "VARCHAR(200) DEFAULT ''",
+    })
+    conn.commit()
+
+
 _MIGRATIONS: list[tuple[str, "callable"]] = [
     ("v4.1_retrieval_tasks_events", _mig_retrieval_tasks_events),
     ("v7.0_papers_add_columns", _mig_papers_add_columns),
     ("v8.1_papers_rebuild_pk", _mig_papers_rebuild_pk),
     ("v8.1_papers_legacy_task_backfill", _mig_papers_legacy_task_backfill),
     ("v9.x_users_auth_columns", _mig_users_auth_columns),
+    ("v9.12_users_fast_llm_columns", _mig_users_fast_llm_columns),
     ("b6_owner_backfill", _mig_owner_backfill),
     ("d1_reviews_delivery_columns", _mig_reviews_delivery_columns),
     ("v7.0_repair_identity_index", _mig_repair_identity_index),

@@ -282,6 +282,12 @@ class UserModel(Base):
     # API 返回一律脱敏(mask_key),绝不回传完整 key。
     llm_api_key: Mapped[str] = mapped_column(Text, default="")
     llm_model: Mapped[str] = mapped_column(String(200), default="")
+    # 快模型档(2026-11-14 分级路由):筛选/lint/QA 结构检查等高频短调用
+    # 走此配置;留空时 tier="fast" 自动回落主档,行为与未分级一致。
+    fast_kind: Mapped[str] = mapped_column(String(16), default="")
+    fast_base_url: Mapped[str] = mapped_column(String(500), default="")
+    fast_api_key: Mapped[str] = mapped_column(Text, default="")
+    fast_model: Mapped[str] = mapped_column(String(200), default="")
 
 
 class LLMProfileModel(Base):
