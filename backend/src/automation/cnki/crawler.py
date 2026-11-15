@@ -2670,7 +2670,10 @@ def cmd_setup_cookies():
         new_cookies[k] = v
 
     # 必须有这几个核心 cookie
-    required = ["KNS2COOKIE", "Ecp_ClientId"]
+    # 2026-11-15 放宽:KNS2COOKIE 是旧版游客令牌,新版登录会话不带它
+    # (实测登录态 cURL 只有 Ecp_ClientId+SID_kns_new+Ecp_session);
+    # 真实可用性由下方 GET 探测兜底,不再硬性强求
+    required = ["Ecp_ClientId"]
     missing = [r for r in required if r not in new_cookies]
     if missing:
         print(f"[错误] 缺少必需的 cookie: {missing}")
@@ -2752,7 +2755,10 @@ def apply_cookies(cookies: dict) -> dict:
     - 落盘 cookies.json(重启后自动加载,语义与 cmd_setup_cookies 一致);
     - 返回 missing_required 供调用方向用户明确提示缺什么。
     """
-    required = ["KNS2COOKIE", "Ecp_ClientId"]
+    # 2026-11-15 放宽:KNS2COOKIE 是旧版游客令牌,新版登录会话不带它
+    # (实测登录态 cURL 只有 Ecp_ClientId+SID_kns_new+Ecp_session);
+    # 真实可用性由下方 GET 探测兜底,不再硬性强求
+    required = ["Ecp_ClientId"]
     missing = [r for r in required if r not in cookies]
     if cookies:
         global COOKIES
@@ -2856,7 +2862,10 @@ def check_cookies() -> bool:
       2) 一次轻量 GET 高级检索页探测真实可用性（不触发搜索/验证码、不扣题分）
     失效则给出明确提示并返回 False（调用方应退出）。
     """
-    required = ["KNS2COOKIE", "Ecp_ClientId"]
+    # 2026-11-15 放宽:KNS2COOKIE 是旧版游客令牌,新版登录会话不带它
+    # (实测登录态 cURL 只有 Ecp_ClientId+SID_kns_new+Ecp_session);
+    # 真实可用性由下方 GET 探测兜底,不再硬性强求
+    required = ["Ecp_ClientId"]
     missing = [k for k in required if k not in COOKIES]
     if missing:
         print("[错误] cookies.json 缺少必需 cookie: " + ", ".join(missing))
