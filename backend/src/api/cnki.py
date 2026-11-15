@@ -163,8 +163,11 @@ def cnki_cookies_save(req: CnkiCookieIn, request: Request):
     if not cookies:
         raise HTTPException(400, "未能从粘贴内容解析出任何 cookie:请粘贴整条 cURL 命令或形如 K=V;K=V 的 cookie 串")
     # 缺核心字段直接拒绝,不应用不落盘(与 CLI 向导同语义;
-    # 否则垃圾字段会污染 cookies.json 且用户误以为已修好)
-    missing = [r for r in ("KNS2COOKIE", "Ecp_ClientId") if r not in cookies]
+    # 否则垃圾字段会污染 cookies.json 且用户误以为已修好)。
+    # 2026-11-15 放宽:KNS2COOKIE 是旧版游客令牌,登录态 cURL 不带它
+    # (实测仅 Ecp_ClientId+SID_kns_new+Ecp_session),只硬性要求
+    # Ecp_ClientId(签名必要项);真实可用性由下方 check_cookies 探测兜底。
+    missing = [r for r in ("Ecp_ClientId",) if r not in cookies]
     if missing:
         raise HTTPException(
             400,
