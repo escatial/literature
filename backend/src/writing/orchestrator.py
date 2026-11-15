@@ -1349,6 +1349,17 @@ def _polish_and_verify_section(
         emit("article_lint", "fail",
              f"章节核查未通过(自动修复 {repaired_rounds} 轮),已如实标记密度警告",
              time.monotonic() - lint_t0)
+
+    # 密度警告重算(2026-11-15):写作中途的 density_warning 是旧快照——
+    # humanize/修复轮/证据补充可能已把引用补齐(实测 theme_1 最终 35 个
+    # 不同文献仍带 warning → QA 误报)。按最终正文的不同 lit 引用数重算,
+    # article_lint 的 ARTICLE_CITATION_DENSITY 只如实转写本标志。
+    try:
+        from writing.section_writer import _min_citation_target, CITE_RE
+        uniq_ids = {m.group(1) for m in CITE_RE.finditer(result.content or "")}
+        result.density_warning = bool(papers) and len(uniq_ids) < _min_citation_target(len(papers))
+    except Exception as exc:  # noqa: BLE001  重算失败维持原标志
+        log.debug("章节 %s 密度警告重算失败: %s", result.key, exc)
     return result
 
 
