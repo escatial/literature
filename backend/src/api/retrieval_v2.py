@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from retrieval.task_service import (
@@ -51,11 +51,29 @@ class V2TaskOut(BaseModel):
 
 
 @router.post("", response_model=V2TaskCreated)
-def create_v2_task(req: V2TaskCreate):
+def create_v2_task(
+    req: V2TaskCreate,
+    request: Request,
+    x_task_id: str | None = Header(default=None, alias="X-Task-Id"),
+):
+    """创建英文检索任务。
+
+    v9.13(2026-11-16):补 X-Task-Id 池隔离与创建者归属——此前两参均未
+    透传,英文文献全部落 task_id=None(用户文献池按任务过滤时不可见、
+    检索历史文献数统计为 0;实测 1012 篇挂 None)。归属取当前登录用户。
+    """
+    from security.auth import user_from_token
+    owner = None
+    try:
+        owner = getattr(request.state, "user", None) if request is not None else None
+    except Exception:  # noqa: BLE001
+        pass
     task = create_task_v2(
         topic=req.topic, sources=req.sources,
         use_snowball=req.use_snowball,
         year_start=req.year_start, year_end=req.year_end,
+        pool_task_id=(x_task_id or "").strip() or None,
+        owner_user_id=owner.user_id if owner is not None else None,
     )
     return V2TaskCreated(task_id=task.task_id, status=task.status)
 
