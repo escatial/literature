@@ -129,6 +129,17 @@ INTENT_SYSTEM = """你是学术检索规划专家。任务:把用户的研究主
    是文献中的规范表述(如「权利寻租」在学术文献中规范用语是「权力寻租」,检索式
    必须同时覆盖「权力寻租」「寻租」;「村官」应映射为「村干部」)。口语词、个别
    用字不当都要映射到规范学术词,否则知网会因一字之差漏掉最核心的文献。
+8. 中国特有政策/行业术语(如「全产全销」「供给侧改革」「新旧动能转换」)在
+   OpenAlex/PubMed 国际文献中**不存在对应短语**——严禁把它们(或其直译,如
+   "full production and full sales")作为英文检索式的必含 AND 项:含这种短语
+   的式子必然 0 命中(2026-11-15 实测:此类式子把整个英文梯度全灭)。正确做法:
+   - 将其**降维为操作语义**(全产全销 → production-sales coordination /
+     integrated production and export / coordinated production and
+     transportation),且只作为**部分式子的可选 OR 项**;
+   - 英文核心式必须由**普适技术概念**(领域对象 + 动作环节,如 offshore oil
+     and gas + export/transportation + coordination/scheduling)构成,
+     保证国际文献可命中;
+   - 中文知网式不受此条影响(「全产全销」在知网是有真实文献的政策词)。
 """
 
 INTENT_USER_TEMPLATE = """研究主题:{topic}
