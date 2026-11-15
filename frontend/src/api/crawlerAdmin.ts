@@ -8,6 +8,8 @@ export interface CnkiCookieStatus {
   count: number;
   has_kns2cookie: boolean;
   has_ecp_client_id: boolean;
+  /** 可用判定(2026-11-15 口径同步:KNS2COOKIE 为旧版游客令牌,登录态不带) */
+  valid?: boolean;
   missing_required: string[];
   fields: string[];
 }

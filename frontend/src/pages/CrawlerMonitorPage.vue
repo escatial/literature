@@ -146,11 +146,7 @@ const cookieLoading = ref(false);
 const cookieVerified = ref(false);
 const cookieVerifyDetail = ref('');
 
-const cookieOk = computed(
-  () => !!cookieStatus.value
-    && cookieStatus.value.has_kns2cookie
-    && cookieStatus.value.has_ecp_client_id,
-);
+const cookieOk = computed(() => !!cookieStatus.value?.valid);
 
 const loadCookieStatus = async () => {
   cookieLoading.value = true;
@@ -454,7 +450,7 @@ const doResetBreaker = async (b: BreakerSnapshot) => {
           <div class="tab-hint llm-hint">
             中文文献检索(知网)需要浏览器会话 cookie;匿名会话会被知网降权,搜索只回空页。
             粘贴整条 cURL 命令(Copy as cURL)或 cookie 字符串均可,保存后服务端即时验证并热应用到运行中的爬虫会话,无需重启。
-            须包含 KNS2COOKIE 与 Ecp_ClientId 两个核心字段。
+            须包含 Ecp_ClientId 字段(登录态 cURL 自带;KNS2COOKIE 为旧版游客令牌,可无)。
           </div>
           <el-input
             v-model="cookiePayload"

@@ -2771,16 +2771,22 @@ def apply_cookies(cookies: dict) -> dict:
 
 
 def cookie_status() -> dict:
-    """当前 cookie 状态(无网络请求,供状态卡片轮询)。"""
+    """当前 cookie 状态(无网络请求,供状态卡片轮询)。
+
+    2026-11-15 口径同步:KNS2COOKIE 是旧版游客令牌,新版登录会话不带它
+    (与 check_cookies/apply_cookies 的放宽一致)。可用判定只看 Ecp_ClientId。
+    """
     present = sorted(COOKIES.keys())
-    missing = [r for r in ("KNS2COOKIE", "Ecp_ClientId") if r not in COOKIES]
+    valid = "Ecp_ClientId" in COOKIES
     path = CONFIG["paths"]["cookies_file"]
     return {
         "exists": bool(present) or os.path.exists(path),
         "count": len(present),
         "has_kns2cookie": "KNS2COOKIE" in COOKIES,
         "has_ecp_client_id": "Ecp_ClientId" in COOKIES,
-        "missing_required": missing,
+        # 可用判定(与 check_cookies 放宽后的必需口径一致)
+        "valid": valid,
+        "missing_required": [] if valid else ["Ecp_ClientId"],
         "fields": present,
     }
 
