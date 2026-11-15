@@ -85,15 +85,18 @@ def review_llm_test(request: Request) -> LLMTestResponse:
             max_retries=1,
             timeout=20.0,
         )
-        from src.llm.client import resolve_provider, get_model_override
-        rp = resolve_provider("minimax")
-        model_name = get_model_override() or rp.model
-        health = get_provider_health()
-        active = health.get("active_fallback_order") or [get_default_provider()]
+        from src.llm.client import resolve_provider
+        from urllib.parse import urlparse
+        # 2026-11-16 修复:provider/model 如实反映本次实际调用所用配置——
+        # 旧代码硬编码 resolve_provider("minimax")+fallback 链首位,与真实
+        # 调用(apply_user_llm 绑定的用户配置)完全脱节,用户连着 glm-5.3
+        # 却显示"minimax"(实测投诉)。resolve_provider() 无参即运行时生效配置。
+        rp = resolve_provider()
+        host = urlparse(rp.base_url).netloc or rp.base_url
         return LLMTestResponse(
             ok=bool(str(text).strip()),
-            provider=str(active[0]),
-            model=model_name,
+            provider=f"{rp.label}·{host}",
+            model=rp.model,
             elapsed_ms=round((time.perf_counter() - started) * 1000),
             response_preview=str(text).strip()[:120],
         )
