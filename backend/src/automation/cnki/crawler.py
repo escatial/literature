@@ -2696,27 +2696,50 @@ _DEEP_PAGE_MIN_ITEMS = 150
 # ========================== Cookie 在线录入(2026-11-14 API 集成) ==========================
 
 def parse_cookie_payload(raw: str) -> dict:
-    """解析粘贴内容:cURL 命令(-b/--cookie,单双引号)或纯 cookie 头串 → {k:v}。
+    """解析粘贴内容:cURL 命令(-b/--cookie 或 -H 'Cookie: ...')或纯 cookie 头串 → {k:v}。
 
-    支持监控页「粘贴整条 cURL 命令」的场景:命令里其它 flag 一律忽略,
-    只取 -b/--cookie 的值;纯 cookie 串按分号切 k=v 并对值做 URL 解码
-    (与 cmd_setup_cookies 同语义)。
+    2026-11-15 实测增强(用户首贴即失败):浏览器 Copy as cURL 有三种
+    cookie 携带形态,旧解析只认 -b/--cookie 一种,且对含 --url/-H 的
+    多行命令切分出垃圾键(整段命令前缀混进键名):
+    1. -b/--cookie '<cookie 串>'(含 $'...' 与双引号);
+    2. -H 'Cookie: <串>' / --header(头名大小写不敏感);
+    3. 裸 'Cookie: <串>' 或直接 K=V;K=V 串。
+    行续符(\\+换行)先归一为空格,多行命令当单行处理。
+    键名净化:含空格/冒号的键是命令外壳混入的垃圾,直接丢弃。
     """
     raw = (raw or "").strip()
     if not raw:
         return {}
-    m = re.search(r'(?:-b|--cookie)\s+(?:\$?\'([^\']*)\'|"([^"]*)")', raw)
+    # cURL 多行命令的行续符归一(bash 语义: 行尾 \ + 换行 = 拼接)
+    raw = re.sub(r"\\\s*\n\s*", " ", raw)
+
+    cookie_str: str | None = None
+    m = re.search(r"(?:-b|--cookie)\s+(?:\$?'([^']*)'|\"([^\"]*)\"|(\S+))", raw)
     if m:
-        raw = (m.group(1) or m.group(2) or "").strip()
+        cookie_str = next((g for g in m.groups() if g is not None), None)
+    if cookie_str is None:
+        for hm in re.finditer(
+            r"(?:-H|--header)\s+(?:\$?'([^']*)'|\"([^\"]*)\"|(\S+))", raw, re.IGNORECASE
+        ):
+            hdr = next((g for g in hm.groups() if g is not None), "")
+            if hdr.lower().startswith("cookie"):
+                cookie_str = hdr.split(":", 1)[1] if ":" in hdr else ""
+                break
+    if cookie_str is None:
+        m = re.search(r"\bcookie\s*[:：]\s*(.+)$", raw, re.IGNORECASE | re.DOTALL)
+        if m:
+            cookie_str = m.group(1).strip()
+
     cookies: dict[str, str] = {}
-    for part in raw.split(";"):
+    for part in (cookie_str or raw).split(";"):
         part = part.strip()
         if "=" not in part:
             continue
         k, _, v = part.partition("=")
         k = k.strip()
         v = unquote(v.strip())
-        if k:
+        # 含空格/冒号的键是命令外壳混入的垃圾(如 "curl --url '...' -H 'Cookie: KNS2COOKIE")
+        if k and " " not in k and ":" not in k:
             cookies[k] = v
     return cookies
 

@@ -176,7 +176,9 @@ const saveCnkiCookie = async () => {
     }
   } catch (e) {
     cookieVerified.value = false;
-    cookieVerifyDetail.value = '保存失败:请检查粘贴内容与网络';
+    // 透传后端 400 detail(如"缺少必需 cookie 字段: KNS2COOKIE, Ecp_ClientId")
+    const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+    cookieVerifyDetail.value = detail || '保存失败:请检查粘贴内容与网络';
   } finally {
     cookieSaving.value = false;
   }
