@@ -1392,7 +1392,10 @@ _META_CUE_RE = re.compile(
     r"|let's |potential (?:concern|issue)|questions?\s*[:：]"
     r"|question (?:whether|is)|the user\b|don't "
     r"|could (?:include|say|be|maybe|mean|the)|okay[,.]|(?<![a-z])fine\."
-    r"|polish\s*[:：])",
+    r"|polish\s*[:：]"
+    # 2026-11-15 同行混排形态(真实任务第2章残留):推理短句散布于中文锚词间
+    r"|can integrate|count around|trim to|consensus should"
+    r"|specifically from|total \d+|unused\.)",
     re.IGNORECASE,
 )
 # 草稿过程结构标签行(Paragraph N: / Paragraph N final: / Second final: 等),
@@ -1435,13 +1438,21 @@ def _block_is_meta_reasoning(block: str) -> bool:
 
 
 def _line_is_meta_musing(line: str) -> bool:
-    """块内夹带的英文推敲行(如行尾 Fine./okay. 的分析行)。"""
+    """块内夹带的英文推敲行(如行尾 Fine./okay. 的分析行)。
+
+    2026-11-15 加强:『英文推理+少量中文锚词』同行形态(真实任务再现——
+    "We can integrate 李婧 into synthesis..." 英文 60+/中文 20,en>zh
+    放行)。中文综述正文行不可能含英文草稿动词短语:命中 cue 且英文
+    ≥30 字符即整行删,不再比较中英占比。
+    """
     if not line.strip():
         return False
     if _META_LABEL_LINE_RE.match(line):
         return True
     en = len(re.findall(r"[A-Za-z]", line))
     zh = len(re.findall(r"[\u4e00-\u9fff]", line))
+    if en > 30 and _META_CUE_RE.search(line):
+        return True
     return en > 15 and en > zh and bool(_META_CUE_RE.search(line))
 
 
