@@ -13,6 +13,8 @@ import threading
 from typing import AsyncIterator
 from uuid import uuid4
 
+import os
+
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -170,6 +172,13 @@ def cnki_cookies_save(req: CnkiCookieIn, request: Request):
             "请在浏览器登录知网后,从 F12 → Network 任意请求 Copy as cURL 后整段粘贴。",
         )
     result = apply_cookies(cookies)
+    # 持久化确认(2026-11-15 事故:cookie 曾只活在进程内存,重启即丢)
+    try:
+        from automation.cnki.crawler import CONFIG as _CNKI_CONFIG
+        persisted = os.path.exists(_CNKI_CONFIG["paths"]["cookies_file"])
+    except Exception:  # noqa: BLE001
+        persisted = False
+    result["persisted"] = persisted
     try:
         ok = check_cookies()
     except Exception as exc:  # noqa: BLE001  探测网络故障不吞已应用事实
