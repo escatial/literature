@@ -182,8 +182,10 @@ def select_providers(requested: str | None) -> tuple[str, ...]:
         # 兜底:把所有 PROVIDER_SPECS 里配了 key 的都试一遍
         order = [pid for pid in PROVIDER_SPECS if _provider_has_key(pid)]
     if not order:
+        # 2026-11-16 纯用户配置模式:.env 系统兜底已移除,引导到页面配置
         raise RuntimeError(
-            "所有 LLM provider 都缺少 API key,请在 backend/.env 中至少配置一组"
+            "尚未配置 LLM:请在「监控与管理 → LLM 设置」中选择或配置模型后使用"
+            "(每个用户独立配置,所有检索/写作调用走发起人自己的 LLM)"
         )
     return tuple(order)
 

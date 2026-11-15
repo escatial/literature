@@ -364,6 +364,7 @@ def create_task_v2(
     limit: int | None = None,
     pool_task_id: str | None = None,
     owner_user_id: str | None = None,
+    llm_config: dict | None = None,
 ) -> RetrievalTaskModel:
     """新版任务入口。
 
@@ -403,6 +404,7 @@ def create_task_v2(
             target=run_task_v2,
             args=(task_id, selected, use_snowball),
             kwargs={"run_id": run_id, "limit": limit, "pool_task_id": pool_task_id,
+                    "llm_config": llm_config,
                     "year_start": year_start, "year_end": year_end},
             daemon=True,
         ).start()
@@ -441,6 +443,7 @@ _RUNNING: set[str] = set()
 def run_task_v2(task_id: str, sources: list[str] | None = None,
                 use_snowball: bool = False,
                 run_id: str | None = None,
+                llm_config: dict | None = None,
                 limit: int | None = None,
                 pool_task_id: str | None = None,
                 year_start: int | None = None,
@@ -455,12 +458,30 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
             log.warning("任务 %s 已在运行,拒绝并发重入", task_id)
             return
         _RUNNING.add(task_id)
+    # 每用户 LLM 配置贯穿后台线程(2026-11-16 纯用户配置模式):ContextVar
+    # 不跨线程,显式在执行线程内绑定——SearchIntent 规划/重排等调用走
+    # 发起人配置,而非 env 系统兜底。
+    llm_token = None
+    if llm_config and llm_config.get("base_url") and llm_config.get("api_key") and llm_config.get("model"):
+        from llm.client import set_runtime_llm
+        llm_token = set_runtime_llm(
+            kind=(llm_config.get("kind") or "openai").strip().lower(),
+            base_url=llm_config["base_url"],
+            api_key=llm_config["api_key"],
+            model=llm_config["model"],
+        )
     try:
         _run_task_v2_impl(
             task_id, sources, use_snowball, run_id=run_id, limit=limit,
             pool_task_id=pool_task_id, year_start=year_start, year_end=year_end,
         )
     finally:
+        if llm_token:
+            from llm.client import reset_runtime_llm, clear_runtime_llm
+            try:
+                reset_runtime_llm(llm_token)
+            except Exception:  # noqa: BLE001
+                clear_runtime_llm()
         with _RUNNING_LOCK:
             _RUNNING.discard(task_id)
 

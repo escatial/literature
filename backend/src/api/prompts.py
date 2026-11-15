@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from security.auth import apply_user_llm
 from pydantic import BaseModel, Field
 
 from prompts.service import call_template, list_available, parse_llm_json, render
@@ -55,14 +56,18 @@ class CallRequest(BaseModel):
 
 
 @router.post("/call")
-def call_prompt(req: CallRequest):
+def call_prompt(req: CallRequest, request: Request):
     """渲染模板并调用 LLM,返回助手文本。"""
+    from security.auth import apply_user_llm
+    llm_reset = apply_user_llm(getattr(request.state, "user", None))
     try:
         out = call_template(req.template_id, req.vars, max_tokens=req.max_tokens)
     except FileNotFoundError:
         raise HTTPException(404, f"template '{req.template_id}' not found")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    finally:
+        llm_reset()
     return {"output": out}
 
 
@@ -79,8 +84,10 @@ class HumanizeResponse(BaseModel):
 
 
 @router.post("/humanize", response_model=HumanizeResponse)
-def humanize_text(req: HumanizeRequest):
+def humanize_text(req: HumanizeRequest, request: Request):
     """便捷入口:直接调 humanize 模板, 强制 JSON 输出 (response_format=json_object)。"""
+    from security.auth import apply_user_llm
+    llm_reset = apply_user_llm(getattr(request.state, "user", None))
     try:
         out = call_template(
             "literature-review:humanize",
@@ -90,6 +97,8 @@ def humanize_text(req: HumanizeRequest):
         )
     except FileNotFoundError:
         raise HTTPException(500, "humanize template missing")
+    finally:
+        llm_reset()
 
     parsed = parse_llm_json(out)
 

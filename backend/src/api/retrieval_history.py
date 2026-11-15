@@ -104,12 +104,25 @@ def replay_history(history_id: int, request: Request = None):
     # 全不在白名单/为空时传 None 走默认双库。
     raw_sources = [str(s) for s in (row.get("sources") or [])]
     sources = [s for s in raw_sources if s in ("openalex", "pubmed")] or None
+    # 每用户 LLM 配置透传(2026-11-16 纯用户配置模式):回放的后台线程
+    # 里 SearchIntent/重排需要发起人配置(ContextVar 不跨线程)
+    llm_cfg = None
+    if user is not None:
+        cand = {
+            "kind": (getattr(user, "llm_kind", "") or "openai").strip().lower(),
+            "base_url": (getattr(user, "llm_base_url", "") or "").strip(),
+            "api_key": (getattr(user, "llm_api_key", "") or "").strip(),
+            "model": (getattr(user, "llm_model", "") or "").strip(),
+        }
+        if cand["base_url"] and cand["api_key"] and cand["model"]:
+            llm_cfg = cand
     task = create_task_v2(
         topic=row["topic"],
         sources=sources,
         use_snowball=False,
         # B6:回放产生的新任务归属当前操作者(而非原历史 owner)
         owner_user_id=getattr(user, "user_id", None),
+        llm_config=llm_cfg,
     )
     return {"task_id": task.task_id, "status": task.status}
 

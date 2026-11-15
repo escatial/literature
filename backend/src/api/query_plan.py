@@ -1,8 +1,10 @@
 """LLM 查询规划 API:把中文主题拆成三个数据库各自的动态检索式列表。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from security.auth import apply_user_llm
 
 from retrieval.query_planner import plan_query_strings
 from retrieval.reranker import rerank
@@ -26,19 +28,23 @@ class QueryPlanResponse(BaseModel):
 
 
 @router.post("/query-plan", response_model=QueryPlanResponse)
-def query_plan(req: QueryPlanRequest):
+def query_plan(req: QueryPlanRequest, request: Request):
     """用 LLM 把中文主题拆成三个数据库各自的动态检索式列表。
 
     失败(LLM 抽风 / 不合法 JSON / 某库检索式数量不在 4～8 条) → 抛 500,
     不静默兜底。
     """
-    if not req.topic.strip():
-        raise HTTPException(400, "topic 不能为空")
+    # 每用户 LLM 配置(2026-11-16 纯用户配置模式):规划调用走发起人配置
+    llm_reset = apply_user_llm(getattr(request.state, "user", None))
     try:
+        if not req.topic.strip():
+            raise HTTPException(400, "topic 不能为空")
         planned = plan_query_strings(req.topic, year=req.year_start)
     except RuntimeError as exc:
         # LLM 失败重试都失败:返回 502 让前端明确告知用户
         raise HTTPException(502, f"LLM 规划失败: {exc}") from exc
+    finally:
+        llm_reset()
     return QueryPlanResponse(
         topic_summary=planned["topic_summary"],
         queries_cnki=planned["queries_cnki"],
@@ -99,8 +105,12 @@ class RerankResponse(BaseModel):
 
 
 @router.post("/rerank", response_model=RerankResponse)
-def rerank_papers(req: RerankRequest):
+def rerank_papers(req: RerankRequest, request: Request):
     """LLM 相关度重排。失败兜底返回原顺序。"""
-    papers = [p.to_paper() for p in req.papers]
-    ranked = rerank(papers, req.topic, top_n=req.top_n)
-    return RerankResponse(papers=[p.to_dict() for p in ranked])
+    llm_reset = apply_user_llm(getattr(request.state, "user", None))
+    try:
+        papers = [p.to_paper() for p in req.papers]
+        ranked = rerank(papers, req.topic, top_n=req.top_n)
+        return RerankResponse(papers=[p.to_dict() for p in ranked])
+    finally:
+        llm_reset()

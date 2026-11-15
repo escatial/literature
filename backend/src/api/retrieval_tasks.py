@@ -74,12 +74,25 @@ def create_retrieval_task(
     # 让前端能拿到按 db 拆分的翻页事件(对称中文知网日志面板)。
     # 旧 create_task 路径不调 Controller,无 events,前端面板会一直空。
     _user = getattr(request.state, "user", None) if request is not None else None
+    # 每用户 LLM 配置透传(2026-11-16 纯用户配置模式):后台线程的
+    # SearchIntent/重排需要发起人配置(ContextVar 不跨线程)
+    llm_cfg = None
+    if _user is not None:
+        cand = {
+            "kind": (getattr(_user, "llm_kind", "") or "openai").strip().lower(),
+            "base_url": (getattr(_user, "llm_base_url", "") or "").strip(),
+            "api_key": (getattr(_user, "llm_api_key", "") or "").strip(),
+            "model": (getattr(_user, "llm_model", "") or "").strip(),
+        }
+        if cand["base_url"] and cand["api_key"] and cand["model"]:
+            llm_cfg = cand
     task = create_task_v2(
         topic=req.topic, sources=req.sources, use_snowball=req.use_snowball,
         year_start=req.year_start, year_end=req.year_end, run_id=req.run_id,
         limit=req.limit, pool_task_id=(x_task_id or "").strip() or None,
         # B6:任务归属创建者(stop/查询授权的权威依据)
         owner_user_id=getattr(_user, "user_id", None),
+        llm_config=llm_cfg,
     )
     return RetrievalTaskCreated(task_id=task.task_id, status=task.status)
 

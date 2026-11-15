@@ -385,8 +385,10 @@ class QAResponse(BaseModel):
 
 
 @router.post("/writing/qa/run", response_model=QAResponse)
-def writing_qa_run(req: QARequest) -> QAResponse:
+def writing_qa_run(req: QARequest, request: Request) -> QAResponse:
     """独立端点:对已写入完成的章节与文献做一遍全流程核查。"""
+    from security.auth import apply_user_llm
+    apply_user_llm(getattr(request.state, "user", None))
     from qa.hooks import run_post_write_qa
     from qa.report import render_json_report, render_markdown_report
     from qa.runner import QARunner

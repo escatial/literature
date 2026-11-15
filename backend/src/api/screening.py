@@ -1,7 +1,9 @@
 """主题不符筛选 API。/api/screening/filter"""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+
+from security.auth import apply_user_llm
 from pydantic import BaseModel
 
 from retrieval.types import Paper
@@ -20,7 +22,7 @@ class ScreenResponse(BaseModel):
 
 
 @router.post("/screening/filter", response_model=ScreenResponse)
-def screen(req: ScreenRequest):
+def screen(req: ScreenRequest, request: Request):
     """主题不符筛选。
 
     保持同步:screen_batch 会调 LLM(数秒级),放线程里没有收益,
@@ -28,8 +30,12 @@ def screen(req: ScreenRequest):
     并且中间代理会因为长 keep-alive 静默而主动切断连接(产生 ECONNRESET)。
     同步端点由 starlette 自动丢到外层 threadpool,与 async 互不阻塞。
     """
-    if not req.topic.strip():
-        raise HTTPException(400, "topic 不能为空")
-    papers = [Paper(**p) for p in req.papers]
-    results = screen_batch(papers, req.topic)
-    return ScreenResponse(results=results)
+    llm_reset = apply_user_llm(getattr(request.state, "user", None))
+    try:
+        if not req.topic.strip():
+            raise HTTPException(400, "topic 不能为空")
+        papers = [Paper(**p) for p in req.papers]
+        results = screen_batch(papers, req.topic)
+        return ScreenResponse(results=results)
+    finally:
+        llm_reset()

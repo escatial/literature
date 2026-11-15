@@ -70,6 +70,19 @@ def create_v2_task(
         owner = getattr(request.state, "user", None) if request is not None else None
     except Exception:  # noqa: BLE001
         pass
+    # 每用户 LLM 配置透传(2026-11-16 纯用户配置模式):v2 的 SearchIntent
+    # 规划/重排在后台线程跑,ContextVar 不跨线程——把配置值显式带入线程内
+    # 绑定(与写作 worker 的 bind lambda 同机制)。
+    llm_cfg = None
+    if owner is not None:
+        llm_cfg = {
+            "kind": (owner.llm_kind or "openai").strip().lower(),
+            "base_url": (owner.llm_base_url or "").strip(),
+            "api_key": (owner.llm_api_key or "").strip(),
+            "model": (owner.llm_model or "").strip(),
+        }
+        if not (llm_cfg["base_url"] and llm_cfg["api_key"] and llm_cfg["model"]):
+            llm_cfg = None
     task = create_task_v2(
         topic=req.topic, sources=req.sources,
         use_snowball=req.use_snowball,
@@ -77,6 +90,7 @@ def create_v2_task(
         pool_task_id=(x_task_id or "").strip() or None,
         owner_user_id=owner.user_id if owner is not None else None,
         run_id=(req.run_id or "").strip() or None,
+        llm_config=llm_cfg,
     )
     return V2TaskCreated(task_id=task.task_id, status=task.status)
 
