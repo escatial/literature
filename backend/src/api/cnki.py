@@ -136,9 +136,32 @@ class CnkiCookieIn(BaseModel):
     payload: str = Field(..., min_length=1)
 
 
+def _restore_cookies_from_db_if_missing() -> None:
+    """cookies.json 丢失时从 DB 恢复到爬虫会话+文件(DB 为真源)。
+
+    2026-11-16 事故:文件两次重启后消失,但 DB 从未被删——状态查询/任务
+    启动前顺带自愈,用户无感。
+    """
+    try:
+        from automation.cnki.crawler import cookie_status, COOKIES
+        if COOKIES:
+            return  # 内存健在,无需恢复
+        from db.session import SessionLocal as _SL
+        from db.models import CnkiCookiesModel
+        with _SL() as db:
+            row = db.query(CnkiCookiesModel).filter_by(id=1).one_or_none()
+        if not row or not row.cookies:
+            return
+        from automation.cnki.crawler import apply_cookies
+        apply_cookies(dict(row.cookies))
+    except Exception:  # noqa: BLE001  自愈失败不影响状态查询
+        pass
+
+
 @router.get("/cnki/cookies/status")
 def cnki_cookies_status():
     """当前 cookie 状态(无网络请求,状态卡片轮询用)。"""
+    _restore_cookies_from_db_if_missing()
     try:
         from automation.cnki.crawler import cookie_status
         return cookie_status()
@@ -175,12 +198,29 @@ def cnki_cookies_save(req: CnkiCookieIn, request: Request):
             "请在浏览器登录知网后,从 F12 → Network 任意请求 Copy as cURL 后整段粘贴。",
         )
     result = apply_cookies(cookies)
-    # 持久化确认(2026-11-15 事故:cookie 曾只活在进程内存,重启即丢)
+    # 持久化双写:DB 为真源(2026-11-16 cookies.json 两次重启后消失——
+    # 文件系统层面删除源未定,DB 文件从未被动过),文件仅为缓存
+    persisted = False
     try:
         from automation.cnki.crawler import CONFIG as _CNKI_CONFIG
         persisted = os.path.exists(_CNKI_CONFIG["paths"]["cookies_file"])
     except Exception:  # noqa: BLE001
         persisted = False
+    try:
+        import json as _json
+        from db.session import SessionLocal as _SL
+        from db.models import CnkiCookiesModel
+        with _SL() as db:
+            row = db.query(CnkiCookiesModel).filter_by(id=1).one_or_none()
+            if row is None:
+                row = CnkiCookiesModel(id=1, cookies=cookies)
+                db.add(row)
+            else:
+                row.cookies = cookies
+            db.commit()
+        persisted = True
+    except Exception as exc:  # noqa: BLE001  DB 失败不吞已应用事实
+        result["persist_error"] = str(exc)[:120]
     result["persisted"] = persisted
     try:
         ok = check_cookies()
@@ -209,6 +249,11 @@ async def start_cnki(
     """
     if not req.run_id:
         raise HTTPException(status_code=422, detail="三库统一检索必须携带 run_id，不能单独运行中国知网")
+    # cookie 自愈:文件/内存丢失时从 DB 恢复(见 _restore_cookies_from_db_if_missing)
+    try:
+        _restore_cookies_from_db_if_missing()
+    except Exception:  # noqa: BLE001
+        pass
     # Q-1 修复①:启动前同步预检检索式,非法直接 422 把原因返回给前端,
     # 不再创建「返回 running 却秒败」的僵尸任务(旧问题:任务在 adapter 的
     # registry 注册之前被检索式校验拒绝,面板永不可见,用户点启动后毫无动静)

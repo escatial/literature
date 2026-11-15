@@ -317,6 +317,20 @@ class LLMProfileModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 
+class CnkiCookiesModel(Base):
+    """知网爬虫会话 cookie 的 DB 持久化(单行,id=1)。
+
+    2026-11-16 事故:cookies.json 文件两次在重启后消失(文件系统层面
+    删除源未定,疑似系统管控),用户粘贴的 cookie 只活在进程内存。
+    DB 文件从未被删——改为 DB 为持久真源、文件仅为缓存:保存双写,
+    启动/读取时文件缺失即从 DB 恢复。
+    """
+    __tablename__ = "cnki_cookies"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    cookies: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
 class AuthTokenModel(Base):
     """登录令牌(库里只存 SHA-256 哈希,原文仅下发一次给前端)。
 
