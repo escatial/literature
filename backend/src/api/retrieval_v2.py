@@ -21,6 +21,8 @@ router = APIRouter(prefix="/retrieval/v2/tasks", tags=["retrieval-v2"])
 class V2TaskCreate(BaseModel):
     topic: str = Field(..., min_length=1)
     sources: list[str] = Field(default_factory=lambda: ["pubmed", "openalex"])
+    # 统一检索 run_id:同一次提交的知网行+英文行共用,历史页聚合为一条
+    run_id: str | None = None
     use_snowball: bool = False
     year_start: int | None = None
     year_end: int | None = None
@@ -74,6 +76,7 @@ def create_v2_task(
         year_start=req.year_start, year_end=req.year_end,
         pool_task_id=(x_task_id or "").strip() or None,
         owner_user_id=owner.user_id if owner is not None else None,
+        run_id=(req.run_id or "").strip() or None,
     )
     return V2TaskCreated(task_id=task.task_id, status=task.status)
 

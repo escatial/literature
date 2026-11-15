@@ -46,14 +46,47 @@ def _assert_owner(row: dict | None, user) -> dict:
 
 @router.get("", response_model=list[RetrievalHistoryOut])
 def list_history(limit: int = _HISTORY_KEEP, request: Request = None):
-    """获取最近 N 条检索历史(默认 5 条,按时间倒序)。B6:仅本人名下,admin 全量。"""
+    """获取最近 N 条检索历史(默认 5 条,按时间倒序)。B6:仅本人名下,admin 全量。
+
+    2026-11-15 run 聚合展示:统一检索一次提交会写「知网行 + 英文 v2 行」
+    两行(同 run_id)。列表按 run_id 合并——主题取中文行(用户输入的原貌),
+    文献数合计,sources 合并;无 run_id 的行保持独立。用户视角:一次任务
+    一条记录,英文检索式是任务内部细节,不再作为独立"检索主题"出现。
+    """
     user = _request_user(request)
     rows = list_recent(
         limit=limit,
         owner_user_id=getattr(user, "user_id", None),
         is_admin=_is_admin(user),
     )
-    return [_to_out(r) for r in rows]
+
+    def _zh_first(r: dict) -> bool:
+        # 中文主题行(知网侧,用户输入的原貌)作为合并后的代表行
+        return "cnki" in (r.get("sources") or [])
+
+    grouped: dict[str, dict] = {}
+    order: list[str] = []
+    standalone: list[dict] = []
+    for r in rows:
+        run_id = r.get("run_id")
+        if not run_id:
+            standalone.append(r)
+            continue
+        if run_id not in grouped:
+            rep = dict(r)
+            grouped[run_id] = rep
+            order.append(run_id)
+            continue
+        rep = grouped[run_id]
+        rep["total_count"] = (rep.get("total_count") or 0) + (r.get("total_count") or 0)
+        merged_sources = list(dict.fromkeys(
+            (rep.get("sources") or []) + (r.get("sources") or [])))
+        rep["sources"] = merged_sources
+
+    merged_rows = [grouped[k] for k in order]
+    # 无 run_id 行(旧数据/直连调试)按原样排在后面,仍按时间倒序
+    merged_rows.extend(standalone)
+    return [_to_out(r) for r in merged_rows]
 
 
 @router.post("/{history_id}/replay", response_model=dict)
