@@ -1545,6 +1545,7 @@ def _write_paragraph_text(
         system=_OUTLINE_PARA_SYSTEM,
         user="\n\n".join(parts),
         max_tokens=1500,
+        disable_thinking=True,
     )
     # 2026-11-14 事故加固(job3 实测):单段输出把英文自我分析与中文正文
     # 写进同一块,normalize 的交错剥离(≥2 块才触发)拦不住 → 拼装后被
@@ -1563,6 +1564,7 @@ def _write_paragraph_text(
                     f"【上一版】\n{text[:1500]}\n\n只输出修正后的该段正文。"
                 ),
                 max_tokens=1500,
+                disable_thinking=True,
             )
             retried = _strip_obvious_meta_lines(
                 normalize_model_output(retry_raw)
@@ -1622,6 +1624,7 @@ def _rewrite_paragraph_text(
             "只输出修正后的该段正文。"
         ),
         max_tokens=1500,
+        disable_thinking=True,
     )
     return normalize_model_output(raw).strip()
 

@@ -799,6 +799,7 @@ def messages_stream_ex(
                     max_tokens=max_tokens, model=fast.model,
                     temperature=temperature, timeout=timeout,
                     response_format=response_format,
+                    disable_thinking=True,
                 ):
                     if kind == "content":
                         yielded_any = True
@@ -874,6 +875,7 @@ def _stream_with_resolved(
     temperature: float | None,
     timeout: float | None = None,
     response_format: dict | None = None,
+    disable_thinking: bool = False,
 ) -> Generator[tuple[str, str], None, None]:
     """单个 provider 的流式调用,yield (kind, text): kind ∈ reasoning/content。"""
     model = model or resolved.model
@@ -942,6 +944,9 @@ def _stream_with_resolved(
         if resolved.id == "minimax":
             # 官方 reasoning_split:思考内容分离到 reasoning_details,content 只留正文
             kwargs["extra_body"] = {"reasoning_split": True}
+        elif disable_thinking and "glm" in (model or "").lower():
+            # 2026-11-15 fast 回落主档:GLM 思考禁用(bigmodel 语法),同非流分支
+            kwargs.setdefault("extra_body", {})["thinking"] = {"type": "disabled"}
 
         # 思考增量双来源:reasoning_split 的 reasoning_details 与 deepseek 风格的
         # delta.reasoning_content;实时对外 yield 供过程展示,同时留 buffer 兜底
@@ -1004,6 +1009,7 @@ def _create_with_provider(
     response_format: dict | None,
     timeout: float,
     max_retries: int,
+    disable_thinking: bool = False,
 ) -> str:
     """在单一 provider 上做指数退避重试,鉴权类错误直接抛给外层切换。"""
     model = model or resolved.model
@@ -1072,6 +1078,12 @@ def _create_with_provider(
                 if resolved.id == "minimax":
                     # 官方 reasoning_split:思考内容分离到 reasoning_details,content 只留正文
                     kwargs["extra_body"] = {"reasoning_split": True}
+                elif disable_thinking and "glm" in (model or "").lower():
+                    # 2026-11-15 fast 回落主档:GLM 系思考模型的思考计入
+                    # max_tokens 且耗时 2-3 倍,筛选/大纲类结构化短调用禁思考
+                    # (bigmodel 语法 thinking={"type":"disabled"};其余兼容端点
+                    # 对未知 extra_body 字段忽略,风险可控)
+                    kwargs.setdefault("extra_body", {})["thinking"] = {"type": "disabled"}
                 resp = client.chat.completions.create(**kwargs)
                 message = resp.choices[0].message
                 content = getattr(message, "content", None) or ""
@@ -1175,6 +1187,7 @@ def messages_create(
     timeout: float | None = None,
     provider: str | None = None,
     tier: str | None = None,
+    disable_thinking: bool = False,
 ) -> str:
     """按 fallback 顺序调用 LLM,任何一级 provider 失败自动降级到下一级。
 
@@ -1194,6 +1207,9 @@ def messages_create(
     """
     timeout_value = timeout if timeout is not None else 300.0
     if (tier or "").strip().lower() == "fast":
+        # fast 语义=快速出结构化结果:未配快模型回落主档时自动禁思考,
+        # 否则 glm 思考模型把"快速档"跑成 2-3 倍耗时(2026-11-15 实测)
+        disable_thinking = True
         fast = None
         try:
             fast = _resolve_fast_provider()
@@ -1218,6 +1234,7 @@ def messages_create(
         response_format=response_format,
         timeout=timeout_value,
         max_retries=max_retries,
+        disable_thinking=disable_thinking,
     ))
 
 
