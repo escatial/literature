@@ -249,21 +249,18 @@ def plan_query_strings(topic: str, year: int | None = None) -> dict:
 
     last_err: Exception | None = None
     for attempt in range(3):
+        # 2026-11-16:429 限流(套餐 5 小时窗口)重试毫无意义——立即失败,
+        # 不再空烧 3 次调用;同时规划是结构化 JSON 输出,禁思考大幅省 token
+        # (glm-5.3 思考计入 max_tokens 且触发限流更快)。
+        if "429" in str(last_err) or "使用上限" in str(last_err):
+            raise RuntimeError(f"LLM 用量已达套餐上限(5 小时窗口),稍后重试。{last_err}")
         try:
             raw = messages_create(
                 INTENT_SYSTEM,
                 user_msg,
-                # 之前 4000 时 deepseek-v4-flash 偶尔在数组第 N 项字符串里被截断,
-                # 导致所有 3 个数据库列表都只能解析到前 2-3 项。
-                # 升到 8000 给足 buffer,并随 attempt 递增以应对偶发长尾。
-                # 2026-11-15:glm-5.3 思考模型 reasoning 会计入 max_tokens,
-                # 8000 时 JSON 系统性截断(3 次重试全挂,实测);提到 16k 给足。
                 max_tokens=(12000, 16000, 16000)[attempt],
                 temperature=(0.3, 0.5, 0.7)[attempt],
-                # MiniMax-M3 是深度推理模型:实测本步骤 reasoning tokens ~6900,
-                # 端到端 60~90s。之前 25s(防 ChatGLM 不可达)必定超时 → 3 次重试
-                # 全失败 → 前端自动重试 → 表现为"永远卡在生成检索式"。
-                # 现在 provider 锁定 minimax(实测可达),timeout 提到 120s。
+                disable_thinking=True,
                 timeout=120.0,
             )
             data = _parse_json_lenient(raw)
