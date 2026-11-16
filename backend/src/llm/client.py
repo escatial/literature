@@ -466,8 +466,12 @@ def fetch_models_for(kind: str, base_url: str, api_key: str, timeout: float = 15
         headers = {"Authorization": f"Bearer {(api_key or '').strip()}"}
     _assert_public_http_url(url)  # 请求行上游紧跟公网断言(静态可见)
     import urllib.request
+    # 2026-11-16:显式直连(空代理处理器)。urllib 默认读 Windows 注册表
+    # 系统代理——用户系统代理指向不通端口时 10061 连接拒绝(实测)。国内
+    # 上游 API(bigmodel/minimax)应直连,不应被系统代理劫持。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     req = urllib.request.Request(_guard_outbound_url(url), headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with opener.open(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     models = data.get("data") or []
     return [
