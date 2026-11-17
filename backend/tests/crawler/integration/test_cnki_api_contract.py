@@ -217,6 +217,8 @@ def test_a10_single_group_query_precheck_rejected(client):
 # ========================== B 组：SSE 契约 ==========================
 def test_b9_sync_run_and_sse_stream_contract(client, monkeypatch):
     """同步执行：响应 200 → SSE 按序收到全部事件 → done 终态收流不挂。"""
+    # 本测试验证 SSE 契约,mock 只入库 2 篇——关闭检索命中门槛(P0-1)
+    monkeypatch.setenv("RETRIEVAL_MIN_POOL_SIZE", "0")
     events = [
         {"stage": "log", "msg": "开始检索"},
         {"stage": "log", "msg": "解析第 1 页"},
@@ -338,6 +340,8 @@ def test_b16_stream_queue_cleaned_after_consumption(client, monkeypatch):
 
 def test_b17_aggregator_failure_isolated(client, monkeypatch):
     """聚合写入抛异常 → 只记日志，响应与结果落盘不受影响（异常隔离）。"""
+    # 本测试验证异常隔离,mock 只入库 3 篇——关闭检索命中门槛(P0-1)
+    monkeypatch.setenv("RETRIEVAL_MIN_POOL_SIZE", "0")
 
     def _boom(**kw):
         raise RuntimeError("db write failed")
@@ -361,6 +365,8 @@ def test_b18_stream_unknown_task_404(client):
 
 def test_b19_async_start_returns_immediately_and_completes(client, monkeypatch):
     """异步模式：立即返回 running；后台任务真实执行 → 终态落盘 → SSE 可收尾。"""
+    # 本测试验证异步契约,mock 只入库 1 篇——关闭检索命中门槛(P0-1)
+    monkeypatch.setenv("RETRIEVAL_MIN_POOL_SIZE", "0")
     monkeypatch.setattr(
         cnki_api, "run_cnki_full_auto",
         _fake_runner(

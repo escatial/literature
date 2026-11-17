@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 for p in (str(BACKEND_ROOT / "src"), str(BACKEND_ROOT)):
     if p not in sys.path:
@@ -13,7 +15,21 @@ for p in (str(BACKEND_ROOT / "src"), str(BACKEND_ROOT)):
 from writing import job_store  # noqa: E402
 
 
-def test_expire_stale_awaiting(monkeypatch):
+@pytest.fixture()
+def fresh_db(tmp_path):
+    """独立临时库:本测试依赖固定 job_id 的一次性插入,不能依赖共享 DB 的
+    残留状态(此前无 fixture:全量顺序下靠前序测试建表,孤立/二次运行必撞
+    UNIQUE——2026-11-18 基线实测暴露的顺序耦合)。"""
+    from db.session import Base, reset_engine
+
+    reset_engine(f"sqlite:///{tmp_path / 'ttl_test.db'}")
+    import db.models  # noqa: F401
+    Base.metadata.create_all(bind=reset_engine(f"sqlite:///{tmp_path / 'ttl_test.db'}"))
+    yield
+    reset_engine("sqlite:///:memory:")
+
+
+def test_expire_stale_awaiting(monkeypatch, fresh_db):
     """超过 TTL 的 awaiting_confirm → failed + 快照清空;新鲜的保留。"""
     from db.models import _utcnow, WritingJobModel
     from db.session import SessionLocal
@@ -34,7 +50,9 @@ def test_expire_stale_awaiting(monkeypatch):
     assert n >= 1
     old = job_store.get_job("job-ttl-old")
     assert old["status"] == "failed"
+    # P0-5:错误码归一后「超时过期」仍在文案中,且带错误码前缀
     assert "超时过期" in (old["error"] or "")
+    assert "[错误码 confirm_expired]" in (old["error"] or "")
     assert old["req_snapshot"] == {}  # 快照清空:恢复机制不再端出旧方案
     new = job_store.get_job("job-ttl-new")
     assert new["status"] == "awaiting_confirm"  # 新鲜任务不受影响
@@ -42,7 +60,7 @@ def test_expire_stale_awaiting(monkeypatch):
     job_store.stop_job("job-ttl-new")
 
 
-def test_supersede_awaiting_except(monkeypatch):
+def test_supersede_awaiting_except(monkeypatch, fresh_db):
     """新任务创建后,同属主旧 awaiting_confirm 被取代;他属主不受影响。"""
     job_store.create_job("job-sup-old", "usr_s", "主题", "theme", None)
     job_store.create_job("job-sup-other", "usr_other", "主题", "theme", None)
