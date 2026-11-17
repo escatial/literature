@@ -116,6 +116,7 @@ def get_job(job_id: str) -> dict | None:
             "phase": r.phase,
             "error": r.error,
             "req_snapshot": r.req_snapshot,
+            "llm_stats": r.llm_stats,
             "created_at": str(r.created_at or ""),
             "updated_at": str(r.updated_at or ""),
         }
@@ -163,6 +164,23 @@ def stop_job(job_id: str) -> bool:
     return True
 
 
+def set_job_llm_stats(job_id: str, stats: dict) -> None:
+    """P0-6:任务终态写入 LLM 调用累计快照(llm_stats JSON 列)。
+
+    归因数据走列不走事件——事件流是前端契约,未知 event 名有重放兼容风险。
+    """
+    from db.models import WritingJobModel, _utcnow
+    from db.session import SessionLocal
+
+    with SessionLocal() as db:
+        r = db.query(WritingJobModel).filter_by(job_id=job_id).first()
+        if r is None:
+            return
+        r.llm_stats = stats
+        r.updated_at = _utcnow()
+        db.commit()
+
+
 def _confirm_ttl_minutes() -> int:
     """确认窗口 TTL(分钟):awaiting_confirm 超过此时长即过期。
 
@@ -198,9 +216,11 @@ def expire_stale_awaiting() -> int:
         )
         for r in rows:
             r.status = "failed"
-            r.error = (
-                f"主题确认已超时过期(超过 {_confirm_ttl_minutes()} 分钟未确认),"
-                "请重新划分主题。"
+            # P0-5:过期失败附错误码与行动指引(重新划分即恢复路径)
+            from errors.task_errors import TaskErrorCode, format_task_error
+            r.error = format_task_error(
+                TaskErrorCode.CONFIRM_EXPIRED,
+                detail=f"超过 {_confirm_ttl_minutes()} 分钟未确认",
             )
             r.req_snapshot = {}
         db.commit()
@@ -381,12 +401,24 @@ def build_quality_report(job_id: str) -> dict:
         for e in by_name.get("error", [])
     ]
 
+    # ── 耗时归因(P0-6):worker 终态写的 llm_stats 列(不进事件流) ──
     job = get_job(job_id) or {}
+    llm_attribution = dict(job.get("llm_stats") or {}) or None
+    if llm_attribution and total_duration:
+        try:
+            llm_attribution["llm_share_percent"] = round(
+                100.0 * float(llm_attribution.get("llm_seconds") or 0)
+                / float(total_duration), 1,
+            )
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+
     return {
         "job_id": job_id,
         "status": job.get("status"),
         "total_events": len(events),
         "total_duration_seconds": total_duration,
+        "llm_attribution": llm_attribution,
         "stages": stages,
         "screening": screening,
         "readthrough": readthrough,

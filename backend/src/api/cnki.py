@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from typing import AsyncIterator
 from uuid import uuid4
 
@@ -21,7 +22,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 import db.session as _db_session
+import config.limits as _limits
 from db.models import PaperModel
+from errors.task_errors import TaskErrorCode, format_task_error
 from retrieval.history_aggregator import add_cnki as aggregator_add_cnki
 from retrieval.query_planner import normalize_cnki_query
 from retrieval.types import Paper, Source
@@ -310,6 +313,7 @@ async def start_cnki(
                     log.warning("写入知网检索历史失败: %s", exc)
 
         try:
+            _retrieval_t0 = time.perf_counter()
             result = await run_cnki_full_auto(
                 topic=req.topic,
                 expert_query=req.expert_query,
@@ -321,7 +325,27 @@ async def start_cnki(
                 stop_event=stop_ev,
                 pool_task_id=pool_task_id,
             )
-            if result.get("status") == "succeeded":
+            # P0-6 耗时归因:中文侧检索墙钟随结果返回(不落库,进 SSE 结果)
+            if isinstance(result, dict):
+                result.setdefault("elapsed_seconds",
+                                  round(time.perf_counter() - _retrieval_t0, 2))
+            # P0-1 检索命中门槛(中文侧):实际入库篇数低于下限时任务判失败,
+            # 已入库篇目照常落文献池与历史,但不允许带着冷清池进入写作。
+            if (result.get("status") == "succeeded"
+                    and int(result.get("saved") or 0) < _limits.retrieval_min_pool_size()):
+                gate_error = format_task_error(
+                    TaskErrorCode.RETRIEVAL_HIT_COUNT_LOW,
+                    detail=f"实际入库 {result.get('saved')} 篇",
+                    actual=int(result.get("saved") or 0),
+                    threshold=_limits.retrieval_min_pool_size(),
+                )
+                result = {
+                    **result,
+                    "status": "failed",
+                    "reason": gate_error,
+                    "error_code": TaskErrorCode.RETRIEVAL_HIT_COUNT_LOW.value,
+                }
+            if result.get("status") == "succeeded" or int(result.get("saved") or 0) > 0:
                 threading.Thread(
                     target=_persist_history,
                     name=f"cnki-history-{task_id[:8]}",

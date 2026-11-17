@@ -31,6 +31,12 @@ from retrieval.types import Paper
 import retrieval.history_service as history_service
 from retrieval.history_aggregator import add_english as aggregator_add_english
 import retrieval.pool_writer as pool_writer
+import config.limits as _limits
+from errors.task_errors import (
+    TaskErrorCode,
+    classify_exception,
+    format_task_error,
+)
 
 log = logging.getLogger(__name__)
 
@@ -470,12 +476,16 @@ def run_task_v2(task_id: str, sources: list[str] | None = None,
             api_key=llm_config["api_key"],
             model=llm_config["model"],
         )
+    # P0-6 耗时归因:任务级 LLM 调用累计器,同线程绑定,终态读快照
+    from telemetry.phase_stats import bind_task_stats, reset_task_stats
+    stats_token = bind_task_stats(task_id)
     try:
         _run_task_v2_impl(
             task_id, sources, use_snowball, run_id=run_id, limit=limit,
             pool_task_id=pool_task_id, year_start=year_start, year_end=year_end,
         )
     finally:
+        reset_task_stats(stats_token)
         if llm_token:
             from llm.client import reset_runtime_llm, clear_runtime_llm
             try:
@@ -518,10 +528,14 @@ def _run_task_v2_impl(task_id: str, sources: list[str] | None = None,
         try:
             planned = plan_query_strings(task.topic, year=task.year_end or None)
         except Exception as exc:
-            _update(task_id, status="failed", progress=100,
-                    error=f"LLM 规划失败: {exc}")
+            code = classify_exception(exc)
+            error = format_task_error(
+                TaskErrorCode.LLM_ALL_PROVIDERS_FAILED if code == TaskErrorCode.INTERNAL_ERROR else code,
+                detail=f"LLM 规划失败: {exc}",
+            )
+            _update(task_id, status="failed", progress=100, error=error)
             _notify_task_result(task_id, False,
-                                f"任务 {task_id[:8]} LLM 规划失败:\n{exc}")
+                                f"任务 {task_id[:8]} LLM 规划失败:\n{error}")
             return
 
         topic_summary = planned["topic_summary"]
@@ -607,9 +621,18 @@ def _run_task_v2_impl(task_id: str, sources: list[str] | None = None,
             )
             return await ctrl.run_async()
 
+        _retrieval_t0 = time.perf_counter()
         pool = asyncio.run(_run_all())
         # 检索结束:强制清空事件缓冲,后续入库事件顺序才正确
         event_buffer.flush()
+        # P0-6 耗时归因:检索段墙钟 + LLM 调用累计(快照),终态时随
+        # _update 落列(retrieval_seconds / llm_stats)——不进事件流。
+        _retrieval_seconds = round(time.perf_counter() - _retrieval_t0, 2)
+        try:
+            from telemetry.phase_stats import snapshot as _stats_snapshot
+            _llm_stats = _stats_snapshot()
+        except Exception:  # noqa: BLE001 归因埋点绝不影响主链
+            _llm_stats = None
 
         required_sources = {"openalex", "pubmed"}
         ready_sources = {source.name for source in src_objs}
@@ -631,6 +654,24 @@ def _run_task_v2_impl(task_id: str, sources: list[str] | None = None,
                     error="未检索到任何文献")
             _notify_task_result(task_id, False,
                                 f"任务 {task_id[:8]} 未检索到任何文献")
+            return
+        # P0-1 检索命中门槛:低于下限判失败+行动指引,不带冷清池硬写。
+        # 硬下界来自写作侧约束(每主题簇 ≥5 篇可比较评述),低于门槛继续
+        # 只会产出主题簇塌方的综述,故在此显式暂停求助而非带病前进。
+        if len(pool.papers) < _limits.retrieval_min_pool_size():
+            error = format_task_error(
+                TaskErrorCode.RETRIEVAL_HIT_COUNT_LOW,
+                detail=f"实际命中 {len(pool.papers)} 篇",
+                actual=len(pool.papers),
+                threshold=_limits.retrieval_min_pool_size(),
+            )
+            _update(task_id, status="failed", progress=100,
+                    total_before_filter=len(pool.papers),
+                    total_after_filter=len(pool.papers),
+                    papers=[p.to_dict() for p in pool.papers],
+                    error=error)
+            _notify_task_result(task_id, False,
+                                f"任务 {task_id[:8]} {error}")
             return
         # 失败源统计:成功入库数(按 source)少于预期时,记为异常源
         def _emit_persisting(message: str, added: int = 0) -> None:
@@ -697,6 +738,8 @@ def _run_task_v2_impl(task_id: str, sources: list[str] | None = None,
                 total_before_filter=len(pool.papers),
                 total_after_filter=len(pool.papers),
                 papers=[p.to_dict() for p in pool.papers],
+                retrieval_seconds=_retrieval_seconds,
+                llm_stats=_llm_stats,
                 error=None)
         _notify_task_result(
             task_id, True,
@@ -714,12 +757,15 @@ def _run_task_v2_impl(task_id: str, sources: list[str] | None = None,
             })
         except Exception as exc:
             log.warning("停止事件落库失败: %s", exc)
-        _update(task_id, status="failed", progress=100, error="用户已手动停止")
+        _update(task_id, status="failed", progress=100,
+                error=format_task_error(TaskErrorCode.TASK_CANCELLED,
+                                        detail="用户已手动停止"))
     except Exception as exc:
         log.exception("run_task_v2 失败")
         event_buffer.flush()  # 异常路径也保证已产生的事件可见,便于排查
-        _update(task_id, status="failed", progress=100, error=str(exc))
+        error = format_task_error(classify_exception(exc), detail=str(exc))
+        _update(task_id, status="failed", progress=100, error=error)
         _notify_task_result(task_id, False,
-                            f"任务 {task_id[:8]} 执行异常:\n{exc}")
+                            f"任务 {task_id[:8]} 执行异常:\n{error}")
     finally:
         _clear_cancel(task_id)

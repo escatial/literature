@@ -1325,7 +1325,9 @@ def _polish_and_verify_section(
     lint_t0 = time.monotonic()
     emit("article_lint", "start", "正在做章节级质量核查(article_lint)")
     repaired_rounds = 0
-    for attempt in range(2):
+    from config.limits import writing_lint_fix_max_rounds
+    lint_max_rounds = writing_lint_fix_max_rounds()
+    for attempt in range(lint_max_rounds):
         check = check_article_text([result], papers=papers)
         if check.status.value == "pass":
             break
@@ -1335,9 +1337,8 @@ def _polish_and_verify_section(
         re_check = check_article_text([result], papers=papers)
         if re_check.status.value == "pass":
             break
-        if attempt == 0:
+        if attempt < lint_max_rounds - 1:
             # 还有问题 → 再修一轮(修复函数是幂等的,二次调用安全)
-            repair_article_text([result], papers=papers)
             repaired_rounds += 1
 
     # -- Phase 3: 最终校验 --
@@ -1434,7 +1435,8 @@ def _retry_section_quality(
         old_score = _article_quality_score(result.content or "", len(result.citations))
         best_score = old_score
         # 模型偶发输出截断句，连续重试两次；每次都重新做证据绑定。
-        for attempt in range(2):
+        from config.limits import writing_quality_retry_max
+        for attempt in range(writing_quality_retry_max()):
             retry = write_section(
                 spec, topic, groups, papers, grades=grades,
                 synthesis_map=synthesis_map,

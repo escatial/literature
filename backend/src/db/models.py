@@ -106,6 +106,10 @@ class RetrievalTaskModel(Base):
     # v4.1 英文检索过程日志(供前端按 db 拆分展示)
     # 每条: {"stage": ..., "source": ..., "page": ..., "added": ..., "total": ..., "message": ...}
     events: Mapped[list] = mapped_column(JSON, default=list)
+    # P0-6 耗时归因(2026-11-18):检索段墙钟 + LLM 调用累计。
+    # 走列不走事件——事件流是前端契约,未知 stage 有展示风险。
+    retrieval_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    llm_stats: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     # B6 数据归属:创建任务的登录用户;NULL = 存量行(启动回填)
@@ -405,6 +409,9 @@ class WritingJobModel(Base):
     phase: Mapped[str | None] = mapped_column(String(20), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     req_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # P0-6 耗时归因(2026-11-18):任务终态时写入 LLM 调用累计快照。
+    # 走列不走事件——事件流是前端契约,未知 event 名有重放兼容风险。
+    llm_stats: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 

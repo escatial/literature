@@ -1942,7 +1942,12 @@ _SELF_EVAL_SYSTEM = (
 )
 
 _SELF_EVAL_PASS_TOTAL = 30  # 50 分制,≥30 视为达标
-_SELF_EVAL_MAX_ROUNDS = 2
+
+
+def _self_eval_max_rounds() -> int:
+    """自评重写轮数上限(P0-4:上限显式配置,env 可覆盖)。"""
+    from config.limits import writing_self_eval_max_rounds
+    return writing_self_eval_max_rounds()
 
 
 def self_eval_enabled() -> bool:
@@ -1963,7 +1968,7 @@ def _self_evaluate_and_improve(
     alias_map: dict[str, str],
     is_comment: bool,
     model: str | None = None,
-    max_rounds: int = _SELF_EVAL_MAX_ROUNDS,
+    max_rounds: int | None = None,
 ) -> SectionResult:
     """Agent 自我评估 + 迭代改进:LLM 评审自己的输出,不合格就带着反馈重写。
 
@@ -1976,6 +1981,8 @@ def _self_evaluate_and_improve(
     if not self_eval_enabled():
         return result
 
+    if max_rounds is None:
+        max_rounds = _self_eval_max_rounds()
     best = result
     for round_no in range(max_rounds):
         content = best.content or ""

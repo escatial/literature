@@ -602,7 +602,12 @@ def _run_writing_job_worker(
         elif name == "stopped":
             terminal = ("stopped", None)
         elif name == "error":
-            terminal = ("failed", str((data or {}).get("message") or "生成失败"))
+            # P0-2/P0-5 错误码归一:error 事件只剩字符串消息,按签名分类
+            # 并附行动指引——失败消息必须回答「用户现在要做什么」。
+            message = str((data or {}).get("message") or "生成失败")
+            from errors.task_errors import classify_message, format_task_error
+            code = classify_message(message)
+            terminal = ("failed", format_task_error(code, detail=message)[:500])
 
     def publish(kind: str, payload: Any) -> None:
         # 带外进度:筛选 tap 在并行批线程调用,seq 分配经 seq_lock 互斥
@@ -618,14 +623,29 @@ def _run_writing_job_worker(
     try:
         if bind is not None:
             llm_reset = bind()
-        for chunk in stream_fn(stop_event, publish):
-            if stop_event.is_set():
-                break
-            with seq_lock:
-                seq += 1
-                name, data = _parse_sse_chunk(chunk)
-                job_store.append_event(job_id, seq, name, data)
-            mark_terminal(name, data)
+        # P0-6 耗时归因:任务级 LLM 调用累计器(worker 线程内绑定),
+        # 终态时把快照落 writing_jobs.llm_stats 列——不进事件流
+        # (事件流是前端契约,未知 event 名有重放兼容风险)。
+        from telemetry.phase_stats import bind_task_stats, reset_task_stats
+        stats_token = bind_task_stats(job_id)
+        try:
+            for chunk in stream_fn(stop_event, publish):
+                if stop_event.is_set():
+                    break
+                with seq_lock:
+                    seq += 1
+                    name, data = _parse_sse_chunk(chunk)
+                    job_store.append_event(job_id, seq, name, data)
+                mark_terminal(name, data)
+        finally:
+            try:
+                from telemetry.phase_stats import snapshot
+                _snap = snapshot()
+                if _snap is not None:
+                    job_store.set_job_llm_stats(job_id, _snap)
+            except Exception:  # noqa: BLE001 归因埋点绝不影响主链
+                pass
+            reset_task_stats(stats_token)
         if stop_event.is_set():
             job_store.set_job_status(job_id, "stopped")
         elif terminal is not None:
@@ -640,8 +660,10 @@ def _run_writing_job_worker(
     except BaseException as exc:  # noqa: BLE001  worker 兜底:失败必须落库可查
         log.warning("写作任务 %s 异常终止: %s", job_id, exc)
         try:
-            job_store.append_event(job_id, seq + 1, "error", {"message": str(exc)})
-            job_store.set_job_status(job_id, "failed", error=str(exc)[:500])
+            from errors.task_errors import classify_exception, format_task_error
+            error = format_task_error(classify_exception(exc), detail=str(exc))[:500]
+            job_store.append_event(job_id, seq + 1, "error", {"message": error})
+            job_store.set_job_status(job_id, "failed", error=error)
         except Exception:  # noqa: BLE001
             pass
     finally:

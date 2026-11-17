@@ -1195,6 +1195,42 @@ def messages_create(
     tier: str | None = None,
     disable_thinking: bool = False,
 ) -> str:
+    """messages_create 计时外壳(P0-6 耗时归因):每次调用(含 fast 回落与
+    fallback 链)结束时向 telemetry.phase_stats 累计耗时与成败,任务侧
+    终态读取快照写入轨迹。未绑定任务语境时上报为 no-op。"""
+    t0 = time.perf_counter()
+    ok = False
+    try:
+        result = _messages_create_impl(
+            system=system, user=user, max_tokens=max_tokens,
+            model=model, max_retries=max_retries,
+            temperature=temperature, response_format=response_format,
+            timeout=timeout, provider=provider, tier=tier,
+            disable_thinking=disable_thinking,
+        )
+        ok = True
+        return result
+    finally:
+        try:
+            from telemetry.phase_stats import add_llm_call
+            add_llm_call(time.perf_counter() - t0, ok)
+        except Exception:  # noqa: BLE001 归因埋点绝不影响主链
+            pass
+
+
+def _messages_create_impl(
+    system: str,
+    user: str,
+    max_tokens: int = 4000,
+    model: str | None = None,
+    max_retries: int = 1,
+    temperature: float | None = None,
+    response_format: dict | None = None,
+    timeout: float | None = None,
+    provider: str | None = None,
+    tier: str | None = None,
+    disable_thinking: bool = False,
+) -> str:
     """按 fallback 顺序调用 LLM,任何一级 provider 失败自动降级到下一级。
 
     默认 max_retries=1(单 provider 不再内部重试):

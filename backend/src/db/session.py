@@ -435,6 +435,23 @@ def _mig_purge_dirty_papers(conn: _Connection) -> None:
 # C8 修正:owner/users 补列必须先于 v7.0 repair_identity_index ——
 # repair_database 经 ORM 全列 SELECT papers,存量库若此时尚无
 # owner_user_id 列会直接炸(重排时对真实存量库拷贝实测暴露,B6 起潜伏)。
+def _mig_phase0_attribution_columns(conn: _Connection) -> None:
+    """P0-6(2026-11-18):耗时归因列。
+
+    writing_jobs.llm_stats(任务终态 LLM 调用累计快照)+
+    retrieval_tasks.retrieval_seconds / retrieval_tasks.llm_stats。
+    归因走列不走事件流——事件流是前端契约,未知 event 名有重放兼容风险。
+    """
+    _ensure_columns(conn, "writing_jobs", {
+        "llm_stats": "llm_stats JSON",
+    })
+    _ensure_columns(conn, "retrieval_tasks", {
+        "retrieval_seconds": "retrieval_seconds REAL",
+        "llm_stats": "llm_stats JSON",
+    })
+    conn.commit()
+
+
 def _mig_users_fast_llm_columns(conn: _Connection) -> None:
     """v9.12:users 补快模型四列(2026-11-14 分级路由)。留空=回落主档。"""
     # 注意 _ensure_columns 的实际约定:DDL 片段自带列名(键仅用于存在性
@@ -456,6 +473,7 @@ _MIGRATIONS: list[tuple[str, "callable"]] = [
     ("v8.1_papers_legacy_task_backfill", _mig_papers_legacy_task_backfill),
     ("v9.x_users_auth_columns", _mig_users_auth_columns),
     ("v9.12_users_fast_llm_columns", _mig_users_fast_llm_columns),
+    ("v9.7_phase0_attribution_columns", _mig_phase0_attribution_columns),
     ("b6_owner_backfill", _mig_owner_backfill),
     ("d1_reviews_delivery_columns", _mig_reviews_delivery_columns),
     ("v7.0_repair_identity_index", _mig_repair_identity_index),

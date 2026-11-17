@@ -29,6 +29,7 @@ from .cnki import quality as _quality
 from .cnki import scheduler as _scheduler
 from .cnki.crawler import CnkiServerBusyError
 from core_journals import clean_journal_name
+from errors.task_errors import TaskErrorCode, classify_exception, format_task_error
 from retrieval.query_planner import normalize_cnki_query
 
 log = logging.getLogger(__name__)
@@ -1230,16 +1231,21 @@ async def run_cnki_full_auto(
             "status": "failed",
             "saved": progress["saved"],
             "skipped": progress["skipped"],
-            "reason": str(exc),
+            "reason": format_task_error(TaskErrorCode.TASK_CANCELLED, detail=str(exc)),
+            "error_code": TaskErrorCode.TASK_CANCELLED.value,
         }
     except Exception as exc:
         log.exception("cnki 爬虫异常")
-        emit(stage="error", msg=f"{exc}{_failure_tail()}", db=db_type)
+        # P0-2 错误码归一:失败原因按错误码+行动指引透出,原文进详情段
+        code = classify_exception(exc)
+        reason = format_task_error(code, detail=str(exc))
+        emit(stage="error", msg=f"{reason}{_failure_tail()}", db=db_type)
         return {
             "status": "failed",
             "saved": progress["saved"],
             "skipped": progress["skipped"],
-            "reason": str(exc),
+            "reason": reason,
+            "error_code": code.value,
         }
 
     emit(
